@@ -6,3 +6,7 @@ venv/
 *.db
 *.log
 .DS_Store
+
+# pdf files 
+I_Agent_AI_Project_Proposal.pdf
+
