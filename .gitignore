@@ -1,12 +1,22 @@
+# Ignore Python cache files
 __pycache__/
-*.pyc
+*.pyc 
+
+# Ignore virtual environments
 .env
 .venv/
 venv/
-*.db
+
 *.log
 .DS_Store
 
 # pdf files 
 I_Agent_AI_Project_Proposal.pdf
 
+# sqlite db files 
+data/*.sqlite
+
+# Ignore all database files so we don't cause merge conflicts
+*.sqlite
+*.db    
+*.sqlite3
