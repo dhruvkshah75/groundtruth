@@ -12,8 +12,8 @@ DEFAULT_DB_PATH = PROJECT_PATH / "data" / "agent_memory.sqlite"
 
 
 class DatabaseManager:
-    def __init__(self, dp_path: str = str(DEFAULT_DB_PATH)):
-        self.db_path = dp_path
+    def __init__(self, db_path: str = str(DEFAULT_DB_PATH)):
+        self.db_path = db_path
         self.initialise_tables()
 
     def _get_connection(self):

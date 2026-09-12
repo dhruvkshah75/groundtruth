@@ -1,6 +1,7 @@
 # Ignore Python cache files
 __pycache__/
 *.pyc 
+.pytest_cache/
 
 # Ignore virtual environments
 .env
@@ -12,6 +13,7 @@ venv/
 
 # pdf files 
 I_Agent_AI_Project_Proposal.pdf
+docs/personal/
 
 # sqlite db files 
 data/*.sqlite
