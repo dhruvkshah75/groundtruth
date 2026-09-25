@@ -23,8 +23,8 @@ All may mean the same thing. An LLM is useful for recognizing this intent.
 However, an LLM is not reliable enough to decide whether a sensor, old map, or user claim is true. Tier 2 therefore uses deterministic Python for all evidence-critical work.
 
 ```text
-LLM: classify wording and write explanation
-Python: validate tools, retrieve evidence, resolve conflict, record revisions
+LLM: understand the question, choose an allowed intent, and write explanation
+Python: validate requests, retrieve evidence, resolve conflict, record revisions
 ```
 
 ## IntentRequest: the only LLM planning output
@@ -54,6 +54,49 @@ IntentRequest: current_route_status, ["route_ahead"]
 ```
 
 Use function calling or JSON-schema structured output when available. Parse it with Pydantic. If parsing fails, give the LLM one repair attempt containing only the validation error. Do not retry forever.
+
+## Context given to the LLM
+
+The LLM needs enough information to understand its role, but it must not receive the entire database or graph. Tier 1 remains the source of memory; the LLM asks for relevant information through approved operations.
+
+### Before evidence is collected
+
+Give the LLM a small, stable prompt containing:
+
+```text
+1. Its role: understand the user question and return a structured IntentRequest.
+2. The supported intents and their meanings.
+3. The available capability names and short descriptions.
+4. The rule that it must not invent observations, facts, tools, or final conclusions.
+5. The user's question, clearly separated from system instructions.
+```
+
+Example capability context:
+
+```text
+lidar_scan: detect nearby obstacles in front of the robot
+camera_detect: detect visible objects and their current appearance
+robot_pose: report simulated robot location and direction
+query_current_memory: read an active belief
+query_history: read older facts and audit history
+```
+
+The capability list comes from Tier 3's `CapabilityDescriptor` contracts at startup. It is only a list of what may be requested; it is not sensor data and does not let the LLM create new tools.
+
+For the current implementation, the LLM returns an `IntentRequest`, not an unrestricted sequence of tool calls. The deterministic `PlanBuilder` chooses the mandatory operations for that intent. For example, `current_route_status` always includes an active-memory query and a fresh LiDAR request when LiDAR is available.
+
+### After evidence is collected
+
+After Python has validated and run the plan, give the LLM only the relevant returned data:
+
+```text
+- requested facts and their source/time/confidence;
+- requested sensor observations and their context;
+- the selected conclusion or uncertainty result;
+- the policy rule used, conflicts found, and evidence IDs.
+```
+
+The LLM may turn this into a clear explanation. It must not change the conclusion, policy rule, or evidence IDs. A deterministic template should be used in automated tests.
 
 ## Deterministic PlanBuilder
 

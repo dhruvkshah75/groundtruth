@@ -17,6 +17,91 @@ incoming evidence
 
 The goal is not feature quantity. A smaller system that visibly proves its conclusions is stronger than a large, unreliable LLM demo.
 
+## How we can stand out
+
+The project brief already asks every team to use memory, an LLM, and mock sensors. So having a LiDAR tool or saving audit logs alone will not make us different.
+
+Our main idea is simple: **the LLM cannot just say what it thinks is true. The system must show the evidence and the rule used to choose an answer.**
+
+| A simple project | Our project goal |
+| --- | --- |
+| LiDAR says “blocked”, so the chatbot answers “blocked”. | Keep both the old map claim and the new LiDAR reading. Show why LiDAR was trusted for the current situation. |
+| The LLM decides which claim is true. | Python follows a fixed rule for conflicts. For example, a fresh LiDAR reading is safer than an old map for checking a route right now. |
+| Save a log after giving the answer. | Saving the decision is part of changing the agent's belief. The answer comes after this step. |
+| Show one working demo. | Test difficult cases such as unclear objects, unsupported questions, wrong sensor data, and bad LLM tool requests. |
+
+### Simple project pitch
+
+> GroundTruth does not only give an answer. It can show what it believed before, what it sensed now, why it trusted one source, and how its belief changed.
+
+## How we prove an answer
+
+Take the example: the map says a route is clear, but LiDAR finds an obstacle.
+
+```text
+Old memory:      route_A is clear according to the map
+New observation: LiDAR finds an obstacle 12 cm ahead
+Rule used:       current LiDAR is trusted over an old map for route safety
+New belief:      route_A is blocked right now
+Saved history:   old map fact is linked to the new LiDAR-based fact
+Final answer:    “The map said clear, but LiDAR sees an obstacle now.”
+```
+
+This lets us answer these presentation questions:
+
+| Question | What we can show |
+| --- | --- |
+| Which evidence did you use? | The map fact and the LiDAR reading, including source, time, confidence, and sensor data. |
+| Why did you choose LiDAR? | The fixed safety rule: fresh direct sensor data is stronger than an old map for the current route. |
+| What did you believe before? | The old map fact, which stays saved in SQLite even after the belief changes. |
+| Can you show it again? | We replay the same starting facts and sensor readings in a new database and get the same result. |
+
+Keeping the old fact is important. It proves that the agent really changed its mind because new evidence arrived.
+
+## What the LLM does and what normal Python does
+
+We will use the ReAct LLM loop required in the problem statement. The LLM has a limited job:
+
+- understand the user's normal-language question;
+- choose from the tools we allow, such as reading memory or LiDAR; and
+- explain the final result in simple language.
+
+Normal Python code handles the safety-critical work:
+
+- check that the LLM asked for a real, allowed tool;
+- get facts and sensor readings;
+- compare conflicting claims using our fixed rules;
+- save the belief change and its history; and
+- give the LLM evidence it is allowed to use in the final answer.
+
+If the LLM asks for an unavailable tool, gives an invalid request, or there is not enough evidence, the agent should say that it cannot verify the answer. It should not guess.
+
+## The features that will actually make us stand out
+
+1. **Fixed conflict rules**
+
+   The LLM cannot freely choose between the map and a sensor. A clear rule chooses the safer evidence for the situation.
+
+2. **Replay**
+
+   We can run the same event sequence again from an empty database and show that the same kind of belief change happens again. This proves the result is not only because of hidden LLM text.
+
+3. **Difficult test cases**
+
+   We will test cases designed to make a chatbot fail: stale memory, two possible boxes, a reading from the wrong room, missing sensors, and invalid LLM tool calls. We can show a small pass/fail results table in the report.
+
+4. **A live belief dashboard**
+
+   When an obstacle is added in the mock environment, the dashboard should show the LiDAR value, the old map fact, the rule used, the saved history, and the updated graph. This makes the belief change easy to understand during the presentation.
+
+### Optional extra feature: “What would change your mind?”
+
+After the basic system works, the agent can answer questions such as:
+
+> “What would make you think the route is clear again?”
+
+For example: “A fresh LiDAR scan showing no obstacle inside the safety distance would make me check the route again.” This is a nice extra because it shows that the agent follows clear rules instead of just sounding confident.
+
 ## Evaluation principles
 
 Every evaluation should answer these questions:
