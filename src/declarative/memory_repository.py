@@ -160,6 +160,12 @@ class MemoryRepository:
     def query_facts(self, query: FactQuery) -> list[StoredFact]:
         """Return StoredFact objects matching the structured query.
 
+        Named context fields (location, observer, world_version, frame_of_reference)
+        are matched exactly against stored JSON. extra_context keys are matched by
+        exact equality on each key present in the query context: a stored fact matches
+        only if every key in query.context.extra_context is present with the same value.
+        Keys absent from the query filter are ignored (partial match).
+
         Never exposes raw SQL or sqlite3.Row objects to callers.
         """
         conditions: list[str] = []
@@ -191,6 +197,10 @@ class MemoryRepository:
             if ctx.frame_of_reference is not None:
                 conditions.append("json_extract(context_json, '$.frame_of_reference') = ?")
                 params.append(ctx.frame_of_reference)
+            # extra_context: match each key present in the query exactly.
+            for key, value in ctx.extra_context.items():
+                conditions.append(f"json_extract(context_json, '$.extra_context.{key}') = ?")
+                params.append(value)
 
         if query.as_of is not None:
             as_of_str = _dt_to_iso(query.as_of)
@@ -200,9 +210,7 @@ class MemoryRepository:
             if query.active_only:
                 # A fact is active as-of T if superseded_by is NULL at that time,
                 # meaning the supersession was recorded AFTER T (or never).
-                # We need to check the audit event created_at to find when supersession happened.
-                # Simpler and correct: superseded_by IS NULL OR the audit event for the
-                # supersession was created after as_of.
+                # We check the audit event created_at to find when supersession happened.
                 conditions.append(
                     "(superseded_by IS NULL OR "
                     "(SELECT created_at FROM audit_events ae "
@@ -247,13 +255,13 @@ class MemoryRepository:
         if revised_at.tzinfo is None or revised_at.utcoffset() is None:
             raise ValueError("revised_at must be timezone-aware")
 
-        old_row = self._conn.execute(
-            "SELECT * FROM facts WHERE fact_id = ?", (str(old_fact_id),)
+        # Fast pre-flight check (existence only) outside the transaction so we
+        # can raise a clear ValueError before acquiring a write lock.
+        exists_row = self._conn.execute(
+            "SELECT 1 FROM facts WHERE fact_id = ?", (str(old_fact_id),)
         ).fetchone()
-        if old_row is None:
+        if exists_row is None:
             raise ValueError(f"fact {old_fact_id} does not exist")
-        if old_row["superseded_by"] is not None:
-            raise ValueError(f"fact {old_fact_id} is already superseded")
 
         new_fact_id = self._uuid_factory()
         if new_fact_id == old_fact_id:
@@ -292,11 +300,17 @@ class MemoryRepository:
                 ),
             )
 
-            # Step 2: link predecessor to successor
-            self._conn.execute(
-                "UPDATE facts SET superseded_by = ? WHERE fact_id = ?",
+            # Step 2: link predecessor → successor only if it is still active.
+            # The WHERE superseded_by IS NULL guard prevents a concurrent revision
+            # from creating a second active successor on the same predecessor.
+            cursor = self._conn.execute(
+                "UPDATE facts SET superseded_by = ? WHERE fact_id = ? AND superseded_by IS NULL",
                 (str(new_fact_id), str(old_fact_id)),
             )
+            if cursor.rowcount == 0:
+                # Predecessor was already superseded by a concurrent writer inside
+                # this transaction window.
+                raise ValueError(f"fact {old_fact_id} is already superseded")
 
             # Step 3: insert audit event
             self._conn.execute(
@@ -354,8 +368,9 @@ class MemoryRepository:
     def get_audit_chain(self, fact_id: UUID) -> AuditTrail:
         """Return the complete revision chain and audit events for a fact.
 
-        Walks predecessor/successor links without infinite loops (cycle detection).
-        Raises ValueError for unknown fact_id.
+        Walks predecessor/successor links and raises ValueError if a cycle or
+        corrupt link is detected rather than returning a partial trail.
+        Raises ValueError for unknown fact_id or corrupt chain data.
         """
         root_row = self._conn.execute(
             "SELECT * FROM facts WHERE fact_id = ?", (str(fact_id),)
@@ -367,12 +382,16 @@ class MemoryRepository:
         chain_ids: list[str] = []
         visited: set[str] = set()
 
-        # Walk backwards to find the root predecessor
+        # Walk backwards to find the oldest predecessor in the chain
         current_id = str(fact_id)
-        while current_id is not None and current_id not in visited:
+        while True:
+            if current_id in visited:
+                raise ValueError(
+                    f"Corrupt audit chain detected: cycle at fact {current_id} "
+                    f"while walking predecessors from {fact_id}"
+                )
             visited.add(current_id)
             chain_ids.append(current_id)
-            # Find predecessor (the fact that superseded_by == current_id)
             pred_row = self._conn.execute(
                 "SELECT fact_id FROM facts WHERE superseded_by = ?", (current_id,)
             ).fetchone()
@@ -380,9 +399,8 @@ class MemoryRepository:
                 break
             current_id = pred_row["fact_id"]
 
-        # Walk forward from the actual root to collect successors
-        root_id = current_id if current_id is not None else str(fact_id)
-        # Reset and do a clean forward walk from the root
+        # Walk forward from the oldest predecessor to collect all successors
+        root_id = current_id
         chain_ids_set = set(chain_ids)
         forward_id = root_id
         forward_visited: set[str] = {root_id}
@@ -394,8 +412,10 @@ class MemoryRepository:
                 break
             next_id = row["superseded_by"]
             if next_id in forward_visited:
-                # cycle detected
-                break
+                raise ValueError(
+                    f"Corrupt audit chain detected: cycle at fact {next_id} "
+                    f"while walking successors from {fact_id}"
+                )
             forward_visited.add(next_id)
             if next_id not in chain_ids_set:
                 chain_ids.append(next_id)
