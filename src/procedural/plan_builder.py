@@ -8,7 +8,11 @@ from src.contracts import (
     ObservationRequest,
 )
 
-from .capability_validator import CapabilityValidator
+from .capability_validator import (
+    CapabilityKindMismatchError,
+    CapabilityValidator,
+    UnknownCapabilityError,
+)
 from .entity_resolver import EntityResolver
 from .execution_plan import (
     AuditChainOperation,
@@ -76,7 +80,10 @@ class PlanBuilder:
         if isinstance(entity, PlanningFallback):
             return PlanningOutcome(fallback=entity)
 
-        has_lidar = self._capability_validator.has_capability("lidar_scan", "sensor")
+        lidar_status = self._sensor_status("lidar_scan")
+        if isinstance(lidar_status, PlanningFallback):
+            return PlanningOutcome(fallback=lidar_status)
+        has_lidar = lidar_status
         observations = []
         blocking_reasons = []
         if has_lidar:
@@ -112,7 +119,10 @@ class PlanBuilder:
         if isinstance(entity, PlanningFallback):
             return PlanningOutcome(fallback=entity)
 
-        has_camera = self._capability_validator.has_capability("camera_detect", "sensor")
+        camera_status = self._sensor_status("camera_detect")
+        if isinstance(camera_status, PlanningFallback):
+            return PlanningOutcome(fallback=camera_status)
+        has_camera = camera_status
         observations = []
         blocking_reasons = []
         if has_camera:
@@ -162,10 +172,17 @@ class PlanBuilder:
         return self._plan(
             intent=intent,
             entity_ids=[entity],
+            memory_operations=[
+                MemoryQueryOperation(
+                    query=FactQuery(subject=entity),
+                    purpose="Find the active fact whose audit history is needed.",
+                )
+            ],
             audit_operations=[
                 AuditChainOperation(
-                    fact_or_entity_id=entity,
-                    purpose="Read the evidence and revision history for this entity.",
+                    entity_id=entity,
+                    fact_ids_from_memory_operation=0,
+                    purpose="Read audit history for every fact returned by the memory query.",
                 )
             ],
             current_state_verifiable=True,
@@ -174,7 +191,10 @@ class PlanBuilder:
 
     def _build_robot_pose(self, intent: IntentRequest) -> PlanningOutcome:
         """Build a robot-pose observation without using memory as a substitute."""
-        has_pose = self._capability_validator.has_capability("robot_pose", "sensor")
+        pose_status = self._sensor_status("robot_pose")
+        if isinstance(pose_status, PlanningFallback):
+            return PlanningOutcome(fallback=pose_status)
+        has_pose = pose_status
         observations = []
         blocking_reasons = []
         if has_pose:
@@ -215,8 +235,28 @@ class PlanBuilder:
     def _entity_result(resolution: EntityResolution) -> str | PlanningFallback:
         """Convert one resolver result into a canonical ID or safe fallback."""
         if resolution.status == "resolved":
+            if (
+                resolution.canonical_entity_id is None
+                or not resolution.canonical_entity_id.strip()
+                or resolution.canonical_entity_id != resolution.canonical_entity_id.strip()
+                or resolution.candidates
+            ):
+                return PlanBuilder._new_fallback(
+                    "invalid_configuration",
+                    "The entity resolver returned inconsistent resolved-entity data.",
+                )
             return resolution.canonical_entity_id
         if resolution.status == "ambiguous":
+            if (
+                len(resolution.candidates) < 2
+                or any(not candidate.strip() for candidate in resolution.candidates)
+                or any(candidate != candidate.strip() for candidate in resolution.candidates)
+                or len(set(resolution.candidates)) != len(resolution.candidates)
+            ):
+                return PlanBuilder._new_fallback(
+                    "invalid_configuration",
+                    "The entity resolver returned invalid clarification candidates.",
+                )
             return PlanBuilder._new_fallback(
                 "ambiguous_entity",
                 "The entity mention matches more than one known entity.",
@@ -226,6 +266,27 @@ class PlanBuilder:
             "missing_entity",
             "The entity mention does not match a known entity.",
         )
+
+    def _sensor_status(self, name: str) -> bool | PlanningFallback:
+        """Check a sensor and distinguish absence from bad configuration.
+
+        Args:
+            name: The exact sensor capability name required by a plan.
+
+        Returns:
+            ``True`` when the sensor is correctly advertised, ``False`` when
+            it is absent, or a fallback when its advertised kind is invalid.
+        """
+        try:
+            self._capability_validator.require_capability(name, "sensor")
+        except UnknownCapabilityError:
+            return False
+        except CapabilityKindMismatchError:
+            return self._new_fallback(
+                "invalid_configuration",
+                f"Capability {name} is not registered as a sensor.",
+            )
+        return True
 
     @staticmethod
     def _plan(

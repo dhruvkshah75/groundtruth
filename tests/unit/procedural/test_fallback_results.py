@@ -143,6 +143,45 @@ def test_unrelated_fallback_rejects_clarification_candidates() -> None:
         )
 
 
+def test_intent_clarification_choices_must_be_allowed_intents() -> None:
+    with pytest.raises(ValidationError):
+        PlanningFallback(
+            category="unsupported_after_review",
+            reason="Several supported intent categories match.",
+            intent_clarification_choices=["read_weather", "unsupported"],
+            safe_result=GroundedResult(
+                uncertainty=True,
+                uncertainty_reason="The request needs clarification.",
+            ),
+        )
+
+
+def test_matched_rule_ids_must_be_unique() -> None:
+    with pytest.raises(ValidationError, match="must be unique"):
+        PlanningFallback(
+            category="unsupported_after_review",
+            reason="Several supported intent categories match.",
+            matched_rule_ids=["route_status_v1", "route_status_v1"],
+            safe_result=GroundedResult(
+                uncertainty=True,
+                uncertainty_reason="The request needs clarification.",
+            ),
+        )
+
+
+def test_unknown_matched_rule_id_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        PlanningFallback(
+            category="unsupported_after_review",
+            reason="A reviewer rule matched.",
+            matched_rule_ids=["route maybe"],
+            safe_result=GroundedResult(
+                uncertainty=True,
+                uncertainty_reason="The request needs clarification.",
+            ),
+        )
+
+
 def test_planning_outcome_requires_one_result() -> None:
     plan = ExecutionPlan(
         intent=IntentRequest(intent="current_robot_pose", user_question="Where are you?"),

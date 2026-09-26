@@ -1,12 +1,12 @@
 """Validation lifecycle for one provider-proposed intent."""
 
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from src.contracts import GroundedResult, IntentRequest
 
 from .fallback_results import FallbackCategory, PlanningFallback
 from .intent_coverage_reviewer import IntentCoverageReviewer
-from .intent_provider import IntentProvider
+from .intent_provider import IntentProvider, IntentProviderUnavailableError
 
 
 class IntentPlannerOutcome(BaseModel):
@@ -15,12 +15,14 @@ class IntentPlannerOutcome(BaseModel):
     Fields:
         intent: The validated intent that later stages may use.
         fallback: The safe failure result when no valid intent was obtained.
+        matched_rule_ids: Coverage-rule IDs retained after unsupported review.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     intent: IntentRequest | None = None
     fallback: PlanningFallback | None = None
+    matched_rule_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def contain_exactly_one_result(self) -> "IntentPlannerOutcome":
@@ -44,14 +46,14 @@ class IntentPlanner:
     def __init__(
         self,
         provider: IntentProvider,
-        coverage_reviewer: IntentCoverageReviewer | None = None,
+        coverage_reviewer: IntentCoverageReviewer,
     ) -> None:
         """Store the provider used for intent proposals.
 
         Args:
             provider: The provider that proposes and repairs raw intent data.
-            coverage_reviewer: Optional bounded reviewer for valid
-                ``unsupported`` responses.
+            coverage_reviewer: The bounded reviewer for valid ``unsupported``
+                responses.
         """
         self._provider = provider
         self._coverage_reviewer = coverage_reviewer
@@ -74,7 +76,7 @@ class IntentPlanner:
 
         try:
             raw_proposal = self._provider.propose_intent(normalized_question)
-        except Exception:
+        except IntentProviderUnavailableError:
             return self._fallback(
                 "provider_unavailable",
                 "The intent provider did not return an initial proposal.",
@@ -86,7 +88,7 @@ class IntentPlanner:
 
         try:
             raw_repair = self._provider.repair_intent(normalized_question, validation_error)
-        except Exception:
+        except IntentProviderUnavailableError:
             return self._fallback(
                 "provider_unavailable",
                 "The intent provider did not return a repaired proposal.",
@@ -113,30 +115,33 @@ class IntentPlanner:
         Returns:
             The valid intent, a reconsidered valid intent, or a safe fallback.
         """
-        if intent.intent != "unsupported" or self._coverage_reviewer is None:
+        if intent.intent != "unsupported":
             return IntentPlannerOutcome(intent=intent)
 
-        candidates = self._coverage_reviewer.candidate_intents(normalized_question)
-        if not candidates:
+        review = self._coverage_reviewer.review(normalized_question)
+        if not review.candidate_intents:
             return self._fallback(
                 "unsupported_after_review",
                 "No supported intent matches this unsupported request.",
             )
-        if len(candidates) > 1:
+        if len(review.candidate_intents) > 1:
             return self._fallback(
                 "unsupported_after_review",
                 "The request matches several supported intent categories and needs clarification.",
+                intent_choices=list(review.candidate_intents),
+                rule_ids=list(review.matched_rule_ids),
             )
 
-        allowed_intents = (candidates[0], "unsupported")
+        allowed_intents = (review.candidate_intents[0], "unsupported")
         try:
             raw_reconsidered = self._provider.reconsider_unsupported(
                 normalized_question, allowed_intents
             )
-        except Exception:
+        except IntentProviderUnavailableError:
             return self._fallback(
                 "provider_unavailable",
                 "The intent provider did not return an unsupported-intent reconsideration.",
+                rule_ids=list(review.matched_rule_ids),
             )
 
         reconsidered, _ = self._validate_intent(raw_reconsidered, normalized_question)
@@ -144,13 +149,18 @@ class IntentPlanner:
             return self._fallback(
                 "invalid_provider_output_after_unsupported_review",
                 "The provider returned an invalid unsupported-intent reconsideration.",
+                rule_ids=list(review.matched_rule_ids),
             )
         if reconsidered.intent == "unsupported":
             return self._fallback(
                 "unsupported_after_review",
                 "The provider kept the request unsupported after reconsideration.",
+                rule_ids=list(review.matched_rule_ids),
             )
-        return IntentPlannerOutcome(intent=reconsidered)
+        return IntentPlannerOutcome(
+            intent=reconsidered,
+            matched_rule_ids=list(review.matched_rule_ids),
+        )
 
     @staticmethod
     def _validate_intent(
@@ -191,12 +201,20 @@ class IntentPlanner:
         return f"{location}: {message}"[:240]
 
     @staticmethod
-    def _fallback(category: FallbackCategory, reason: str) -> IntentPlannerOutcome:
+    def _fallback(
+        category: FallbackCategory,
+        reason: str,
+        *,
+        intent_choices: list[str] | None = None,
+        rule_ids: list[str] | None = None,
+    ) -> IntentPlannerOutcome:
         """Create a safe no-intent result.
 
         Args:
             category: The stable fallback category for this failure.
             reason: A short safe reason for logs and later rendering.
+            intent_choices: Intent categories available for clarification.
+            rule_ids: Coverage-rule IDs retained for later diagnostics.
 
         Returns:
             An outcome with a fallback and no validated intent.
@@ -204,6 +222,8 @@ class IntentPlanner:
         fallback = PlanningFallback(
             category=category,
             reason=reason,
+            intent_clarification_choices=intent_choices or [],
+            matched_rule_ids=rule_ids or [],
             safe_result=GroundedResult(uncertainty=True, uncertainty_reason=reason),
         )
-        return IntentPlannerOutcome(fallback=fallback)
+        return IntentPlannerOutcome(fallback=fallback, matched_rule_ids=rule_ids or [])

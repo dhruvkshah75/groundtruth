@@ -2,8 +2,14 @@
 
 import pytest
 
-from src.contracts import CapabilityDescriptor
-from src.procedural import CapabilityValidator, IntentCoverageReviewer, IntentPlanner
+from src.contracts import CapabilityDescriptor, EntityResolution
+from src.procedural import (
+    CapabilityValidator,
+    IntentCoverageReviewer,
+    IntentPlanner,
+    IntentProviderUnavailableError,
+    PlanBuilder,
+)
 
 
 class QueuedIntentProvider:
@@ -105,10 +111,21 @@ def valid_route_intent(question: str) -> dict[str, object]:
     }
 
 
+def reviewer_without_candidates() -> IntentCoverageReviewer:
+    """Create the required reviewer with no available capabilities.
+
+    Returns:
+        A reviewer that keeps unrelated unsupported requests unsupported.
+    """
+    return IntentCoverageReviewer(CapabilityValidator([]))
+
+
 def test_valid_first_response_returns_intent_without_repair() -> None:
     provider = QueuedIntentProvider([valid_route_intent("Can I move forward?")])
 
-    outcome = IntentPlanner(provider).plan_intent("Can I move forward?")
+    outcome = IntentPlanner(provider, reviewer_without_candidates()).plan_intent(
+        "Can I move forward?"
+    )
 
     assert outcome.intent.intent == "current_route_status"
     assert outcome.fallback is None
@@ -120,7 +137,9 @@ def test_invalid_first_response_uses_one_valid_repair() -> None:
         [{"intent": "route_check"}], [valid_route_intent("Can I move forward?")]
     )
 
-    outcome = IntentPlanner(provider).plan_intent("Can I move forward?")
+    outcome = IntentPlanner(provider, reviewer_without_candidates()).plan_intent(
+        "Can I move forward?"
+    )
 
     assert outcome.intent.intent == "current_route_status"
     assert [call[0] for call in provider.calls] == ["propose", "repair"]
@@ -129,7 +148,9 @@ def test_invalid_first_response_uses_one_valid_repair() -> None:
 def test_invalid_response_after_repair_returns_safe_fallback() -> None:
     provider = QueuedIntentProvider([{"intent": "route_check"}], [{"intent": "still_bad"}])
 
-    outcome = IntentPlanner(provider).plan_intent("Can I move forward?")
+    outcome = IntentPlanner(provider, reviewer_without_candidates()).plan_intent(
+        "Can I move forward?"
+    )
 
     assert outcome.intent is None
     assert outcome.fallback.category == "invalid_provider_output_after_repair"
@@ -137,13 +158,22 @@ def test_invalid_response_after_repair_returns_safe_fallback() -> None:
 
 
 def test_provider_exception_returns_safe_fallback() -> None:
-    provider = QueuedIntentProvider([RuntimeError("provider offline")])
+    provider = QueuedIntentProvider([IntentProviderUnavailableError("provider offline")])
 
-    outcome = IntentPlanner(provider).plan_intent("Can I move forward?")
+    outcome = IntentPlanner(provider, reviewer_without_candidates()).plan_intent(
+        "Can I move forward?"
+    )
 
     assert outcome.intent is None
     assert outcome.fallback.category == "provider_unavailable"
     assert provider.calls == [("propose", "Can I move forward?")]
+
+
+def test_unexpected_provider_error_remains_visible_during_development() -> None:
+    provider = QueuedIntentProvider([RuntimeError("programming error")])
+
+    with pytest.raises(RuntimeError, match="programming error"):
+        IntentPlanner(provider, reviewer_without_candidates()).plan_intent("Can I move forward?")
 
 
 def test_mismatched_user_question_uses_repair_and_normalizes_whitespace() -> None:
@@ -152,7 +182,9 @@ def test_mismatched_user_question_uses_repair_and_normalizes_whitespace() -> Non
         [valid_route_intent(" Can I move forward? ")],
     )
 
-    outcome = IntentPlanner(provider).plan_intent(" Can I move forward? ")
+    outcome = IntentPlanner(provider, reviewer_without_candidates()).plan_intent(
+        " Can I move forward? "
+    )
 
     assert outcome.intent.user_question == "Can I move forward?"
     assert [call[0] for call in provider.calls] == ["propose", "repair"]
@@ -169,9 +201,12 @@ def test_explicit_unsupported_is_valid_without_repair() -> None:
         ]
     )
 
-    outcome = IntentPlanner(provider).plan_intent("What is the room temperature?")
+    outcome = IntentPlanner(provider, reviewer_without_candidates()).plan_intent(
+        "What is the room temperature?"
+    )
 
-    assert outcome.intent.intent == "unsupported"
+    assert outcome.intent is None
+    assert outcome.fallback.category == "unsupported_after_review"
     assert provider.calls == [("propose", "What is the room temperature?")]
 
 
@@ -179,7 +214,7 @@ def test_empty_question_is_rejected_without_provider_call() -> None:
     provider = QueuedIntentProvider([valid_route_intent("unused")])
 
     with pytest.raises(ValueError, match="must not be empty"):
-        IntentPlanner(provider).plan_intent("   ")
+        IntentPlanner(provider, reviewer_without_candidates()).plan_intent("   ")
 
     assert provider.calls == []
 
@@ -209,6 +244,38 @@ def test_supported_candidate_gets_one_constrained_reconsideration() -> None:
         ("propose", question),
         ("reconsider", question, ("current_route_status", "unsupported")),
     ]
+
+
+def test_recovered_intent_can_continue_to_entity_resolution_and_plan_building() -> None:
+    question = "Is anything blocking me?"
+    provider = QueuedIntentProvider(
+        [{"intent": "unsupported", "entity_mentions": [], "user_question": question}],
+        reconsiderations=[valid_route_intent(question)],
+    )
+    validator = CapabilityValidator(
+        [
+            CapabilityDescriptor(
+                name="lidar_scan",
+                kind="sensor",
+                description="Checks obstacles in front of the robot.",
+            )
+        ]
+    )
+    reviewer = IntentCoverageReviewer(validator)
+
+    class Resolver:
+        def resolve_entity(self, mention: str) -> EntityResolution:
+            return EntityResolution(
+                mention=mention,
+                status="resolved",
+                canonical_entity_id="route_ahead",
+            )
+
+    outcome = IntentPlanner(provider, reviewer).plan_intent(question)
+    plan_outcome = PlanBuilder(Resolver(), validator).build(outcome.intent)
+
+    assert plan_outcome.plan.resolved_entity_ids == ["route_ahead"]
+    assert plan_outcome.plan.observation_operations[0].request.capability == "lidar_scan"
 
 
 def test_reconsidered_unsupported_remains_a_no_plan_fallback() -> None:
@@ -344,4 +411,9 @@ def test_several_candidates_return_fallback_without_reconsideration() -> None:
 
     assert outcome.intent is None
     assert outcome.fallback.category == "unsupported_after_review"
+    assert outcome.fallback.intent_clarification_choices == [
+        "current_route_status",
+        "current_object_perception",
+    ]
+    assert outcome.fallback.matched_rule_ids == ["route_status_v1", "object_perception_v1"]
     assert provider.calls == [("propose", question)]

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.contracts import FactQuery, IntentRequest, ObservationRequest
 
@@ -39,13 +39,16 @@ class AuditChainOperation(BaseModel):
     """One approved request for an audit history.
 
     Fields:
-        fact_or_entity_id: The fact or entity whose history is requested.
+        entity_id: The canonical entity whose matching facts need audit history.
+        fact_ids_from_memory_operation: The memory-operation index whose
+            every returned fact needs an audit lookup.
         purpose: Why the history is needed for this plan.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    fact_or_entity_id: str = Field(min_length=1)
+    entity_id: str = Field(min_length=1)
+    fact_ids_from_memory_operation: int = Field(ge=0)
     purpose: str = Field(min_length=1)
 
 
@@ -90,3 +93,18 @@ class ExecutionPlan(BaseModel):
     current_state_verifiable: bool
     blocking_reasons: list[str] = Field(default_factory=list)
     plan_reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def audit_operations_reference_memory_results(self) -> "ExecutionPlan":
+        """Check each audit operation points to an existing memory lookup.
+
+        Returns:
+            The same validated plan.
+        """
+        for operation in self.audit_operations:
+            if operation.fact_ids_from_memory_operation >= len(self.memory_operations):
+                raise ValueError("audit operation must reference an existing memory operation")
+            query = self.memory_operations[operation.fact_ids_from_memory_operation].query
+            if query.subject != operation.entity_id:
+                raise ValueError("audit operation entity must match its memory query subject")
+        return self

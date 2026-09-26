@@ -8,6 +8,10 @@ influence any later planning step.
 from typing import Protocol, runtime_checkable
 
 
+class IntentProviderUnavailableError(Exception):
+    """Raised when a provider cannot complete an expected request."""
+
+
 @runtime_checkable
 class IntentProvider(Protocol):
     """Propose or correct a constrained intent without executing any tools.

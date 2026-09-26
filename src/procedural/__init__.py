@@ -15,9 +15,9 @@ from .execution_plan import (
     ObservationOperation,
 )
 from .fallback_results import PlanningFallback, PlanningOutcome
-from .intent_coverage_reviewer import IntentCoverageReviewer
+from .intent_coverage_reviewer import IntentCoverageReview, IntentCoverageReviewer
 from .intent_planner import IntentPlanner, IntentPlannerOutcome
-from .intent_provider import IntentProvider
+from .intent_provider import IntentProvider, IntentProviderUnavailableError
 from .plan_builder import PlanBuilder
 
 __all__ = [
@@ -28,10 +28,12 @@ __all__ = [
     "CapabilityValidator",
     "ExecutionPlan",
     "EntityResolver",
+    "IntentCoverageReview",
+    "IntentCoverageReviewer",
     "IntentProvider",
+    "IntentProviderUnavailableError",
     "IntentPlanner",
     "IntentPlannerOutcome",
-    "IntentCoverageReviewer",
     "MemoryQueryOperation",
     "ObservationOperation",
     "PlanningFallback",
