@@ -2,8 +2,8 @@
 Graph/SQLite consistency checker for GroundTruth Tier 1.
 
 This module provides ``check_graph_consistency``, a pure function that diffs
-the active ``networkx.MultiDiGraph`` projection against the current list of
-active ``StoredFact`` objects and returns a structured ``GraphConsistencyReport``.
+the active ``networkx.MultiDiGraph`` projection against authoritative SQLite
+state and returns a structured ``GraphConsistencyReport``.
 
 The checker never repairs anything.  A non-clean report means the caller should
 call ``ActiveBeliefGraph.rebuild()`` — discarding the stale projection and
@@ -16,22 +16,45 @@ cross a tier boundary, so adding it to the shared ``src.contracts`` package is
 not warranted.  A stdlib ``dataclass`` keeps it lightweight, dependency-free,
 and easy to construct in tests.
 
+Why staleness requires superseded facts, not just active facts
+----------------------------------------------------------------
+A cached graph edge is built at rebuild time from a ``StoredFact`` that was
+active *then*.  If that fact is later superseded in SQLite, nothing
+retroactively updates the cached edge; the edge is simply absent from a
+fresh ``active_facts`` query.  To correctly classify a missing-from-active
+edge as "stale" (fact still exists, just superseded) versus "extra" (fact_id
+never existed at all), the checker needs authoritative knowledge of
+superseded fact IDs, supplied via ``superseded_facts``.
+
+What "representation correctness" means here
+-----------------------------------------------
+An edge is only a faithful representation of a ``StoredFact`` if ALL of the
+following hold:
+
+* the edge is keyed by ``str(fact.fact_id)`` (the key itself matches);
+* the edge's endpoints ``(u, v)`` equal ``(fact.subject, fact.object)``;
+* the edge carries a ``fact_id`` attribute equal to ``fact.fact_id`` (not
+  missing, not some other UUID);
+* every other required attribute (``predicate``, ``source_agent``,
+  ``confidence_score``, ``observed_at``, ``created_at``, ``context``,
+  ``version``, ``superseded_by``, ``evidence``) matches the stored value.
+
+A violation of any of these is a representation error and is reported via
+``metadata_mismatches``, keyed by field name (``"subject"``, ``"object"``,
+``"fact_id"``, or one of the other attribute names).
+
 How to interpret the report
 ----------------------------
-* ``missing_fact_ids``: active facts that have no corresponding graph edge.
-  The graph is behind SQLite; a rebuild will fix this.
-* ``extra_edge_keys``: graph edges whose fact-ID key does not appear in the
-  active-fact list at all.  These are phantom edges — they may represent
-  facts that were never stored or were fully deleted (which should not happen
-  under append-only semantics, but is detectable).
-* ``stale_edge_keys``: graph edges whose fact-ID is in SQLite but is now
-  superseded (``superseded_by is not None``).  The cache was not invalidated
-  after a revision commit.
+* ``missing_fact_ids``: active facts that have no corresponding graph edge
+  keyed by their fact ID.
+* ``extra_edge_keys``: graph edges whose key does not correspond to any
+  known SQLite fact, active or superseded.
+* ``stale_edge_keys``: graph edges whose key is known to SQLite (via
+  ``superseded_facts``) but is now superseded.
 * ``duplicate_edge_keys``: fact IDs that appear on more than one graph edge.
-  Each fact must map to exactly one edge.
 * ``metadata_mismatches``: ``(edge_key, field_name, graph_value, stored_value)``
-  tuples for edges whose attribute values diverge from the corresponding
-  ``StoredFact`` field.
+  tuples for every divergence found, including endpoint and fact_id
+  mismatches, not only the four original attribute fields.
 
 Why conflict resolution is out of scope
 ----------------------------------------
@@ -56,23 +79,25 @@ from src.contracts import StoredFact
 
 @dataclass
 class GraphConsistencyReport:
-    """Structured diff between the active-belief graph and SQLite active facts.
+    """Structured diff between the active-belief graph and authoritative SQLite state.
 
     A report with all empty collections means the graph is a faithful,
-    up-to-date projection of the current active SQLite state.
+    up-to-date, correctly represented projection of the current active
+    SQLite state.
 
     Attributes:
         missing_fact_ids: UUIDs of active SQLite facts that have no edge in
-            the graph.
+            the graph keyed by their fact ID.
         extra_edge_keys: Edge keys (``str(fact_id)``) present in the graph
-            that do not correspond to any known active SQLite fact.
+            that do not correspond to any known SQLite fact, active or
+            superseded.
         stale_edge_keys: Edge keys present in the graph that map to SQLite
-            facts which are now superseded (``superseded_by is not None``).
+            facts which are now superseded (per ``superseded_facts``).
         duplicate_edge_keys: Edge keys that appear on more than one graph edge.
         metadata_mismatches: List of 4-tuples
-            ``(edge_key, field_name, graph_value, stored_value)``
-            for every attribute that diverges between the graph edge and the
-            corresponding ``StoredFact``.
+            ``(edge_key, field_name, graph_value, stored_value)``. ``field_name``
+            may be ``"subject"``, ``"object"``, ``"fact_id"``, or any other
+            required edge attribute name.
     """
 
     missing_fact_ids: list[UUID] = field(default_factory=list)
@@ -96,16 +121,19 @@ class GraphConsistencyReport:
 
 
 # ---------------------------------------------------------------------------
-# Metadata fields to compare
+# Metadata fields to compare (beyond subject/object/fact_id, checked separately)
 # ---------------------------------------------------------------------------
 
-# Maps the edge attribute name to the StoredFact attribute name.
-# These are the four fields the issue explicitly requires checking.
 _METADATA_FIELDS: tuple[tuple[str, str], ...] = (
     ("predicate", "predicate"),
     ("source_agent", "source_agent"),
     ("confidence_score", "confidence_score"),
+    ("observed_at", "observed_at"),
+    ("created_at", "created_at"),
     ("context", "context"),
+    ("version", "version"),
+    ("superseded_by", "superseded_by"),
+    ("evidence", "evidence"),
 )
 
 
@@ -117,103 +145,96 @@ _METADATA_FIELDS: tuple[tuple[str, str], ...] = (
 def check_graph_consistency(
     graph: nx.MultiDiGraph,
     active_facts: list[StoredFact],
+    superseded_facts: list[StoredFact] | None = None,
 ) -> GraphConsistencyReport:
-    """Diff *graph* against *active_facts* and return a ``GraphConsistencyReport``.
+    """Diff *graph* against authoritative SQLite state and return a report.
 
-    This is a **pure function**: it reads from *graph* and *active_facts* only
-    and never writes to SQLite or modifies the graph.
+    This is a **pure function**: it reads from *graph*, *active_facts*, and
+    *superseded_facts* only, and never writes to SQLite or modifies the graph.
 
     Args:
-        graph: The current active-belief ``MultiDiGraph``.  Typically obtained
-            from ``ActiveBeliefGraph.get_graph()`` (which returns a copy).
+        graph: The current active-belief ``MultiDiGraph``.
         active_facts: The list of currently active ``StoredFact`` objects.
-            Typically obtained by calling
-            ``repo.query_facts(FactQuery(active_only=True))``.
-        superseded_facts: Optional list of ``StoredFact`` objects that are no
-            longer active (``superseded_by is not None``). Used to distinguish
-            a genuinely stale edge (fact exists in SQLite but has been
-            revised) from an extra/phantom edge (fact-ID does not correspond
-            to any known SQLite row at all). If omitted, all unmatched edges
-            are reported as "extra" rather than "stale".
+        superseded_facts: The list of ``StoredFact`` objects known to SQLite
+            but no longer active. Required to distinguish a stale edge from
+            an extra/phantom edge. If omitted, every unmatched edge is
+            reported as "extra".
 
     Returns:
         A ``GraphConsistencyReport`` describing every detected anomaly.
-        ``report.is_clean`` is ``True`` when the graph is a faithful mirror
-        of *active_facts*.
-
-    Notes:
-        * The function never attempts to repair the graph or SQLite.
-        * It never calls any LLM, sensor, or Tier 2/3 module.
-        * "Stale" edges are a subset of extra edges where the fact-ID exists
-          in SQLite but is superseded; "extra" edges are those whose fact-ID
-          is absent from *active_facts* entirely.  The report keeps them in
-          separate lists so callers know whether the fact still exists in
-          history or was never stored.
     """
     report = GraphConsistencyReport()
 
-    # Build lookup structures from the active-facts list.
     active_by_id: dict[UUID, StoredFact] = {f.fact_id: f for f in active_facts}
     active_keys: set[str] = {str(fid) for fid in active_by_id}
 
-    # Build lookup structures from the graph.
-    graph_key_counts: dict[str, int] = {}
-    graph_key_to_attrs: dict[str, dict[str, object]] = {}
+    superseded_ids: set[str] = (
+        {str(f.fact_id) for f in superseded_facts} if superseded_facts else set()
+    )
 
-    for _u, _v, key, attrs in graph.edges(keys=True, data=True):
-        graph_key_counts[key] = graph_key_counts.get(key, 0) + 1
-        # Keep the last attrs seen for a key (duplicates are flagged separately).
-        graph_key_to_attrs[key] = attrs
+    # Build a full index of graph edges: key -> list of (u, v, attrs).
+    # Kept as a list per key so duplicate-key usage across different node
+    # pairs is fully captured, not overwritten.
+    key_to_edges: dict[str, list[tuple[str, str, dict[str, object]]]] = {}
+    for u, v, key, attrs in graph.edges(keys=True, data=True):
+        key_to_edges.setdefault(key, []).append((u, v, attrs))
 
-    graph_keys: set[str] = set(graph_key_counts.keys())
+    graph_keys: set[str] = set(key_to_edges.keys())
 
     # ------------------------------------------------------------------
-    # 1. Missing: active facts not in graph
+    # 1. Missing: active facts not represented by any edge keyed with their ID
     # ------------------------------------------------------------------
-    for fact_id, _fact in active_by_id.items():
+    for fact_id in active_by_id:
         if str(fact_id) not in graph_keys:
             report.missing_fact_ids.append(fact_id)
 
     # ------------------------------------------------------------------
-    # 2. Extra / stale: graph edges not in the active-fact list
+    # 2. Extra / stale: graph edge keys not in the active-fact list
     # ------------------------------------------------------------------
-    # A key absent from active_keys is either "stale" (the edge's own
-    # superseded_by attribute is set — the fact was active when the edge was
-    # built but has since been revised) or "extra" (the fact_id never
-    # existed / superseded_by is unset). We read the signal directly off the
-    # edge because active_facts alone (already filtered to active-only)
-    # cannot distinguish the two cases.
     for key in graph_keys:
         if key not in active_keys:
-            attrs = graph_key_to_attrs[key]
-            if attrs.get("superseded_by") is not None:
+            if key in superseded_ids:
                 report.stale_edge_keys.append(key)
             else:
                 report.extra_edge_keys.append(key)
 
     # ------------------------------------------------------------------
-    # 3. Duplicates: same fact-ID used on more than one edge
+    # 3. Duplicates: same fact-ID key used on more than one edge
     # ------------------------------------------------------------------
-    for key, count in graph_key_counts.items():
-        if count > 1:
+    for key, edges in key_to_edges.items():
+        if len(edges) > 1:
             report.duplicate_edge_keys.append(key)
 
     # ------------------------------------------------------------------
-    # 4. Metadata mismatches: edge attrs diverge from StoredFact fields
+    # 4. Representation correctness: key, endpoints, fact_id, and all
+    #    other required attributes must match the stored active fact.
     # ------------------------------------------------------------------
-    for key, attrs in graph_key_to_attrs.items():
-        fact_id_attr = attrs.get("fact_id")
-        if not isinstance(fact_id_attr, UUID):
-            continue
-        stored = active_by_id.get(fact_id_attr)
-        if stored is None:
+    for key in graph_keys:
+        if key not in active_keys:
             continue  # already flagged as extra/stale above
-        for edge_attr, fact_attr in _METADATA_FIELDS:
-            graph_val = attrs.get(edge_attr)
-            stored_val = getattr(stored, fact_attr, None)
-            if graph_val != stored_val:
+        stored = active_by_id[UUID(key)]
+
+        for u, v, attrs in key_to_edges[key]:
+            # Endpoint validation: edge with the right key but wrong nodes.
+            if u != stored.subject:
+                report.metadata_mismatches.append((key, "subject", u, stored.subject))
+            if v != stored.object:
+                report.metadata_mismatches.append((key, "object", v, stored.object))
+
+            # fact_id attribute validation: missing or wrong fact_id on the edge.
+            fact_id_attr = attrs.get("fact_id")
+            if fact_id_attr != stored.fact_id:
                 report.metadata_mismatches.append(
-                    (key, edge_attr, graph_val, stored_val)
+                    (key, "fact_id", fact_id_attr, stored.fact_id)
                 )
+
+            # All other required attributes.
+            for edge_attr, fact_attr in _METADATA_FIELDS:
+                graph_val = attrs.get(edge_attr)
+                stored_val = getattr(stored, fact_attr, None)
+                if graph_val != stored_val:
+                    report.metadata_mismatches.append(
+                        (key, edge_attr, graph_val, stored_val)
+                    )
 
     return report

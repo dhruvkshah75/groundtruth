@@ -13,7 +13,7 @@ Graph projection (GT-05):
     check_graph_consistency — Pure function that produces a GraphConsistencyReport.
 """
 
-from .active_graph import ActiveBeliefGraph, ActiveFactReader
+from .active_graph import ActiveBeliefGraph, ActiveFactReader, GraphSyncedRepository
 from .consistency import GraphConsistencyReport, check_graph_consistency
 from .memory_repository import MemoryRepository, RevisionOutcome
 
@@ -26,4 +26,5 @@ __all__ = [
     "ActiveBeliefGraph",
     "GraphConsistencyReport",
     "check_graph_consistency",
+    "GraphSyncedRepository",
 ]
