@@ -37,16 +37,20 @@ Cache lifecycle
 
     successful record_fact or record_revision transaction
         → caller marks graph cache stale via invalidate()
+        → OR, if writing through GraphSyncedRepository, this happens
+          automatically on every successful write
 
     next graph request
         → rebuild from the new active SQLite state
 
-Mutation safety
----------------
-``get_graph()`` returns a **defensive copy** of the internal cached graph.
-A Tier 2 caller or dashboard may add/remove edges on that copy without
-ever corrupting the projection that subsequent reads will return.
-
+    Mutation safety
+    ---------------
+    ``get_graph()`` and ``rebuild()`` both return a **deep copy** of the
+    internal cached graph, including nested attribute values (``evidence``
+    dicts, ``SpatialContext.extra_context``). A Tier 2 caller or dashboard
+    may add/remove edges or mutate nested metadata on the returned object
+    without ever corrupting the projection that subsequent reads will return.
+    
 What this module will not do
 -----------------------------
 * Resolve conflicts or rank sources.
@@ -59,13 +63,15 @@ What this module will not do
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 import networkx as nx
 
-from src.contracts import FactQuery, StoredFact
+from src.contracts import FactAssertion, FactQuery, StoredFact
 
 
 class ActiveFactReader(Protocol):
@@ -78,6 +84,29 @@ class ActiveFactReader(Protocol):
 
     def query_facts(self, query: FactQuery) -> list[StoredFact]:
         """Return all ``StoredFact`` objects matching *query*."""
+        ...
+
+
+class WritableFactRepository(Protocol):
+    """Structural interface for the subset of MemoryRepository that mutates state.
+
+    Any object implementing these two methods with this signature satisfies
+    the protocol. In production this is a ``MemoryRepository`` instance.
+    """
+
+    def record_fact(self, assertion: FactAssertion) -> StoredFact:
+        """Store a new sourced assertion and return the durable StoredFact."""
+        ...
+
+    def record_revision(
+        self,
+        old_fact_id: UUID,
+        replacement: FactAssertion,
+        reason: str,
+        policy_rule: str,
+        revised_at: datetime,
+    ) -> object:
+        """Atomically replace an active fact with a new assertion."""
         ...
 
 
@@ -188,7 +217,7 @@ class ActiveBeliefGraph:
         if self._stale or self._cache is None:
             self._cache = self.rebuild()
             self._stale = False
-        return self._cache.copy()
+        return copy.deepcopy(self._cache)
 
     def invalidate(self) -> None:
         """Mark the derived cache stale without touching SQLite.
@@ -196,6 +225,10 @@ class ActiveBeliefGraph:
         Call this **after** a successful ``record_fact`` or
         ``record_revision`` transaction commits.  Never call it before the
         commit: a failed or rolled-back write must not alter the graph.
+
+        Callers who want this called automatically on every successful write
+        should write through ``GraphSyncedRepository`` instead of calling
+        the repository directly.
         """
         self._stale = True
         self._cache = None
@@ -219,7 +252,7 @@ class ActiveBeliefGraph:
         self._cache = graph
         self._edge_index = index
         self._stale = False
-        return graph
+        return copy.deepcopy(graph)
 
     # ------------------------------------------------------------------
     # Traversal helpers
@@ -282,3 +315,52 @@ class ActiveBeliefGraph:
         graph = self.get_graph()
         for _u, _v, attrs in graph.edges(data=True):
             yield attrs["fact_id"]
+
+
+class GraphSyncedRepository:
+    """Composition wrapper that owns both writes and cache invalidation.
+
+    Wraps a ``WritableFactRepository`` (in production, ``MemoryRepository``)
+    and an ``ActiveBeliefGraph``. Every write goes through this wrapper's
+    ``record_fact``/``record_revision`` methods, which delegate to the
+    underlying repository and call ``graph.invalidate()`` *only after* the
+    underlying call returns successfully.
+
+    If the underlying repository call raises (a failed or rolled-back
+    write), the exception propagates immediately and ``invalidate()`` is
+    never reached — the graph cache is correctly left untouched.
+
+    This exists because a bare ``MemoryRepository`` has no awareness of the
+    graph cache, and requiring every caller to remember to call
+    ``invalidate()`` manually after every write is unreliable in practice.
+    Callers who want the graph to always reflect the latest committed state
+    should write through this wrapper rather than calling the repository
+    directly.
+    """
+
+    def __init__(
+        self, repository: WritableFactRepository, graph: ActiveBeliefGraph
+    ) -> None:
+        self._repository = repository
+        self._graph = graph
+
+    def record_fact(self, assertion: FactAssertion) -> StoredFact:
+        """Delegate to the repository, then invalidate the graph on success."""
+        result = self._repository.record_fact(assertion)
+        self._graph.invalidate()
+        return result
+
+    def record_revision(
+        self,
+        old_fact_id: UUID,
+        replacement: FactAssertion,
+        reason: str,
+        policy_rule: str,
+        revised_at: datetime,
+    ) -> object:
+        """Delegate to the repository, then invalidate the graph on success."""
+        result = self._repository.record_revision(
+            old_fact_id, replacement, reason, policy_rule, revised_at
+        )
+        self._graph.invalidate()
+        return result
