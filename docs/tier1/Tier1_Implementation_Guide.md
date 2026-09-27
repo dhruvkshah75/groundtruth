@@ -50,6 +50,103 @@ rebuild graph from active SQLite facts only when needed
 
 Do not update a graph edge first and hope to update SQLite later. If SQLite fails, there is no valid new memory state. After restart, rebuild the graph from SQLite.
 
+
+## Active-belief graph projection (GT-05)
+
+`ActiveBeliefGraph` is the concrete implementation of the NetworkX cache
+described above. It is a thin, disposable wrapper around any object
+satisfying the `ActiveFactReader` protocol (in production, `MemoryRepository`).
+
+### Why `MultiDiGraph`, specifically
+
+A plain `DiGraph` allows only one edge between a given pair of nodes, which
+would silently overwrite legitimate cases where multiple active facts
+connect the same subject/object — for example, three different sources
+each holding an unsuperseded claim about `box_01`'s colour under different
+predicates (`requested_colour`, `appears_colour`, `painted_colour`).
+`MultiDiGraph` keeps one independently addressable edge per stored fact,
+keyed by `str(fact_id)`.
+
+### The active-fact definition used
+
+A fact is active when `superseded_by is None`. The graph obtains active
+facts exclusively through `FactQuery(active_only=True)` — it never queries
+SQLite directly and never re-implements SQL filtering logic.
+
+### Cache invalidation and rebuild lifecycle
+
+```text
+application starts
+    → cache is stale (no facts queried yet)
+
+first get_graph() call
+    → query active facts via the reader
+    → build a fresh MultiDiGraph from scratch
+    → cache the result
+
+subsequent get_graph() calls, no writes in between
+    → return the cached projection
+
+after record_fact() / record_revision() COMMITS successfully
+    → caller (not ActiveBeliefGraph itself) calls invalidate()
+
+next get_graph() call
+    → cache is stale → rebuild from current active SQLite state
+```
+
+**Important:** `invalidate()` must only be called by the code wrapping a
+write, and only *after* that write's transaction has committed
+successfully. A failed or rolled-back write must never trigger
+invalidation — this is what keeps a crashed write from ever appearing in
+the graph.
+
+### Node/edge representation
+
+Each active fact becomes one directed edge, `subject → object`, keyed by
+`str(fact_id)`. Required edge attributes: `fact_id`, `predicate`,
+`source_agent`, `confidence_score`, `observed_at`, `created_at`, `context`,
+`version`, `superseded_by`, `evidence`.
+
+### Mutation safety
+
+`get_graph()` always returns a **defensive copy** (`self._cache.copy()`) of
+the internal cached graph. A caller may freely mutate the returned object —
+add edges, remove nodes — without any risk of corrupting what a later
+`get_graph()` call returns.
+
+### Public traversal API
+
+`get_outgoing(subject)` and `get_incoming(obj)` return structured
+dictionaries of relationships, not natural-language conclusions.
+`get_edge_by_fact_id(fact_id)` performs an O(1) lookup via an internal
+`fact_id → (subject, object)` index rebuilt alongside the graph.
+`active_fact_ids()` yields every fact ID currently represented.
+
+### Interpreting a `GraphConsistencyReport`
+
+`check_graph_consistency(graph, active_facts)` is a pure function — it never
+repairs anything. A non-empty report means the caller should discard and
+call `rebuild()`, not attempt to patch individual edges. The report's
+fields:
+
+- `missing_fact_ids` — active SQLite facts absent from the graph (cache is
+  behind SQLite).
+- `extra_edge_keys` — graph edges whose fact ID never existed in SQLite at
+  all.
+- `stale_edge_keys` — graph edges representing facts that have since been
+  superseded (detected via the edge's own `superseded_by` attribute).
+- `duplicate_edge_keys` — a fact ID used as the key on more than one edge.
+- `metadata_mismatches` — edge attributes that diverge from the
+  corresponding `StoredFact` (checked: predicate, source_agent,
+  confidence_score, context).
+
+### Why conflict resolution stays out of this module
+
+The graph and its consistency checker answer *"does this projection
+faithfully mirror SQLite?"*, never *"which conflicting claim is true?"*.
+When SQLite holds two active, conflicting assertions, the graph preserves
+both as separate edges. Selecting an operational conclusion from among them
+is Tier 2's `EvidenceResolver` responsibility, not Tier 1's.
 ## Fact lifecycle
 
 ### 1. Store an assertion
@@ -131,12 +228,21 @@ An alias may map to more than one entity. This is useful because `the box` may b
 Tier 2 uses public methods and Pydantic contracts. It must never execute SQL directly.
 
 ```python
+# MemoryRepository (#3)
 record_fact(assertion: FactAssertion) -> StoredFact
 query_facts(query: FactQuery) -> list[StoredFact]
-record_revision(revision: BeliefRevision) -> AuditEvent
+record_revision(old_fact_id, replacement, reason, policy_rule, revised_at) -> RevisionOutcome
 get_audit_chain(fact_id: UUID) -> AuditTrail
 resolve_entity(mention: str) -> EntityResolution
-get_active_graph() -> nx.MultiDiGraph
+
+# ActiveBeliefGraph (GT-05) — wraps a MemoryRepository via the ActiveFactReader protocol
+get_graph() -> nx.MultiDiGraph
+invalidate() -> None
+rebuild() -> nx.MultiDiGraph
+get_outgoing(subject: str) -> list[dict]
+get_incoming(obj: str) -> list[dict]
+get_edge_by_fact_id(fact_id: UUID) -> dict | None
+active_fact_ids() -> Iterator[UUID]
 ```
 
 The implementation can use different method names, but equivalent capabilities are required.
@@ -150,7 +256,7 @@ There is no fixed sequence where Tier 1 always tries graph and then database. Th
 | Exact active fact | SQLite index | “What is route_A status?” |
 | Historical fact | SQLite | “What did the map say at 09:00?” |
 | Revision/audit explanation | SQLite | “Why was the map belief replaced?” |
-| Active relationship traversal | NetworkX | “What is currently in room_101?” |
+| Active relationship traversal | `ActiveBeliefGraph.get_outgoing`/`get_incoming` | “What is currently in room_101?” |
 | Relationship plus provenance | Graph, then SQLite | “How is robot_01 connected to box_01, and why?” |
 
 SQLite is best for exact values and history. NetworkX is best for moving through many active relationships. If NetworkX identifies a useful active edge, its `fact_id` can be used to load detailed provenance from SQLite.
@@ -197,3 +303,7 @@ The project does not need a distributed database. SQLite is local and fast enoug
 6. Resolve aliases as one match, many matches, and no match.
 7. Rebuild the active graph after invalidating its cache.
 8. Verify every active graph edge points to an active SQLite fact.
+9. Detect all five consistency-report anomaly categories (missing, extra,
+   stale, duplicate, metadata mismatch) between the graph and SQLite.
+10. Confirm a failed or rolled-back write never produces a graph edge, and
+    that `invalidate()` is only ever called after a successful commit.
