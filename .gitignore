@@ -7,12 +7,15 @@ __pycache__/
 .env
 .venv/
 venv/
+.agents/
 
 *.log
 .DS_Store
+.codex/
+.ruff_cache/
 
 # pdf files 
-I_Agent_AI_Project_Proposal.pdf
+problemStatement.pdf
 docs/personal/
 
 # sqlite db files 
@@ -22,3 +25,5 @@ data/*.sqlite
 *.sqlite
 *.db    
 *.sqlite3
+
+skills-lock.json
