@@ -16,7 +16,7 @@ from uuid import uuid4
 import pytest
 
 from src.contracts import FactAssertion, FactQuery, SpatialContext
-from src.declarative.active_graph import ActiveBeliefGraph
+from src.declarative.active_graph import ActiveBeliefGraph, GraphSyncedRepository
 from src.declarative.memory_repository import MemoryRepository
 
 # ---------------------------------------------------------------------------
@@ -106,6 +106,72 @@ def test_successful_record_fact_invalidates_cache() -> None:
         graph = abg.get_graph()
         assert graph.number_of_edges() == 1
 
+def test_write_through_synced_repository_invalidates_without_manual_call() -> None:
+    """A repository write made through GraphSyncedRepository must invalidate
+    the graph automatically — no manual abg.invalidate() call required.
+
+    This is the regression test requested in review: it proves a normal
+    caller writing a fact and then reading the graph sees fresh state,
+    without ever calling invalidate() themselves.
+    """
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+        synced = GraphSyncedRepository(repo, abg)
+
+        assert abg.get_graph().number_of_edges() == 0
+
+        synced.record_fact(_assertion())
+        # No manual abg.invalidate() call here — this is the point of the test.
+
+        graph = abg.get_graph()
+        assert graph.number_of_edges() == 1
+
+
+def test_write_through_synced_repository_revision_invalidates_without_manual_call() -> None:
+    """record_revision through GraphSyncedRepository also auto-invalidates."""
+    with MemoryRepository() as repo:
+        old = repo.record_fact(_assertion(obj="clear"))
+        abg = ActiveBeliefGraph(repo)
+        synced = GraphSyncedRepository(repo, abg)
+
+        initial = abg.get_graph()
+        assert initial.has_edge("route_A", "clear", key=str(old.fact_id))
+
+        synced.record_revision(
+            old_fact_id=old.fact_id,
+            replacement=_assertion(obj="blocked", source_agent="lidar"),
+            reason="lidar update",
+            policy_rule="lidar_wins",
+            revised_at=_REVISED,
+        )
+        # No manual abg.invalidate() call here either.
+
+        updated = abg.get_graph()
+        assert not updated.has_edge("route_A", "clear", key=str(old.fact_id))
+        assert updated.number_of_edges() == 1
+
+
+def test_write_through_synced_repository_failed_write_does_not_invalidate() -> None:
+    """A failed write through GraphSyncedRepository must NOT invalidate the
+    graph — the exception must propagate before invalidate() is reached.
+    """
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+        synced = GraphSyncedRepository(repo, abg)
+
+        _ = abg.get_graph()  # prime cache at 0 edges
+
+        with pytest.raises(ValueError):
+            synced.record_revision(
+                old_fact_id=uuid4(),
+                replacement=_assertion(obj="blocked"),
+                reason="bad revision",
+                policy_rule="test_rule",
+                revised_at=_REVISED,
+            )
+
+        # Cache must still be the primed empty state, not invalidated.
+        assert abg.get_graph().number_of_edges() == 0
 
 def test_successful_record_revision_invalidates_cache() -> None:
     """After a successful record_revision + invalidate(), the next get_graph() rebuilds."""

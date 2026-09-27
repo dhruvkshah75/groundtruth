@@ -324,6 +324,65 @@ def test_mutating_returned_graph_does_not_corrupt_cache() -> None:
     assert not second.has_edge("FAKE_NODE", "FAKE_TARGET", key="fake_key")
     assert second.number_of_edges() == 1  # only the real fact
 
+def test_mutating_rebuild_result_does_not_corrupt_cache() -> None:
+    """rebuild() must also return a defensive copy — not the same mutable
+    object stored internally as self._cache. Mutating the result of a direct
+    rebuild() call must not affect subsequent get_graph() reads.
+    """
+    fact = _make_fact()
+    abg = ActiveBeliefGraph(FakeReader([fact]))
+
+    rebuilt = abg.rebuild()
+    # Inject a fake edge into the object returned by rebuild()
+    rebuilt.add_edge("FAKE_NODE", "FAKE_TARGET", key="fake_key")
+    assert rebuilt.has_edge("FAKE_NODE", "FAKE_TARGET", key="fake_key")
+
+    # A subsequent get_graph() call must not see the injected edge
+    graph = abg.get_graph()
+    assert not graph.has_edge("FAKE_NODE", "FAKE_TARGET", key="fake_key")
+    assert graph.number_of_edges() == 1  # only the real fact
+
+def test_mutating_nested_evidence_dict_does_not_corrupt_cache() -> None:
+    """A shallow .copy() is insufficient: mutating a nested mutable value
+    (the evidence dict) inside a returned graph's edge attrs must not
+    affect what a later get_graph() call returns.
+    """
+    fact = _make_fact()
+    # _make_fact() defaults evidence={}; give it a real nested value here.
+    fact_with_evidence = fact.model_copy(update={"evidence": {"sensor_reading": 42}})
+    abg = ActiveBeliefGraph(FakeReader([fact_with_evidence]))
+
+    first = abg.get_graph()
+    edge_key = str(fact_with_evidence.fact_id)
+    # Mutate a nested dict value inside the returned edge's attrs.
+    first[fact_with_evidence.subject][fact_with_evidence.object][edge_key][
+        "evidence"
+    ]["sensor_reading"] = "TAMPERED"
+
+    second = abg.get_graph()
+    untouched_evidence = second[fact_with_evidence.subject][
+        fact_with_evidence.object
+    ][edge_key]["evidence"]
+    assert untouched_evidence["sensor_reading"] == 42
+
+
+def test_mutating_nested_context_extra_does_not_corrupt_cache() -> None:
+    """Mutating SpatialContext.extra_context (a nested dict inside a pydantic
+    model held as an edge attribute) must not affect future get_graph() reads.
+    """
+    ctx = SpatialContext(extra_context={"lighting": "normal"})
+    fact = _make_fact(context=ctx)
+    abg = ActiveBeliefGraph(FakeReader([fact]))
+
+    first = abg.get_graph()
+    edge_key = str(fact.fact_id)
+    first[fact.subject][fact.object][edge_key]["context"].extra_context[
+        "lighting"
+    ] = "TAMPERED"
+
+    second = abg.get_graph()
+    untouched_context = second[fact.subject][fact.object][edge_key]["context"]
+    assert untouched_context.extra_context["lighting"] == "normal"
 
 # ---------------------------------------------------------------------------
 # Traversal helpers
