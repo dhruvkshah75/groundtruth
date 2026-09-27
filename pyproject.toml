@@ -18,17 +18,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-# Suppress system-level ROS pytest plugins that are not relevant to this project
-# and cause INTERNALERROR due to missing yaml/hook mismatches.
-addopts = [
-    "-p", "no:launch_testing_ros_pytest_entrypoint",
-    "-p", "no:ament_pep257",
-    "-p", "no:ament_copyright",
-    "-p", "no:ament_xmllint",
-    "-p", "no:ament_lint",
-    "-p", "no:ament_flake8",
-]
-#or export [$PYTEST_DISABLE_PLUGIN_AUTOLOAD=1] if it still shows ROS plugin error
+#export [$PYTEST_DISABLE_PLUGIN_AUTOLOAD=1] if it shows ROS plugin error
 
 [tool.ruff]
 target-version = "py311"
