@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from contracts.models import ObservationRequest, ObservationUnavailable
-from sensorimotor.mock_environment import MockEnvironment
-from sensorimotor.world_models import (
+from src.contracts.models import ObservationRequest, ObservationUnavailable
+from src.sensorimotor.mock_environment import MockEnvironment
+from src.sensorimotor.world_models import (
     AmbientLight,
     Obstacle,
     RobotState,
@@ -208,3 +208,84 @@ def test_robot_pose(fixed_clock, deterministic_uuid_factory):
     assert obs.measurements["x_cm"] == 0.0
     assert obs.measurements["y_cm"] == 0.0
     assert obs.measurements["direction"] == "north"
+
+
+def test_unknown_parameter(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+    req = ObservationRequest(
+        capability="lidar_scan", parameters={"direction": "front", "fake_param": 123}
+    )
+    obs = env.observe(req)
+    assert isinstance(obs, ObservationUnavailable)
+    assert obs.reason == "sensor_unavailable"
+    assert "Unsupported parameter" in obs.message
+
+
+def test_world_version_tracking(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+    assert world.world_version == 0
+    obs1 = Obstacle(obstacle_id="obstacle_02", x_cm=0.0, y_cm=5.0, location="room_101")
+    env.configure_obstacle_for_test(obs1)
+    assert world.world_version == 1
+    env.disable_obstacle_for_test("obstacle_02")
+    assert world.world_version == 2
+    env.set_robot_pose_for_test(0.0, 0.0, "east", "room_101")
+    assert world.world_version == 3
+
+
+def test_moving_obstacle_changes_distance(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+    req = ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
+    obs = env.observe(req)
+    assert obs.measurements["nearest_distance_cm"] == 12.0
+
+    # Move obstacle
+    obs1 = world.obstacles["obstacle_01"]
+    obs1.y_cm = 8.0
+    env.configure_obstacle_for_test(obs1)
+
+    obs_new = env.observe(req)
+    assert obs_new.measurements["nearest_distance_cm"] == 8.0
+    assert obs_new.context.world_version == 1
+
+
+def test_rotating_robot(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+    env.set_robot_pose_for_test(0.0, 0.0, "east", "room_101")
+
+    req = ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
+    obs = env.observe(req)
+    # Obstacle is at y=12, robot facing east -> obstacle is not in front
+    assert obs.measurements["detected"] is False
+
+
+def test_camera_object_another_room(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_b_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+    obj = world.objects["box_01"]
+    obj.location = "room_102"
+    env.replace_world(world)  # To ensure it is updated
+
+    req = ObservationRequest(capability="camera_detect", target="box_01")
+    obs = env.observe(req)
+    assert isinstance(obs, ObservationUnavailable)
+    assert obs.reason == "target_not_visible"
+
+
+def test_camera_no_target_returns_all(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_b_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+
+    req = ObservationRequest(capability="camera_detect")
+    obs = env.observe(req)
+    assert obs.capability == "camera_detect"
+    assert "objects" in obs.measurements
+    objects = obs.measurements["objects"]
+    assert len(objects) == 1
+    assert objects[0]["object_id"] == "box_01"
+    assert objects[0]["apparent_color"] == "brown"
+    assert "bounding_box" in objects[0]

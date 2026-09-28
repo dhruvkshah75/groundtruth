@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from sensorimotor.world_models import (
+from src.sensorimotor.world_models import (
     RobotState,
     WorldState,
 )

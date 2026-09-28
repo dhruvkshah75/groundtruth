@@ -4,14 +4,14 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from contracts.models import (
+from src.contracts.models import (
     CapabilityDescriptor,
     ObservationRequest,
     ObservationUnavailable,
     SensorObservation,
     SpatialContext,
 )
-from sensorimotor.world_models import WorldState
+from src.sensorimotor.world_models import Obstacle, WorldState
 
 
 class MockEnvironment:
@@ -60,17 +60,53 @@ class MockEnvironment:
         # Return a fresh list (or deep copies) to prevent external mutation
         return [cap.model_copy(deep=True) for cap in self._capabilities]
 
+    def replace_world(self, new_world: WorldState) -> None:
+        """Test helper to replace the entire world."""
+        self._world = new_world
+
+    def set_robot_pose_for_test(
+        self, x_cm: float, y_cm: float, direction: str, location: str
+    ) -> None:
+        """Test helper to move the robot."""
+        self._world.robot.x_cm = x_cm
+        self._world.robot.y_cm = y_cm
+        self._world.robot.direction = direction  # type: ignore
+        self._world.robot.location = location
+        self._world.increment_version()
+
+    def configure_obstacle_for_test(self, obstacle: Obstacle) -> None:
+        """Test helper to add or update an obstacle."""
+        self._world.obstacles[obstacle.obstacle_id] = obstacle
+        self._world.increment_version()
+
+    def disable_obstacle_for_test(self, obstacle_id: str) -> None:
+        """Test helper to disable an obstacle."""
+        if obstacle_id in self._world.obstacles:
+            self._world.obstacles[obstacle_id].active = False
+            self._world.increment_version()
+
     def observe(self, request: ObservationRequest) -> SensorObservation | ObservationUnavailable:
         """Process an observation request deterministically."""
 
         # 1. Validate capability against registry
-        supported_names = {cap.name for cap in self._capabilities}
-        if request.capability not in supported_names:
+        cap_descriptor = next(
+            (cap for cap in self._capabilities if cap.name == request.capability), None
+        )
+        if not cap_descriptor:
             return self._unavailable(
                 request.capability,
                 "unsupported_capability",
                 f"Capability '{request.capability}' is not supported.",
             )
+
+        # 1.5 Validate parameters
+        for key in request.parameters:
+            if key not in cap_descriptor.parameters:
+                return self._unavailable(
+                    request.capability,
+                    "sensor_unavailable",
+                    f"Unsupported parameter '{key}' for capability '{request.capability}'.",
+                )
 
         # 2. Dispatch to specific sensor
         try:
@@ -191,8 +227,42 @@ class MockEnvironment:
     ) -> SensorObservation | ObservationUnavailable:
         """Execute camera_detect."""
         target_id = request.target
+
+        def get_apparent_color(obj):
+            if obj.intrinsic_color == "red" and self._world.light.color_cast == "yellow":
+                return "brown"
+            return obj.intrinsic_color
+
+        context = self._get_context()
+        context.extra_context["lighting"] = self._world.light.color_cast
+
         if not target_id:
-            raise ValueError("camera_detect requires a target object ID.")
+            visible_objs = [
+                obj
+                for obj in self._world.objects.values()
+                if obj.visible and obj.location == self._world.robot.location
+            ]
+            visible_objs.sort(key=lambda o: o.object_id)
+
+            measurements = {
+                "objects": [
+                    {
+                        "object_id": obj.object_id,
+                        "apparent_color": get_apparent_color(obj),
+                        "bounding_box": obj.bounding_box,
+                    }
+                    for obj in visible_objs
+                ]
+            }
+            return SensorObservation(
+                observation_id=self._id_factory(),
+                sensor="camera",
+                capability="camera_detect",
+                observed_at=self._clock(),
+                confidence_score=1.0,
+                measurements=measurements,
+                context=context,
+            )
 
         obj = self._world.objects.get(target_id)
         if not obj or not obj.visible or obj.location != self._world.robot.location:
@@ -200,19 +270,11 @@ class MockEnvironment:
                 "camera_detect", "target_not_visible", f"Target '{target_id}' is not visible."
             )
 
-        # Appearance mapping rule: red object + yellow light -> apparent brown
-        apparent_color = obj.intrinsic_color
-        if obj.intrinsic_color == "red" and self._world.light.color_cast == "yellow":
-            apparent_color = "brown"
-
         measurements = {
             "object_id": obj.object_id,
-            "apparent_color": apparent_color,
+            "apparent_color": get_apparent_color(obj),
             "bounding_box": obj.bounding_box,
         }
-
-        context = self._get_context()
-        context.extra_context["lighting"] = self._world.light.color_cast
 
         return SensorObservation(
             observation_id=self._id_factory(),
