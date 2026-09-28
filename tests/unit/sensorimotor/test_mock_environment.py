@@ -318,3 +318,75 @@ def test_camera_no_target_multiple_objects(fixed_clock, deterministic_uuid_facto
     # Ensure deterministic sort (box_01, then box_02)
     assert objects[0]["object_id"] == "box_01"
     assert objects[1]["object_id"] == "box_02"
+
+
+def test_ambient_light_agreement(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_b_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+
+    light_req = ObservationRequest(capability="ambient_light")
+    light_obs = env.observe(light_req)
+
+    cam_req = ObservationRequest(capability="camera_detect", target="box_01")
+    cam_obs = env.observe(cam_req)
+
+    assert light_obs.measurements["color_cast"] == "yellow"
+    assert cam_obs.context.extra_context["lighting"] == "yellow"
+    assert light_obs.measurements["color_cast"] == cam_obs.context.extra_context["lighting"]
+
+
+def test_deterministic_repeat_readings(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+
+    req = ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
+    obs1 = env.observe(req)
+    obs2 = env.observe(req)
+
+    assert obs1.measurements == obs2.measurements
+    assert obs1.context == obs2.context
+    assert obs1.observation_id == obs2.observation_id
+
+
+def test_no_observation_version_stability(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+
+    req = ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
+    obs1 = env.observe(req)
+    assert obs1.context.world_version == 0
+
+    obs2 = env.observe(req)
+    assert obs2.context.world_version == 0
+
+
+def test_lidar_lateral_tolerance(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+
+    # Move obstacle just outside the 5.0cm lateral tolerance
+    obs1 = world.obstacles["obstacle_01"]
+    obs1.x_cm = 5.1
+    env.configure_obstacle_for_test(obs1)
+
+    req = ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
+    obs = env.observe(req)
+    assert obs.measurements["detected"] is False
+
+
+def test_capability_registry_mutation_protection():
+    world = build_scenario_a_world()
+    env = MockEnvironment(world=world)
+
+    caps = env.get_capabilities()
+    original_len = len(caps)
+
+    # Try to mutate the list
+    caps.append(caps[0])
+
+    # Try to mutate an item
+    caps[0].name = "hacked_capability"
+
+    new_caps = env.get_capabilities()
+    assert len(new_caps) == original_len
+    assert new_caps[0].name != "hacked_capability"
