@@ -138,8 +138,7 @@ def test_lidar_mutation_changes_reading(fixed_clock, deterministic_uuid_factory)
     env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
 
     # Disable the obstacle
-    world.obstacles["obstacle_01"].active = False
-    world.increment_version()
+    env.disable_obstacle_for_test("obstacle_01")
 
     req = ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
     obs = env.observe(req)
@@ -225,14 +224,23 @@ def test_unknown_parameter(fixed_clock, deterministic_uuid_factory):
 def test_world_version_tracking(fixed_clock, deterministic_uuid_factory):
     world = build_scenario_a_world()
     env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
-    assert world.world_version == 0
+
+    req = ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
+    obs0 = env.observe(req)
+    assert obs0.context.world_version == 0
+
     obs1 = Obstacle(obstacle_id="obstacle_02", x_cm=0.0, y_cm=5.0, location="room_101")
     env.configure_obstacle_for_test(obs1)
-    assert world.world_version == 1
+    obs1_resp = env.observe(req)
+    assert obs1_resp.context.world_version == 1
+
     env.disable_obstacle_for_test("obstacle_02")
-    assert world.world_version == 2
+    obs2_resp = env.observe(req)
+    assert obs2_resp.context.world_version == 2
+
     env.set_robot_pose_for_test(0.0, 0.0, "east", "room_101")
-    assert world.world_version == 3
+    obs3_resp = env.observe(req)
+    assert obs3_resp.context.world_version == 3
 
 
 def test_moving_obstacle_changes_distance(fixed_clock, deterministic_uuid_factory):
@@ -289,3 +297,24 @@ def test_camera_no_target_returns_all(fixed_clock, deterministic_uuid_factory):
     assert objects[0]["object_id"] == "box_01"
     assert objects[0]["apparent_color"] == "brown"
     assert "bounding_box" in objects[0]
+
+
+def test_camera_no_target_multiple_objects(fixed_clock, deterministic_uuid_factory):
+    world = build_scenario_b_world()
+    world.objects["box_02"] = SimulatedObject(
+        object_id="box_02",
+        x_cm=20.0,
+        y_cm=20.0,
+        location="room_101",
+        intrinsic_color="blue",
+        visible=True,
+    )
+    env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
+
+    req = ObservationRequest(capability="camera_detect")
+    obs = env.observe(req)
+    objects = obs.measurements["objects"]
+    assert len(objects) == 2
+    # Ensure deterministic sort (box_01, then box_02)
+    assert objects[0]["object_id"] == "box_01"
+    assert objects[1]["object_id"] == "box_02"

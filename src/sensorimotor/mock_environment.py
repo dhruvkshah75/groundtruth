@@ -11,7 +11,7 @@ from src.contracts.models import (
     SensorObservation,
     SpatialContext,
 )
-from src.sensorimotor.world_models import Obstacle, WorldState
+from src.sensorimotor.world_models import AmbientLight, Obstacle, SimulatedObject, WorldState
 
 
 class MockEnvironment:
@@ -24,7 +24,7 @@ class MockEnvironment:
         id_factory: Callable[[], uuid.UUID] | None = None,
     ):
         """Initialize with a world state and optional deterministic factories."""
-        self._world = world
+        self._world = world.model_copy(deep=True)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or uuid.uuid4
 
@@ -62,7 +62,7 @@ class MockEnvironment:
 
     def replace_world(self, new_world: WorldState) -> None:
         """Test helper to replace the entire world."""
-        self._world = new_world
+        self._world = new_world.model_copy(deep=True)
 
     def set_robot_pose_for_test(
         self, x_cm: float, y_cm: float, direction: str, location: str
@@ -76,7 +76,7 @@ class MockEnvironment:
 
     def configure_obstacle_for_test(self, obstacle: Obstacle) -> None:
         """Test helper to add or update an obstacle."""
-        self._world.obstacles[obstacle.obstacle_id] = obstacle
+        self._world.obstacles[obstacle.obstacle_id] = obstacle.model_copy(deep=True)
         self._world.increment_version()
 
     def disable_obstacle_for_test(self, obstacle_id: str) -> None:
@@ -84,6 +84,16 @@ class MockEnvironment:
         if obstacle_id in self._world.obstacles:
             self._world.obstacles[obstacle_id].active = False
             self._world.increment_version()
+
+    def set_lighting_for_test(self, light: AmbientLight) -> None:
+        """Test helper to change ambient lighting."""
+        self._world.light = light.model_copy(deep=True)
+        self._world.increment_version()
+
+    def configure_object_for_test(self, obj: SimulatedObject) -> None:
+        """Test helper to add or update an object."""
+        self._world.objects[obj.object_id] = obj.model_copy(deep=True)
+        self._world.increment_version()
 
     def observe(self, request: ObservationRequest) -> SensorObservation | ObservationUnavailable:
         """Process an observation request deterministically."""
