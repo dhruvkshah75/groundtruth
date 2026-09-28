@@ -6,7 +6,8 @@
 2. [Architecture Decisions](Architecture_Decisions.md) - the current implementation decisions for Tier 1 and Tier 2.
 3. [Tier 1 Implementation Guide](tier1/Tier1_Implementation_Guide.md) - SQLite facts, revisions, aliases, and NetworkX cache.
 4. [Tier 2 Implementation Guide](tier2/Tier2_Implementation_Guide.md) - intent classification, deterministic planning, policy, and guardrails.
-5. [Evaluation and Differentiation Plan](Evaluation_and_Differentiation.md) - how the project proves reliability and stands out in grading.
+5. [Tier 3 Implementation Guide](tier3/Tier3_Implementation_Guide.md) - the mock world, sensor behavior, spatial context, and deterministic test helpers.
+6. [Evaluation and Differentiation Plan](Evaluation_and_Differentiation.md) - how the project proves reliability and stands out in grading.
 
 ## Supporting context
 
