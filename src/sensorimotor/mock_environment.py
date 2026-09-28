@@ -61,8 +61,10 @@ class MockEnvironment:
         return [cap.model_copy(deep=True) for cap in self._capabilities]
 
     def replace_world(self, new_world: WorldState) -> None:
-        """Test helper to replace the entire world."""
-        self._world = new_world.model_copy(deep=True)
+        """Replace the world and advance this environment's version once."""
+        replacement = new_world.model_copy(deep=True)
+        replacement.world_version = self._world.world_version + 1
+        self._world = replacement
 
     def set_robot_pose_for_test(
         self, x_cm: float, y_cm: float, direction: str, location: str
@@ -107,6 +109,13 @@ class MockEnvironment:
                 request.capability,
                 "unsupported_capability",
                 f"Capability '{request.capability}' is not supported.",
+            )
+
+        if request.target is not None and request.capability != "camera_detect":
+            return self._unavailable(
+                request.capability,
+                "sensor_unavailable",
+                f"Capability '{request.capability}' does not accept a target.",
             )
 
         # 1.5 Validate parameters
