@@ -207,6 +207,10 @@ def test_robot_pose(fixed_clock, deterministic_uuid_factory):
     assert obs.measurements["x_cm"] == 0.0
     assert obs.measurements["y_cm"] == 0.0
     assert obs.measurements["direction"] == "north"
+    assert obs.context.location == "room_101"
+    assert obs.context.frame_of_reference == "robot_base"
+    assert obs.context.observer == "robot_01"
+    assert obs.context.world_version == 0
 
 
 def test_unknown_parameter(fixed_clock, deterministic_uuid_factory):
@@ -219,6 +223,15 @@ def test_unknown_parameter(fixed_clock, deterministic_uuid_factory):
     assert isinstance(obs, ObservationUnavailable)
     assert obs.reason == "sensor_unavailable"
     assert "Unsupported parameter" in obs.message
+
+
+@pytest.mark.parametrize("capability", ["lidar_scan", "ambient_light", "robot_pose"])
+def test_non_camera_sensor_rejects_target(capability, fixed_clock):
+    env = MockEnvironment(build_scenario_a_world(), clock=fixed_clock)
+    obs = env.observe(ObservationRequest(capability=capability, target="box_01"))
+    assert isinstance(obs, ObservationUnavailable)
+    assert obs.reason == "sensor_unavailable"
+    assert "does not accept a target" in obs.message
 
 
 def test_world_version_tracking(fixed_clock, deterministic_uuid_factory):
@@ -241,6 +254,21 @@ def test_world_version_tracking(fixed_clock, deterministic_uuid_factory):
     env.set_robot_pose_for_test(0.0, 0.0, "east", "room_101")
     obs3_resp = env.observe(req)
     assert obs3_resp.context.world_version == 3
+
+    env.set_lighting_for_test(AmbientLight(intensity=0.5, color_cast="neutral"))
+    assert env.observe(req).context.world_version == 4
+
+    env.configure_object_for_test(
+        SimulatedObject(
+            object_id="box_01", x_cm=2.0, y_cm=3.0, location="room_101", intrinsic_color="blue"
+        )
+    )
+    assert env.observe(req).context.world_version == 5
+
+    replacement = build_scenario_a_world()
+    replacement.world_version = 0  # Replacement cannot reset the live version.
+    env.replace_world(replacement)
+    assert env.observe(req).context.world_version == 6
 
 
 def test_moving_obstacle_changes_distance(fixed_clock, deterministic_uuid_factory):
