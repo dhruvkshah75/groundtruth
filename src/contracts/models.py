@@ -253,9 +253,7 @@ class EntityResolution(BaseModel):
             self.canonical_entity_id is not None or len(self.candidates) < 2
         ):
             raise ValueError("ambiguous status requires at least two candidates")
-        if self.status == "missing" and (
-            self.canonical_entity_id is not None or self.candidates
-        ):
+        if self.status == "missing" and (self.canonical_entity_id is not None or self.candidates):
             raise ValueError("missing status cannot include entity candidates")
         return self
 
@@ -382,7 +380,5 @@ class GroundedResult(BaseModel):
             return self
 
         if not self.conclusion or not self.evidence_ids or not self.policy_rule:
-            raise ValueError(
-                "resolved result requires conclusion, evidence_ids, and policy_rule"
-            )
+            raise ValueError("resolved result requires conclusion, evidence_ids, and policy_rule")
         return self
