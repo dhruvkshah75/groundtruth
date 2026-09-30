@@ -102,8 +102,22 @@ class MemoryRepository:
             self._write_listeners.remove(listener)
 
     def _notify_write_listeners(self) -> None:
-        for listener in self._write_listeners:
-            listener()
+        """Invoke all registered write listeners post-commit.
+
+        Guarantees that every listener is executed even if an earlier listener
+        raises an exception. Any exceptions raised by listeners are collected
+        and re-raised after all listeners have been called.
+        """
+        errors: list[Exception] = []
+        for listener in list(self._write_listeners):
+            try:
+                listener()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            if len(errors) == 1:
+                raise errors[0]
+            raise ExceptionGroup("One or more write listeners failed post-commit", errors)
 
     def close(self) -> None:
         """Close the underlying SQLite connection."""
@@ -349,10 +363,11 @@ class MemoryRepository:
             )
 
             self._conn.execute("COMMIT")
-            self._notify_write_listeners()
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
+
+        self._notify_write_listeners()
 
         successor = StoredFact(
             fact_id=new_fact_id,

@@ -350,8 +350,10 @@ class GraphSyncedRepository:
     def __init__(self, repository: WritableFactRepository, graph: ActiveBeliefGraph) -> None:
         self._repository = repository
         self._graph = graph
-        if hasattr(repository, "add_write_listener"):
-            repository.add_write_listener(graph.invalidate)
+        self._invalidator = graph.invalidate
+        self._uses_listeners = hasattr(repository, "add_write_listener")
+        if self._uses_listeners:
+            repository.add_write_listener(self._invalidator)
 
     @classmethod
     def create(cls, repository: WritableFactRepository) -> GraphSyncedRepository:
@@ -372,7 +374,8 @@ class GraphSyncedRepository:
     def record_fact(self, assertion: FactAssertion) -> StoredFact:
         """Delegate to the repository, then invalidate the graph on success."""
         result = self._repository.record_fact(assertion)
-        self._graph.invalidate()
+        if not self._uses_listeners:
+            self._graph.invalidate()
         return result
 
     def record_revision(
@@ -387,7 +390,8 @@ class GraphSyncedRepository:
         result = self._repository.record_revision(
             old_fact_id, replacement, reason, policy_rule, revised_at
         )
-        self._graph.invalidate()
+        if not self._uses_listeners:
+            self._graph.invalidate()
         return result
 
     def query_facts(self, query: FactQuery) -> list[StoredFact]:
@@ -420,9 +424,9 @@ class GraphSyncedRepository:
         return self._graph.get_graph()
 
     def close(self) -> None:
-        """Close the underlying repository if closable."""
-        if hasattr(self._repository, "close"):
-            self._repository.close()
+        """Close the wrapper and unregister its listener from the underlying repository."""
+        if self._uses_listeners and hasattr(self._repository, "remove_write_listener"):
+            self._repository.remove_write_listener(self._invalidator)
 
     def __enter__(self) -> GraphSyncedRepository:
         return self

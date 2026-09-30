@@ -88,17 +88,18 @@ subsequent get_graph() calls, no writes in between
     → return the cached projection
 
 after record_fact() / record_revision() COMMITS successfully
-    → caller (not ActiveBeliefGraph itself) calls invalidate()
+    → post-commit write listeners (or GraphSyncedRepository) trigger invalidate()
 
 next get_graph() call
     → cache is stale → rebuild from current active SQLite state
 ```
 
-**Important:** `invalidate()` must only be called by the code wrapping a
-write, and only *after* that write's transaction has committed
-successfully. A failed or rolled-back write must never trigger
-invalidation — this is what keeps a crashed write from ever appearing in
-the graph.
+**Application Write Boundary & Invalidation Rules:**
+- In application code, writes should be routed through **`GraphSyncedRepository`**, which serves as the primary write boundary and facade.
+- When `GraphSyncedRepository` wraps a `MemoryRepository`, it registers `graph.invalidate` as a post-commit write listener on the repository via `repo.add_write_listener(...)`.
+- When a write transaction commits, `MemoryRepository` invokes its write listeners strictly post-commit. This ensures that even if code holds a direct reference to `MemoryRepository`, writes cannot leave an attached graph stale.
+- Direct writes to a standalone `MemoryRepository` without an attached listener do **not** automatically invalidate detached graph projections; in that isolated configuration the caller must call `graph.invalidate()` manually. For this reason, direct writes outside of `GraphSyncedRepository` are unsupported in the application layer.
+- In all configurations, `invalidate()` is triggered strictly **after** a successful commit. A failed or rolled-back write never notifies listeners and never triggers invalidation.
 
 ### Node/edge representation
 
@@ -124,21 +125,23 @@ dictionaries of relationships, not natural-language conclusions.
 
 ### Interpreting a `GraphConsistencyReport`
 
-`check_graph_consistency(graph, active_facts)` is a pure function — it never
-repairs anything. A non-empty report means the caller should discard and
-call `rebuild()`, not attempt to patch individual edges. The report's
-fields:
+`check_graph_consistency(graph, active_facts, superseded_facts)` is a pure
+function — it never repairs anything. A non-empty report means the caller
+should discard and call `rebuild()`, not attempt to patch individual edges.
+The report's fields:
 
 - `missing_fact_ids` — active SQLite facts absent from the graph (cache is
   behind SQLite).
 - `extra_edge_keys` — graph edges whose fact ID never existed in SQLite at
   all.
 - `stale_edge_keys` — graph edges representing facts that have since been
-  superseded (detected via the edge's own `superseded_by` attribute).
+  superseded in SQLite (detected by comparing graph edges against the
+  authoritative `superseded_facts` list).
 - `duplicate_edge_keys` — a fact ID used as the key on more than one edge.
 - `metadata_mismatches` — edge attributes that diverge from the
   corresponding `StoredFact` (checked: predicate, source_agent,
-  confidence_score, context).
+  confidence_score, observed_at, created_at, context, version, evidence).
+
 
 ### Why conflict resolution stays out of this module
 
