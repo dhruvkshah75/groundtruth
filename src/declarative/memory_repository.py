@@ -79,15 +79,31 @@ class MemoryRepository:
         db_path: str = ":memory:",
         clock: Callable[[], datetime] | None = None,
         uuid_factory: Callable[[], UUID] | None = None,
+        write_listeners: list[Callable[[], None]] | None = None,
     ) -> None:
         self._db_path = db_path
         self._clock = clock or _utc_now
         self._uuid_factory = uuid_factory or uuid4
+        self._write_listeners: list[Callable[[], None]] = list(write_listeners or [])
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
         initialize_schema(self._conn)
+
+    def add_write_listener(self, listener: Callable[[], None]) -> None:
+        """Register a callback invoked after any successful fact or revision commit."""
+        if listener not in self._write_listeners:
+            self._write_listeners.append(listener)
+
+    def remove_write_listener(self, listener: Callable[[], None]) -> None:
+        """Unregister a previously registered write listener."""
+        if listener in self._write_listeners:
+            self._write_listeners.remove(listener)
+
+    def _notify_write_listeners(self) -> None:
+        for listener in self._write_listeners:
+            listener()
 
     def close(self) -> None:
         """Close the underlying SQLite connection."""
@@ -137,6 +153,7 @@ class MemoryRepository:
             ),
         )
         self._conn.commit()
+        self._notify_write_listeners()
 
         return StoredFact(
             fact_id=fact_id,
@@ -332,6 +349,7 @@ class MemoryRepository:
             )
 
             self._conn.execute("COMMIT")
+            self._notify_write_listeners()
         except Exception:
             self._conn.execute("ROLLBACK")
             raise

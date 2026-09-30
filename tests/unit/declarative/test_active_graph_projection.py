@@ -145,9 +145,7 @@ def test_two_distinct_facts_same_subject_object_both_preserved() -> None:
     fid_a = uuid4()
     fid_b = uuid4()
     fact_a = _make_fact(subject="box_01", obj="room_101", fact_id=fid_a)
-    fact_b = _make_fact(
-        subject="box_01", obj="room_101", source_agent="sensor_02", fact_id=fid_b
-    )
+    fact_b = _make_fact(subject="box_01", obj="room_101", source_agent="sensor_02", fact_id=fid_b)
 
     graph = ActiveBeliefGraph(FakeReader([fact_a, fact_b])).get_graph()
 
@@ -182,9 +180,7 @@ def test_multiple_conflicting_active_source_claims_remain_separate() -> None:
     fid_bot = uuid4()
 
     ctx_user = SpatialContext(observer="user_01", extra_context={"lighting": "normal"})
-    ctx_camera = SpatialContext(
-        observer="camera_01", extra_context={"lighting": "yellow"}
-    )
+    ctx_camera = SpatialContext(observer="camera_01", extra_context={"lighting": "yellow"})
     ctx_bot = SpatialContext(observer="bot_02", extra_context={"record": "history"})
 
     fact_user = _make_fact(
@@ -235,9 +231,7 @@ def test_superseded_facts_not_projected() -> None:
     old_id = uuid4()
     new_id = uuid4()
 
-    superseded = _make_fact(
-        obj="clear", fact_id=old_id, superseded_by=new_id
-    )
+    superseded = _make_fact(obj="clear", fact_id=old_id, superseded_by=new_id)
     active = _make_fact(obj="blocked", fact_id=new_id)
 
     # Reader filters superseded when active_only=True
@@ -324,6 +318,7 @@ def test_mutating_returned_graph_does_not_corrupt_cache() -> None:
     assert not second.has_edge("FAKE_NODE", "FAKE_TARGET", key="fake_key")
     assert second.number_of_edges() == 1  # only the real fact
 
+
 def test_mutating_rebuild_result_does_not_corrupt_cache() -> None:
     """rebuild() must also return a defensive copy — not the same mutable
     object stored internally as self._cache. Mutating the result of a direct
@@ -342,6 +337,7 @@ def test_mutating_rebuild_result_does_not_corrupt_cache() -> None:
     assert not graph.has_edge("FAKE_NODE", "FAKE_TARGET", key="fake_key")
     assert graph.number_of_edges() == 1  # only the real fact
 
+
 def test_mutating_nested_evidence_dict_does_not_corrupt_cache() -> None:
     """A shallow .copy() is insufficient: mutating a nested mutable value
     (the evidence dict) inside a returned graph's edge attrs must not
@@ -355,14 +351,14 @@ def test_mutating_nested_evidence_dict_does_not_corrupt_cache() -> None:
     first = abg.get_graph()
     edge_key = str(fact_with_evidence.fact_id)
     # Mutate a nested dict value inside the returned edge's attrs.
-    first[fact_with_evidence.subject][fact_with_evidence.object][edge_key][
-        "evidence"
-    ]["sensor_reading"] = "TAMPERED"
+    first[fact_with_evidence.subject][fact_with_evidence.object][edge_key]["evidence"][
+        "sensor_reading"
+    ] = "TAMPERED"
 
     second = abg.get_graph()
-    untouched_evidence = second[fact_with_evidence.subject][
-        fact_with_evidence.object
-    ][edge_key]["evidence"]
+    untouched_evidence = second[fact_with_evidence.subject][fact_with_evidence.object][edge_key][
+        "evidence"
+    ]
     assert untouched_evidence["sensor_reading"] == 42
 
 
@@ -376,13 +372,12 @@ def test_mutating_nested_context_extra_does_not_corrupt_cache() -> None:
 
     first = abg.get_graph()
     edge_key = str(fact.fact_id)
-    first[fact.subject][fact.object][edge_key]["context"].extra_context[
-        "lighting"
-    ] = "TAMPERED"
+    first[fact.subject][fact.object][edge_key]["context"].extra_context["lighting"] = "TAMPERED"
 
     second = abg.get_graph()
     untouched_context = second[fact.subject][fact.object][edge_key]["context"]
     assert untouched_context.extra_context["lighting"] == "normal"
+
 
 # ---------------------------------------------------------------------------
 # Traversal helpers

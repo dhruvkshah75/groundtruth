@@ -243,11 +243,49 @@ get_outgoing(subject: str) -> list[dict]
 get_incoming(obj: str) -> list[dict]
 get_edge_by_fact_id(fact_id: UUID) -> dict | None
 active_fact_ids() -> Iterator[UUID]
+
+# GraphSyncedRepository (GT-05 / GT-13) — application write boundary and facade
+record_fact(assertion: FactAssertion) -> StoredFact
+record_revision(old_fact_id, replacement, reason, policy_rule, revised_at) -> RevisionOutcome
+query_facts(query: FactQuery) -> list[StoredFact]
+get_audit_chain(fact_id: UUID) -> AuditTrail
+resolve_entity(mention: str) -> EntityResolution
+get_graph() -> nx.MultiDiGraph
 ```
 
 The implementation can use different method names, but equivalent capabilities are required.
 
+## Graph consistency checking
+
+The pure function `check_graph_consistency` diffs an in-memory `ActiveBeliefGraph` projection against authoritative SQLite state, returning a `GraphConsistencyReport`.
+
+To distinguish **stale edges** (edges whose facts were active when cached but have since been superseded) from **extra/phantom edges** (edges whose fact IDs never existed in SQLite), the consistency checker requires both active facts and authoritative superseded facts:
+
+```python
+from src.contracts import FactQuery
+from src.declarative.consistency import check_graph_consistency
+
+# 1. Query active facts from SQLite
+active_facts = repo.query_facts(FactQuery(active_only=True))
+
+# 2. Query all facts from SQLite to identify superseded facts
+all_facts = repo.query_facts(FactQuery(active_only=False))
+superseded_facts = [f for f in all_facts if f.superseded_by is not None]
+
+# 3. Perform consistency check with both active and superseded facts
+report = check_graph_consistency(
+    graph=graph.get_graph(),
+    active_facts=active_facts,
+    superseded_facts=superseded_facts,
+)
+
+# 4. If discrepancies are found, rebuild projection from SQLite
+if not report.is_clean:
+    graph.rebuild()
+```
+
 ## Query routing: SQLite or graph?
+
 
 There is no fixed sequence where Tier 1 always tries graph and then database. The query itself chooses the storage path.
 

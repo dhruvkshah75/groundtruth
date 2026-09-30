@@ -18,9 +18,7 @@ from src.contracts.models import (
 
 
 def test_entity_resolution_supports_all_three_outcomes() -> None:
-    resolved = EntityResolution(
-        mention="blue box", status="resolved", canonical_entity_id="box_01"
-    )
+    resolved = EntityResolution(mention="blue box", status="resolved", canonical_entity_id="box_01")
     ambiguous = EntityResolution(
         mention="the box", status="ambiguous", candidates=["box_01", "box_02"]
     )
