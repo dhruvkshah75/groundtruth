@@ -14,11 +14,18 @@ from .execution_plan import (
     MemoryQueryOperation,
     ObservationOperation,
 )
+from .execution_results import (
+    AuditExecutionResult,
+    MemoryExecutionResult,
+    ObservationExecutionResult,
+    PlanExecutionResult,
+)
 from .fallback_results import PlanningFallback, PlanningOutcome
 from .intent_coverage_reviewer import IntentCoverageReview, IntentCoverageReviewer
 from .intent_planner import IntentPlanner, IntentPlannerOutcome
 from .intent_provider import IntentProvider, IntentProviderUnavailableError
 from .plan_builder import PlanBuilder
+from .plan_executor import EnvironmentInterface, MemoryRepositoryInterface, PlanExecutor
 
 __all__ = [
     "ActionPlaceholder",
@@ -40,4 +47,11 @@ __all__ = [
     "PlanningOutcome",
     "PlanBuilder",
     "UnknownCapabilityError",
+    "MemoryExecutionResult",
+    "ObservationExecutionResult",
+    "AuditExecutionResult",
+    "PlanExecutionResult",
+    "PlanExecutor",
+    "MemoryRepositoryInterface",
+    "EnvironmentInterface",
 ]

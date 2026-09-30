@@ -89,7 +89,9 @@ class PlanBuilder:
         if has_lidar:
             observations.append(
                 ObservationOperation(
-                    request=ObservationRequest(capability="lidar_scan", target=entity),
+                    request=ObservationRequest(
+                        capability="lidar_scan", parameters={"direction": "front"}
+                    ),
                     purpose="Check the route with a fresh LiDAR scan.",
                 )
             )
