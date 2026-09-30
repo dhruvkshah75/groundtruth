@@ -251,6 +251,7 @@ def test_incorrect_metadata_detected(field_name: str, bad_value: object) -> None
     mismatch_fields = [m[1] for m in report.metadata_mismatches]
     assert field_name in mismatch_fields
 
+
 def test_edge_with_wrong_endpoints_detected() -> None:
     """An edge with the correct key but wrong (subject, object) nodes is a
     representation error and must be reported, not silently accepted."""
@@ -365,6 +366,7 @@ def test_previously_unchecked_metadata_fields_now_detected(field_name: str) -> N
     assert not report.is_clean
     mismatch_fields = [m[1] for m in report.metadata_mismatches]
     assert field_name in mismatch_fields
+
 
 def test_every_graph_edge_maps_to_one_active_fact() -> None:
     """In a correct state, each graph edge has exactly one matching active fact."""

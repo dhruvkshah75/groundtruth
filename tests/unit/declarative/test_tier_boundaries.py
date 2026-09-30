@@ -62,9 +62,7 @@ def test_no_tier2_imports() -> None:
     for mod in _GRAPH_MODULES:
         imported = _direct_module_imports(mod)
         bad = [n for n in imported if n.startswith("src.procedural")]
-        assert not bad, (
-            f"{mod.__name__} must not import Tier 2 (src.procedural); found: {bad}"
-        )
+        assert not bad, f"{mod.__name__} must not import Tier 2 (src.procedural); found: {bad}"
 
 
 def test_no_tier3_imports() -> None:
@@ -73,24 +71,28 @@ def test_no_tier3_imports() -> None:
     for mod in _GRAPH_MODULES:
         imported = _direct_module_imports(mod)
         bad = [n for n in imported if any(n.startswith(p) for p in tier3_prefixes)]
-        assert not bad, (
-            f"{mod.__name__} must not import Tier 3 modules; found: {bad}"
-        )
+        assert not bad, f"{mod.__name__} must not import Tier 3 modules; found: {bad}"
 
 
 def test_no_llm_provider_import_or_call() -> None:
     """active_graph and consistency must not import or call an LLM provider."""
     llm_markers = (
-        "openai", "anthropic", "google.generativeai", "genai",
-        "litellm", "langchain", "llama", "cohere", "mistral",
-        "transformers", "huggingface",
+        "openai",
+        "anthropic",
+        "google.generativeai",
+        "genai",
+        "litellm",
+        "langchain",
+        "llama",
+        "cohere",
+        "mistral",
+        "transformers",
+        "huggingface",
     )
     for mod in _GRAPH_MODULES:
         src = _source_text(mod).lower()
         for marker in llm_markers:
-            assert marker not in src, (
-                f"{mod.__name__} must not reference LLM provider '{marker}'"
-            )
+            assert marker not in src, f"{mod.__name__} must not reference LLM provider '{marker}'"
 
 
 def test_no_source_priority_or_conflict_resolution_logic() -> None:
@@ -118,22 +120,37 @@ def test_no_source_priority_or_conflict_resolution_logic() -> None:
         names = _ast_names(mod)
         bad = [ident for ident in forbidden_identifiers if ident in names]
         assert not bad, (
-            f"{mod.__name__} must not contain conflict-resolution identifiers; "
-            f"found: {bad}"
+            f"{mod.__name__} must not contain conflict-resolution identifiers; found: {bad}"
         )
 
 
 def test_networkx_never_used_for_persistent_storage() -> None:
     """active_graph and consistency must never call nx.write_* or nx.read_* functions."""
     nx_persistence_calls = (
-        "write_graphml", "write_gexf", "write_gml", "write_gpickle",
-        "write_graph6", "write_sparse6", "write_edgelist",
-        "write_multiline_adjlist", "write_adjlist", "write_pajek",
-        "write_shp", "write_yaml",
-        "read_graphml", "read_gexf", "read_gml", "read_gpickle",
-        "read_graph6", "read_sparse6", "read_edgelist",
-        "read_multiline_adjlist", "read_adjlist", "read_pajek",
-        "read_shp", "read_yaml",
+        "write_graphml",
+        "write_gexf",
+        "write_gml",
+        "write_gpickle",
+        "write_graph6",
+        "write_sparse6",
+        "write_edgelist",
+        "write_multiline_adjlist",
+        "write_adjlist",
+        "write_pajek",
+        "write_shp",
+        "write_yaml",
+        "read_graphml",
+        "read_gexf",
+        "read_gml",
+        "read_gpickle",
+        "read_graph6",
+        "read_sparse6",
+        "read_edgelist",
+        "read_multiline_adjlist",
+        "read_adjlist",
+        "read_pajek",
+        "read_shp",
+        "read_yaml",
     )
     for mod in _GRAPH_MODULES:
         src = _source_text(mod)

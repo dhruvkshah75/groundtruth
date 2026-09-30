@@ -50,7 +50,7 @@ Cache lifecycle
     dicts, ``SpatialContext.extra_context``). A Tier 2 caller or dashboard
     may add/remove edges or mutate nested metadata on the returned object
     without ever corrupting the projection that subsequent reads will return.
-    
+
 What this module will not do
 -----------------------------
 * Resolve conflicts or rank sources.
@@ -71,7 +71,14 @@ from uuid import UUID
 
 import networkx as nx
 
-from src.contracts import FactAssertion, FactQuery, StoredFact
+from src.contracts import (
+    AuditTrail,
+    EntityResolution,
+    FactAssertion,
+    FactQuery,
+    StoredFact,
+)
+from src.declarative.memory_repository import RevisionOutcome
 
 
 class ActiveFactReader(Protocol):
@@ -105,7 +112,7 @@ class WritableFactRepository(Protocol):
         reason: str,
         policy_rule: str,
         revised_at: datetime,
-    ) -> object:
+    ) -> RevisionOutcome:
         """Atomically replace an active fact with a new assertion."""
         ...
 
@@ -326,28 +333,49 @@ class GraphSyncedRepository:
     underlying repository and call ``graph.invalidate()`` *only after* the
     underlying call returns successfully.
 
+    In addition, if the underlying repository supports write listeners
+    (``add_write_listener``), the graph's ``invalidate()`` callback is
+    registered directly on the repository so that even direct repository
+    writes cannot leave a stale graph cache.
+
     If the underlying repository call raises (a failed or rolled-back
     write), the exception propagates immediately and ``invalidate()`` is
     never reached — the graph cache is correctly left untouched.
 
-    This exists because a bare ``MemoryRepository`` has no awareness of the
-    graph cache, and requiring every caller to remember to call
-    ``invalidate()`` manually after every write is unreliable in practice.
-    Callers who want the graph to always reflect the latest committed state
-    should write through this wrapper rather than calling the repository
-    directly.
+    This class serves as the primary application-level write boundary
+    and facade connecting Tier 1 SQLite persistence with the NetworkX
+    active-belief graph projection.
     """
 
-    def __init__(
-        self, repository: WritableFactRepository, graph: ActiveBeliefGraph
-    ) -> None:
+    def __init__(self, repository: WritableFactRepository, graph: ActiveBeliefGraph) -> None:
         self._repository = repository
         self._graph = graph
+        self._invalidator = graph.invalidate
+        self._uses_listeners = hasattr(repository, "add_write_listener")
+        if self._uses_listeners:
+            repository.add_write_listener(self._invalidator)
+
+    @classmethod
+    def create(cls, repository: WritableFactRepository) -> GraphSyncedRepository:
+        """Create a GraphSyncedRepository managing its own ActiveBeliefGraph."""
+        graph = ActiveBeliefGraph(repository)  # type: ignore[arg-type]
+        return cls(repository, graph)
+
+    @property
+    def repository(self) -> WritableFactRepository:
+        """The underlying storage repository."""
+        return self._repository
+
+    @property
+    def graph(self) -> ActiveBeliefGraph:
+        """The managed active belief graph."""
+        return self._graph
 
     def record_fact(self, assertion: FactAssertion) -> StoredFact:
         """Delegate to the repository, then invalidate the graph on success."""
         result = self._repository.record_fact(assertion)
-        self._graph.invalidate()
+        if not self._uses_listeners:
+            self._graph.invalidate()
         return result
 
     def record_revision(
@@ -357,10 +385,51 @@ class GraphSyncedRepository:
         reason: str,
         policy_rule: str,
         revised_at: datetime,
-    ) -> object:
+    ) -> RevisionOutcome:
         """Delegate to the repository, then invalidate the graph on success."""
         result = self._repository.record_revision(
             old_fact_id, replacement, reason, policy_rule, revised_at
         )
-        self._graph.invalidate()
+        if not self._uses_listeners:
+            self._graph.invalidate()
         return result
+
+    def query_facts(self, query: FactQuery) -> list[StoredFact]:
+        """Delegate query_facts to the underlying repository."""
+        if hasattr(self._repository, "query_facts"):
+            return self._repository.query_facts(query)
+        raise NotImplementedError("Underlying repository does not support query_facts")
+
+    def get_audit_chain(self, fact_id: UUID) -> AuditTrail:
+        """Delegate get_audit_chain to the underlying repository."""
+        if hasattr(self._repository, "get_audit_chain"):
+            return self._repository.get_audit_chain(fact_id)
+        raise NotImplementedError("Underlying repository does not support get_audit_chain")
+
+    def add_alias(self, mention: str, canonical_entity_id: str) -> None:
+        """Delegate add_alias to the underlying repository."""
+        if hasattr(self._repository, "add_alias"):
+            self._repository.add_alias(mention, canonical_entity_id)
+            return
+        raise NotImplementedError("Underlying repository does not support add_alias")
+
+    def resolve_entity(self, mention: str) -> EntityResolution:
+        """Delegate resolve_entity to the underlying repository."""
+        if hasattr(self._repository, "resolve_entity"):
+            return self._repository.resolve_entity(mention)
+        raise NotImplementedError("Underlying repository does not support resolve_entity")
+
+    def get_graph(self) -> nx.MultiDiGraph:
+        """Return the active belief graph projection."""
+        return self._graph.get_graph()
+
+    def close(self) -> None:
+        """Close the wrapper and unregister its listener from the underlying repository."""
+        if self._uses_listeners and hasattr(self._repository, "remove_write_listener"):
+            self._repository.remove_write_listener(self._invalidator)
+
+    def __enter__(self) -> GraphSyncedRepository:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()

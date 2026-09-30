@@ -26,8 +26,8 @@ Analysis of trade-offs in the current proposed design, alternatives, and edge ca
 # Event-sourcing pattern: graph is derived, never authoritative
 class DatabaseManager:
     def record_fact(self, assertion: FactAssertion) -> StoredFact:
-        stored = self._insert_fact(assertion)   # SQLite = source of truth
-        self._graph_cache = None                # invalidate derived cache
+        stored = self._insert_fact(assertion)  # SQLite = source of truth
+        self._graph_cache = None  # invalidate derived cache
         return stored
 
     def get_active_graph(self) -> "networkx.DiGraph":
@@ -37,10 +37,16 @@ class DatabaseManager:
 
     def _rebuild_graph_from_sqlite(self):
         import networkx as nx
+
         g = nx.DiGraph()
         for row in self.get_active_memories():  # WHERE superseded_by IS NULL
-            g.add_edge(row["subject"], row["object"], predicate=row["predicate"],
-                       confidence=row["confidence_score"], fact_id=row["fact_id"])
+            g.add_edge(
+                row["subject"],
+                row["object"],
+                predicate=row["predicate"],
+                confidence=row["confidence_score"],
+                fact_id=row["fact_id"],
+            )
         return g
 ```
 
@@ -98,10 +104,12 @@ class Tier2Orchestrator:
 from pydantic import BaseModel, Field
 from typing import Literal
 
+
 class SpatialContext(BaseModel):
     location: str | None = None
     frame_of_reference: str | None = None
     world_version: int | None = None
+
 
 class FactAssertionV1(BaseModel):
     version: Literal["v1"] = "v1"
@@ -133,9 +141,11 @@ ALIAS_TABLE = {
     "front sensor": "lidar_sensor",
 }
 
+
 def canonicalize(term: str) -> str:
     key = term.strip().lower()
     return ALIAS_TABLE.get(key, term)
+
 
 def resolve_query(raw_subject: str) -> FactQuery:
     return FactQuery(subject=canonicalize(raw_subject))
@@ -163,8 +173,10 @@ class QueryPlan(BaseModel):
     predicate: str | None = None
     reason: str
 
+
 class CompoundQueryPlan(BaseModel):
     sub_plans: list[QueryPlan]
+
 
 def answer_compound(plan: CompoundQueryPlan) -> str:
     parts = []
@@ -189,12 +201,13 @@ import math
 from datetime import datetime, timezone
 
 DECAY_RATE_PER_HOUR = {
-    "located_at": 0.15,          # moving objects — decays fast
-    "wall_position": 0.001,      # static facts — barely decays
+    "located_at": 0.15,  # moving objects — decays fast
+    "wall_position": 0.001,  # static facts — barely decays
     "perceived_color_is": 0.05,
 }
 DEFAULT_DECAY_RATE = 0.05
 MIN_CONFIDENCE_FLOOR = 0.1
+
 
 def decayed_confidence(original: float, predicate: str, observed_at: datetime) -> float:
     rate = DECAY_RATE_PER_HOUR.get(predicate, DEFAULT_DECAY_RATE)
@@ -231,7 +244,7 @@ class QueryPlan(BaseModel):
     capability: str | None = None
     subject: str | None = None
     predicate: str | None = None
-    derivation: str | None = None   # e.g. "shortest_path", "path_taken", "distance_traveled"
+    derivation: str | None = None  # e.g. "shortest_path", "path_taken", "distance_traveled"
     reason: str
 ```
 
@@ -240,9 +253,9 @@ class QueryPlan(BaseModel):
 ```python
 def handle_derive_plan(plan: QueryPlan, db: DatabaseManager) -> AgentResponse:
     if plan.derivation == "path_taken":
-        history = db.query_facts(FactQuery(
-            subject="robot_01", predicate="located_at", active_only=False
-        ))
+        history = db.query_facts(
+            FactQuery(subject="robot_01", predicate="located_at", active_only=False)
+        )
         ordered = sorted(history, key=lambda f: f.created_at)
         route = [f.object for f in ordered]
         return AgentResponse(

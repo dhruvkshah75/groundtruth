@@ -17,7 +17,8 @@ import pytest
 
 from src.contracts import FactAssertion, FactQuery, SpatialContext
 from src.declarative.active_graph import ActiveBeliefGraph, GraphSyncedRepository
-from src.declarative.memory_repository import MemoryRepository
+from src.declarative.consistency import check_graph_consistency
+from src.declarative.memory_repository import MemoryRepository, RevisionOutcome
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -106,6 +107,7 @@ def test_successful_record_fact_invalidates_cache() -> None:
         graph = abg.get_graph()
         assert graph.number_of_edges() == 1
 
+
 def test_write_through_synced_repository_invalidates_without_manual_call() -> None:
     """A repository write made through GraphSyncedRepository must invalidate
     the graph automatically — no manual abg.invalidate() call required.
@@ -172,6 +174,7 @@ def test_write_through_synced_repository_failed_write_does_not_invalidate() -> N
 
         # Cache must still be the primed empty state, not invalidated.
         assert abg.get_graph().number_of_edges() == 0
+
 
 def test_successful_record_revision_invalidates_cache() -> None:
     """After a successful record_revision + invalidate(), the next get_graph() rebuilds."""
@@ -306,9 +309,7 @@ def test_failed_write_does_not_expose_uncommitted_state() -> None:
         assert graph.has_edge("route_A", "clear", key=str(existing.fact_id))
         # The successfully revised edge (from the first revision) is NOT visible
         # because the cache was primed before that revision and never invalidated.
-        assert not graph.has_edge(
-            "route_A", "blocked", key=str(outcome.successor.fact_id)
-        )
+        assert not graph.has_edge("route_A", "blocked", key=str(outcome.successor.fact_id))
 
 
 def test_restart_produces_same_logical_projection() -> None:
@@ -322,9 +323,7 @@ def test_restart_produces_same_logical_projection() -> None:
     """
     with MemoryRepository() as repo:
         repo.record_fact(_assertion(subject="route_A", obj="clear"))
-        repo.record_fact(
-            _assertion(subject="box_01", predicate="colour_is", obj="red")
-        )
+        repo.record_fact(_assertion(subject="box_01", predicate="colour_is", obj="red"))
 
         def _logical_triples(abg: ActiveBeliefGraph) -> set[tuple[str, str, str, str]]:
             graph = abg.get_graph()
@@ -362,3 +361,348 @@ def test_mutating_returned_graph_does_not_corrupt_later_reads() -> None:
         assert not second.has_edge("PHANTOM_SRC", "PHANTOM_DST", key="phantom")
         assert second.number_of_edges() == 1
         assert second.has_edge("route_A", "clear", key=str(fact.fact_id))
+
+
+def test_write_through_synced_repository_failed_fact_write_does_not_invalidate() -> None:
+    """A failed record_fact through GraphSyncedRepository must NOT invalidate the
+    graph cache — the error must raise before invalidate() is reached.
+    """
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+        synced = GraphSyncedRepository(repo, abg)
+
+        # Prime the cache with an existing fact
+        synced.record_fact(_assertion(subject="route_A", obj="clear"))
+        initial_graph = abg.get_graph()
+        assert initial_graph.number_of_edges() == 1
+
+        # Attempt to insert an invalid assertion directly into SQLite via a monkeypatched cursor
+        # or simulated constraint error. We simulate a DB-level failure by temporarily
+        # closing the connection or using an invalid confidence score (handled by SQLite CHECK).
+        # We can bypass Pydantic by modifying the internal dict or using connection execution.
+        class _FailOnInsert:
+            def __init__(self, real_conn):
+                self._real = real_conn
+
+            def execute(self, sql, params=()):
+                if "INSERT INTO facts" in sql:
+                    import sqlite3
+
+                    raise sqlite3.OperationalError("simulated fact insert failure")
+                return self._real.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        real_conn = repo._conn
+        repo._conn = _FailOnInsert(real_conn)  # type: ignore[assignment]
+
+        import sqlite3
+
+        with pytest.raises(sqlite3.OperationalError, match="simulated fact insert failure"):
+            synced.record_fact(_assertion(subject="route_B", obj="blocked"))
+
+        repo._conn = real_conn  # type: ignore[assignment]
+
+        # The cache was NOT invalidated; reading it returns the cached 1-edge graph
+        assert not abg._stale
+        assert abg.get_graph().number_of_edges() == 1
+
+
+def test_synced_repository_record_revision_returns_revision_outcome() -> None:
+    """record_revision through GraphSyncedRepository must return a RevisionOutcome instance."""
+    with MemoryRepository() as repo:
+        old = repo.record_fact(_assertion(obj="clear"))
+        synced = GraphSyncedRepository.create(repo)
+
+        outcome = synced.record_revision(
+            old_fact_id=old.fact_id,
+            replacement=_assertion(obj="blocked", source_agent="lidar"),
+            reason="lidar update",
+            policy_rule="lidar_wins",
+            revised_at=_REVISED,
+        )
+
+        assert isinstance(outcome, RevisionOutcome)
+        assert outcome.successor.object == "blocked"
+        assert outcome.audit_event.reason == "lidar update"
+        assert synced.get_graph().has_edge("route_A", "blocked", key=str(outcome.successor.fact_id))
+
+
+def test_direct_memory_repository_write_invalidates_synced_graph() -> None:
+    """When a GraphSyncedRepository is active, even direct writes through MemoryRepository
+    cannot leave a stale graph, because the write listener invalidates the cache on commit.
+    """
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+        _synced = GraphSyncedRepository(repo, abg)
+
+        # Prime cache with 0 edges
+        assert abg.get_graph().number_of_edges() == 0
+        assert not abg._stale
+
+        # Direct write via repo (bypassing _synced.record_fact)
+        fact1 = repo.record_fact(_assertion(subject="route_A", obj="clear"))
+
+        # The listener must have invalidated the cache
+        assert abg._stale
+        assert abg.get_graph().number_of_edges() == 1
+        assert abg.get_graph().has_edge("route_A", "clear", key=str(fact1.fact_id))
+
+        # Direct revision via repo (bypassing _synced.record_revision)
+        outcome = repo.record_revision(
+            old_fact_id=fact1.fact_id,
+            replacement=_assertion(obj="blocked", source_agent="lidar"),
+            reason="obstacle detected",
+            policy_rule="lidar_wins",
+            revised_at=_REVISED,
+        )
+
+        assert abg._stale
+        graph = abg.get_graph()
+        assert graph.has_edge("route_A", "blocked", key=str(outcome.successor.fact_id))
+        assert not graph.has_edge("route_A", "clear", key=str(fact1.fact_id))
+
+
+def test_synced_repository_facade_delegates_all_methods() -> None:
+    """GraphSyncedRepository acts as the unified application facade, exposing query_facts,
+    get_audit_chain, add_alias, resolve_entity, get_graph, and context manager support.
+    """
+    with MemoryRepository() as repo:
+        synced = GraphSyncedRepository.create(repo)
+
+        # Context manager
+        with synced as s:
+            f = s.record_fact(_assertion(subject="box_01", predicate="located_in", obj="room_A"))
+
+            # query_facts
+            facts = s.query_facts(FactQuery(subject="box_01"))
+            assert len(facts) == 1
+            assert facts[0].fact_id == f.fact_id
+
+            # get_audit_chain
+            trail = s.get_audit_chain(f.fact_id)
+            assert trail.root_fact_id == f.fact_id
+
+            # add_alias and resolve_entity
+            s.add_alias("blue box", "box_01")
+            resolution = s.resolve_entity("blue box")
+            assert resolution.status == "resolved"
+            assert resolution.canonical_entity_id == "box_01"
+
+            # get_graph shortcut
+            g = s.get_graph()
+            assert g.has_edge("box_01", "room_A", key=str(f.fact_id))
+
+
+def test_documented_consistency_check_identifies_superseded_cached_edge() -> None:
+    """Verify the documented consistency-check call against real SQLite.
+
+    1. Prime the graph with an active fact.
+    2. Supersede the fact directly in SQLite without invalidating the graph.
+    3. Query active_facts and superseded_facts from SQLite.
+    4. Call check_graph_consistency(graph, active_facts, superseded_facts).
+    5. Assert that the superseded edge is detected as stale_edge_keys.
+    6. Rebuild the graph and assert report.is_clean is True.
+    """
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+
+        # 1. Store initial fact and prime cache
+        old = repo.record_fact(_assertion(subject="route_A", obj="clear"))
+        cached_graph = abg.get_graph()
+        assert cached_graph.has_edge("route_A", "clear", key=str(old.fact_id))
+
+        # 2. Record revision directly in SQLite WITHOUT invalidating abg
+        # (temporarily detach listeners to simulate an unrefreshed/stale cache)
+        repo._write_listeners.clear()
+        outcome = repo.record_revision(
+            old_fact_id=old.fact_id,
+            replacement=_assertion(obj="blocked", source_agent="lidar"),
+            reason="obstacle detected",
+            policy_rule="lidar_wins",
+            revised_at=_REVISED,
+        )
+
+        # Graph cache is still stale and un-invalidated
+        stale_graph = abg._cache
+        assert stale_graph is not None
+        assert stale_graph.has_edge("route_A", "clear", key=str(old.fact_id))
+
+        # 3. Query authoritative active and superseded facts from SQLite as documented
+        active_facts = repo.query_facts(FactQuery(active_only=True))
+        all_facts = repo.query_facts(FactQuery(active_only=False))
+        superseded_facts = [f for f in all_facts if f.superseded_by is not None]
+
+        # 4. Run consistency check
+        report = check_graph_consistency(
+            graph=stale_graph,
+            active_facts=active_facts,
+            superseded_facts=superseded_facts,
+        )
+
+        # 5. Verify detection
+        assert not report.is_clean
+        assert str(old.fact_id) in report.stale_edge_keys
+        assert str(old.fact_id) not in report.extra_edge_keys
+        assert outcome.successor.fact_id in report.missing_fact_ids
+
+        # 6. Rebuild restores clean consistency
+        rebuilt = abg.rebuild()
+        fresh_report = check_graph_consistency(
+            graph=rebuilt,
+            active_facts=active_facts,
+            superseded_facts=superseded_facts,
+        )
+        assert fresh_report.is_clean
+
+
+def test_post_commit_listener_failure_does_not_rollback_and_runs_all_listeners() -> None:
+    """If an earlier write listener raises post-commit:
+    1. The exception does not trigger a transaction rollback on committed state.
+    2. All subsequent listeners (including graph invalidation) still run.
+    3. The revision is committed and durable in SQLite.
+    """
+    with MemoryRepository() as repo:
+        old = repo.record_fact(_assertion(subject="route_A", obj="clear"))
+        abg = ActiveBeliefGraph(repo)
+        # Prime the graph
+        assert abg.get_graph().has_edge("route_A", "clear", key=str(old.fact_id))
+        assert not abg._stale
+
+        earlier_listener_ran = False
+        later_listener_ran = False
+
+        def _failing_listener() -> None:
+            nonlocal earlier_listener_ran
+            earlier_listener_ran = True
+            raise RuntimeError("listener failure")
+
+        def _later_listener() -> None:
+            nonlocal later_listener_ran
+            later_listener_ran = True
+
+        repo.add_write_listener(_failing_listener)
+        repo.add_write_listener(abg.invalidate)
+        repo.add_write_listener(_later_listener)
+
+        # Calling record_revision should re-raise the listener failure
+        with pytest.raises(RuntimeError, match="listener failure"):
+            repo.record_revision(
+                old_fact_id=old.fact_id,
+                replacement=_assertion(obj="blocked", source_agent="lidar"),
+                reason="lidar update",
+                policy_rule="lidar_wins",
+                revised_at=_REVISED,
+            )
+
+        # Both listeners must have been executed
+        assert earlier_listener_ran
+        assert later_listener_ran
+
+        # Graph invalidation must have run (cache is marked stale)
+        assert abg._stale
+
+        # The revision must be durable in SQLite (transaction was committed, not rolled back)
+        updated_old = repo._conn.execute(
+            "SELECT superseded_by FROM facts WHERE fact_id = ?", (str(old.fact_id),)
+        ).fetchone()
+        assert updated_old["superseded_by"] is not None
+
+        active_facts = repo.query_facts(FactQuery(active_only=True))
+        assert len(active_facts) == 1
+        assert active_facts[0].object == "blocked"
+
+        # The graph can rebuild cleanly from SQLite
+        graph = abg.get_graph()
+        assert graph.has_edge("route_A", "blocked", key=str(active_facts[0].fact_id))
+        assert not graph.has_edge("route_A", "clear", key=str(old.fact_id))
+
+
+def test_post_commit_listener_failure_in_record_fact_runs_all_listeners() -> None:
+    """If an earlier write listener raises on record_fact, subsequent listeners still run
+    and the fact remains committed in SQLite.
+    """
+    with MemoryRepository() as repo:
+        listener_ran = False
+
+        def _fail() -> None:
+            raise ValueError("listener failed")
+
+        def _second() -> None:
+            nonlocal listener_ran
+            listener_ran = True
+
+        repo.add_write_listener(_fail)
+        repo.add_write_listener(_second)
+
+        with pytest.raises(ValueError, match="listener failed"):
+            repo.record_fact(_assertion(subject="box_99", obj="room_99"))
+
+        assert listener_ran
+        facts = repo.query_facts(FactQuery(subject="box_99"))
+        assert len(facts) == 1
+
+
+def test_synced_repository_close_unregisters_write_listener() -> None:
+    """GraphSyncedRepository.close() must unregister its invalidator from MemoryRepository
+    so a disposed wrapper's graph is not retained or invalidated by future writes.
+    """
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+        synced = GraphSyncedRepository(repo, abg)
+
+        assert synced._invalidator in repo._write_listeners
+
+        # Close the synced repository wrapper
+        synced.close()
+
+        assert synced._invalidator not in repo._write_listeners
+
+        # Subsequent writes on repo should not invalidate abg
+        abg._stale = False
+        repo.record_fact(_assertion(subject="box_01", obj="room_01"))
+        assert not abg._stale
+
+
+def test_synced_repository_context_manager_unregisters_on_exit() -> None:
+    """Exiting a GraphSyncedRepository context manager must unregister its write listener."""
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+        with GraphSyncedRepository(repo, abg) as synced:
+            assert synced._invalidator in repo._write_listeners
+
+        assert synced._invalidator not in repo._write_listeners
+
+
+def test_synced_repository_single_invalidation_path() -> None:
+    """When wrapping a repository that supports write listeners, GraphSyncedRepository
+    invalidates through the post-commit listener exactly once per write (no redundant calls).
+    """
+    with MemoryRepository() as repo:
+        abg = ActiveBeliefGraph(repo)
+
+        invalidation_count = 0
+        original_invalidate = abg.invalidate
+
+        def counting_invalidate() -> None:
+            nonlocal invalidation_count
+            invalidation_count += 1
+            original_invalidate()
+
+        abg.invalidate = counting_invalidate  # type: ignore[method-assign]
+        synced = GraphSyncedRepository(repo, abg)
+
+        # 1. Fact write
+        fact = synced.record_fact(_assertion())
+        assert invalidation_count == 1
+
+        # 2. Revision write
+        synced.record_revision(
+            old_fact_id=fact.fact_id,
+            replacement=_assertion(obj="blocked", source_agent="lidar"),
+            reason="lidar update",
+            policy_rule="lidar_wins",
+            revised_at=_REVISED,
+        )
+        assert invalidation_count == 2

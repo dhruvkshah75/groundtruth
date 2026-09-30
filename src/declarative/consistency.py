@@ -104,9 +104,7 @@ class GraphConsistencyReport:
     extra_edge_keys: list[str] = field(default_factory=list)
     stale_edge_keys: list[str] = field(default_factory=list)
     duplicate_edge_keys: list[str] = field(default_factory=list)
-    metadata_mismatches: list[tuple[str, str, object, object]] = field(
-        default_factory=list
-    )
+    metadata_mismatches: list[tuple[str, str, object, object]] = field(default_factory=list)
 
     @property
     def is_clean(self) -> bool:
@@ -224,17 +222,13 @@ def check_graph_consistency(
             # fact_id attribute validation: missing or wrong fact_id on the edge.
             fact_id_attr = attrs.get("fact_id")
             if fact_id_attr != stored.fact_id:
-                report.metadata_mismatches.append(
-                    (key, "fact_id", fact_id_attr, stored.fact_id)
-                )
+                report.metadata_mismatches.append((key, "fact_id", fact_id_attr, stored.fact_id))
 
             # All other required attributes.
             for edge_attr, fact_attr in _METADATA_FIELDS:
                 graph_val = attrs.get(edge_attr)
                 stored_val = getattr(stored, fact_attr, None)
                 if graph_val != stored_val:
-                    report.metadata_mismatches.append(
-                        (key, edge_attr, graph_val, stored_val)
-                    )
+                    report.metadata_mismatches.append((key, edge_attr, graph_val, stored_val))
 
     return report
