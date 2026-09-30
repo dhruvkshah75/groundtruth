@@ -211,3 +211,21 @@ def test_unavailable_observations(executor):
     assert len(result.observation_results) == 1
     assert result.observation_results[0].result.capability == "lidar_scan"
     assert getattr(result.observation_results[0].result, "reason", None) == "sensor_unavailable"
+
+
+def test_execute_unverifiable_plan(executor):
+    plan = ExecutionPlan(
+        intent=IntentRequest(intent="current_route_status", user_question="Is it clear?"),
+        resolved_entity_ids=["route_A"],
+        current_state_verifiable=False,
+        blocking_reasons=["LiDAR is unavailable, so current route status is unverifiable."],
+        plan_reason="Cannot verify.",
+    )
+
+    result = executor.execute(plan)
+
+    assert result.plan_verifiable is False
+    assert result.blocking_reasons == [
+        "LiDAR is unavailable, so current route status is unverifiable."
+    ]
+    assert result.plan_reason == "Cannot verify."
