@@ -275,3 +275,65 @@ def test_revision_rollback_on_audit_insert_failure() -> None:
             (old_fact_id_str,),
         ).fetchone()[0]
         assert count == 0, "no partial successor row should remain after rollback"
+
+
+def test_revision_rollback_on_predecessor_link_failure() -> None:
+    """If the predecessor UPDATE fails (before audit insert), no successor row must
+    remain, the predecessor must still be active, and no audit event must exist.
+
+    This exercises the rollback path for Step 2 (linking predecessor to successor).
+    """
+    import sqlite3 as _sqlite3
+
+    class _FailOnPredecessorUpdate:
+        """Proxy that raises on UPDATE facts SET superseded_by, delegates all else."""
+
+        def __init__(self, real_conn: _sqlite3.Connection) -> None:
+            self._real = real_conn
+            self.triggered = False
+
+        def execute(self, sql: str, params: Any = ()) -> Any:
+            if "UPDATE facts SET superseded_by" in sql:
+                self.triggered = True
+                raise _sqlite3.OperationalError("simulated predecessor link failure")
+            return self._real.execute(sql, params)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+    with MemoryRepository() as repo:
+        old = repo.record_fact(_assertion(obj="map_clear"))
+        old_fact_id_str = str(old.fact_id)
+
+        real_conn = repo._conn
+        proxy = _FailOnPredecessorUpdate(real_conn)
+        repo._conn = proxy  # type: ignore[assignment]
+
+        with pytest.raises(_sqlite3.OperationalError, match="simulated predecessor link failure"):
+            repo.record_revision(
+                old_fact_id=old.fact_id,
+                replacement=_lidar_assertion(),
+                reason="LiDAR says blocked",
+                policy_rule="lidar_overrides_map",
+                revised_at=_REVISED_AT,
+            )
+
+        assert proxy.triggered, "proxy must have intercepted the UPDATE"
+
+        repo._conn = real_conn  # type: ignore[assignment]
+
+        # Predecessor must still be active
+        row = real_conn.execute(
+            "SELECT superseded_by FROM facts WHERE fact_id = ?", (old_fact_id_str,)
+        ).fetchone()
+        assert row is not None
+        assert row["superseded_by"] is None, "predecessor must remain active after rollback"
+
+        # No successor row should exist (was rolled back)
+        all_facts = real_conn.execute("SELECT fact_id FROM facts").fetchall()
+        assert len(all_facts) == 1, "only the original fact should remain after rollback"
+        assert str(all_facts[0]["fact_id"]) == old_fact_id_str
+
+        # No audit event should exist
+        audit_count = real_conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+        assert audit_count == 0, "no audit event must remain after rollback"

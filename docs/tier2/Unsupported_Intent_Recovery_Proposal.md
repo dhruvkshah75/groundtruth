@@ -2,10 +2,18 @@
 
 ## Status
 
-**Discussion draft.** This is a proposed later enhancement, not part of
-GT-04's required implementation. GT-04 must retain its current fail-closed
-behaviour: a validated `unsupported` intent creates no memory, sensor, or
-action operation.
+**Implemented in GT-04 and merged in [PR #7](https://github.com/dhruvkshah75/groundtruth/pull/7).**
+This document records the motivation and design. The current behavior is
+implemented in `src/procedural/intent_coverage_reviewer.py` and
+`src/procedural/intent_planner.py`; see
+[GT-04 Implementation Explanation](../GT04_Implementation_Explanation.md)
+for the current flow and exact outcomes.
+
+The implementation remains fail-closed: a validated `unsupported` intent
+does not directly create a plan or execute a tool. It may trigger one bounded
+review and, only for a single candidate, one constrained provider
+reconsideration. If the request remains unsupported or ambiguous, planning
+stops with an uncertain no-plan result.
 
 ## The limitation
 

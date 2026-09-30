@@ -2,10 +2,12 @@
 
 ## Start here
 
-1. [Architecture Decisions](Architecture_Decisions.md) - the current implementation decisions for Tier 1 and Tier 2.
-2. [Tier 1 Implementation Guide](tier1/Tier1_Implementation_Guide.md) - SQLite facts, revisions, aliases, and NetworkX cache.
-3. [Tier 2 Implementation Guide](tier2/Tier2_Implementation_Guide.md) - LLM intent classification, deterministic planning, policy, and guardrails.
-4. [Evaluation and Differentiation Plan](Evaluation_and_Differentiation.md) - how the project proves reliability and stands out in grading.
+1. [Implemented System Overview](Implemented_System_Overview.md) - a plain-language map of what is merged, how the current components fit, examples, and what remains unconnected.
+2. [Architecture Decisions](Architecture_Decisions.md) - the current implementation decisions for Tier 1 and Tier 2.
+3. [Tier 1 Implementation Guide](tier1/Tier1_Implementation_Guide.md) - SQLite facts, revisions, aliases, and NetworkX cache.
+4. [Tier 2 Implementation Guide](tier2/Tier2_Implementation_Guide.md) - intent classification, deterministic planning, policy, and guardrails.
+5. [Tier 3 Implementation Guide](tier3/Tier3_Implementation_Guide.md) - the mock world, sensor behavior, spatial context, and deterministic test helpers.
+6. [Evaluation and Differentiation Plan](Evaluation_and_Differentiation.md) - how the project proves reliability and stands out in grading.
 
 ## Supporting context
 
@@ -15,4 +17,3 @@
 - [Local Development Setup](Local_Development_Setup.md) covers the `uv` workflow.
 
 The documents in “Start here” take precedence if an older supporting document differs from the current implementation approach.
-

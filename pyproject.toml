@@ -18,11 +18,11 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+#export [$PYTEST_DISABLE_PLUGIN_AUTOLOAD=1] if it shows ROS plugin error
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-exclude = ["src/declaritive"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

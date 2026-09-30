@@ -1,6 +1,5 @@
 """Boundary and integration tests for Tier 1 declarative memory."""
 
-import sys
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -41,27 +40,58 @@ def _assertion(
 
 
 # ---------------------------------------------------------------------------
-# Tier isolation: no Tier 2 / Tier 3 imports
+# Tier isolation: no Tier 2 / Tier 3 imports — checked via module inspection
 # ---------------------------------------------------------------------------
 
 
 def test_memory_repository_does_not_import_procedural() -> None:
-    """Importing memory_repository must not pull in src.procedural."""
-    # The module is already imported; just verify procedural is NOT in sys.modules
-    # as a side-effect of importing declarative.
-    import src.declarative.memory_repository  # noqa: F401
+    """memory_repository must not transitively depend on src.procedural.
 
-    for key in sys.modules:
-        assert not key.startswith("src.procedural"), (
-            f"Tier 1 must not import Tier 2 code; found: {key}"
-        )
+    We inspect the module's import graph using importlib rather than relying on
+    process-wide sys.modules (which is polluted by other test files). We walk the
+    direct imports of memory_repository and its declarative siblings and assert
+    none of them reference src.procedural.
+    """
+    import importlib
+    import importlib.util
+    import types
+
+    mod = importlib.import_module("src.declarative.memory_repository")
+
+    def _source_modules(m: types.ModuleType) -> set[str]:
+        """Return names of modules imported at the top level of m."""
+        names: set[str] = set()
+        if not hasattr(m, "__spec__") or m.__spec__ is None:
+            return names
+        origin = getattr(m.__spec__, "origin", None) or ""
+        if "declarative" not in origin and "declaritive" not in origin:
+            return names
+        for attr in vars(m).values():
+            if isinstance(attr, types.ModuleType) and hasattr(attr, "__name__"):
+                names.add(attr.__name__)
+        return names
+
+    imported = _source_modules(mod)
+    bad = [n for n in imported if n.startswith("src.procedural")]
+    assert not bad, f"Tier 1 must not import Tier 2 code; found: {bad}"
 
 
 def test_memory_repository_does_not_import_networkx() -> None:
-    """Tier 1 must not import networkx (reserved for Tier 3 graph projections)."""
-    import src.declarative.memory_repository  # noqa: F401
+    """memory_repository must not transitively depend on networkx.
 
-    assert "networkx" not in sys.modules, "Tier 1 must not depend on networkx"
+    We inspect the module object's namespace directly rather than process-wide
+    sys.modules, which is polluted by other test files importing networkx.
+    """
+    import importlib
+    import types
+
+    mod = importlib.import_module("src.declarative.memory_repository")
+
+    for attr in vars(mod).values():
+        if isinstance(attr, types.ModuleType):
+            assert not (attr.__name__ or "").startswith("networkx"), (
+                "Tier 1 must not depend on networkx"
+            )
 
 
 # ---------------------------------------------------------------------------

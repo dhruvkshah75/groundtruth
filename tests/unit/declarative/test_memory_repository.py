@@ -228,3 +228,71 @@ def test_query_facts_returns_stored_fact_instances() -> None:
         results = repo.query_facts(FactQuery(active_only=False))
         for item in results:
             assert isinstance(item, StoredFact)
+
+
+# ---------------------------------------------------------------------------
+# extra_context filter
+# ---------------------------------------------------------------------------
+
+
+def test_query_facts_extra_context_filter_matches() -> None:
+    """extra_context keys in the query filter must match stored facts exactly."""
+    ctx_match = SpatialContext(extra_context={"lighting": "bright", "floor": 2})
+    ctx_no_match = SpatialContext(extra_context={"lighting": "dim", "floor": 2})
+    with MemoryRepository() as repo:
+        repo.record_fact(_assertion(subject="A", context=ctx_match))
+        repo.record_fact(_assertion(subject="B", context=ctx_no_match))
+        results = repo.query_facts(
+            FactQuery(
+                active_only=False,
+                context=SpatialContext(extra_context={"lighting": "bright"}),
+            )
+        )
+        assert len(results) == 1
+        assert results[0].subject == "A"
+
+
+def test_query_facts_extra_context_partial_key_matches() -> None:
+    """A query with a subset of extra_context keys matches any fact that has those keys."""
+    ctx = SpatialContext(extra_context={"zone": "alpha", "floor": 3})
+    with MemoryRepository() as repo:
+        repo.record_fact(_assertion(subject="A", context=ctx))
+        repo.record_fact(_assertion(subject="B", context=SpatialContext()))
+        # Query only on the 'zone' key
+        results = repo.query_facts(
+            FactQuery(
+                active_only=False,
+                context=SpatialContext(extra_context={"zone": "alpha"}),
+            )
+        )
+        assert len(results) == 1
+        assert results[0].subject == "A"
+
+
+# ---------------------------------------------------------------------------
+# audit chain corruption / cycle detection
+# ---------------------------------------------------------------------------
+
+
+def test_get_audit_chain_raises_on_cycle() -> None:
+    """get_audit_chain must raise ValueError when corrupt superseded_by links form a cycle."""
+    with MemoryRepository() as repo:
+        f1 = repo.record_fact(_assertion(subject="A"))
+        f2 = repo.record_fact(_assertion(subject="B"))
+
+        # Manually create a cycle: f1 -> f2 -> f1 by bypassing the public API
+        # (disable FK checks so we can write arbitrary links for this corruption test)
+        repo._conn.execute("PRAGMA foreign_keys = OFF")
+        repo._conn.execute(
+            "UPDATE facts SET superseded_by = ? WHERE fact_id = ?",
+            (str(f2.fact_id), str(f1.fact_id)),
+        )
+        repo._conn.execute(
+            "UPDATE facts SET superseded_by = ? WHERE fact_id = ?",
+            (str(f1.fact_id), str(f2.fact_id)),
+        )
+        repo._conn.commit()
+        repo._conn.execute("PRAGMA foreign_keys = ON")
+
+        with pytest.raises(ValueError, match="Corrupt audit chain detected"):
+            repo.get_audit_chain(f1.fact_id)
