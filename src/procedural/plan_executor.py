@@ -49,13 +49,17 @@ class PlanExecutor:
         # 1. Execute memory queries
         for idx, mem_op in enumerate(plan.memory_operations):
             facts = self._memory.query_facts(mem_op.query)
-            memory_results.append(MemoryExecutionResult(operation_index=idx, facts=facts))
+            memory_results.append(
+                MemoryExecutionResult(operation_index=idx, purpose=mem_op.purpose, facts=facts)
+            )
 
         # 2. Execute observations
         for idx, obs_op in enumerate(plan.observation_operations):
             result = self._environment.observe(obs_op.request)
             observation_results.append(
-                ObservationExecutionResult(operation_index=idx, result=result)
+                ObservationExecutionResult(
+                    operation_index=idx, purpose=obs_op.purpose, result=result
+                )
             )
 
         # 3. Execute audit lookups
@@ -67,10 +71,15 @@ class PlanExecutor:
             for fact in target_facts:
                 trails[fact.fact_id] = self._memory.get_audit_chain(fact.fact_id)
 
-            audit_results.append(AuditExecutionResult(operation_index=idx, trails=trails))
+            audit_results.append(
+                AuditExecutionResult(operation_index=idx, purpose=audit_op.purpose, trails=trails)
+            )
 
         # 4. ActionPlaceholder is ignored as per instructions.
         return PlanExecutionResult(
+            plan_verifiable=plan.current_state_verifiable,
+            blocking_reasons=plan.blocking_reasons,
+            plan_reason=plan.plan_reason,
             memory_results=memory_results,
             observation_results=observation_results,
             audit_results=audit_results,

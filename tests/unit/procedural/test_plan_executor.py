@@ -20,7 +20,7 @@ from src.procedural.execution_plan import (
 )
 from src.procedural.plan_executor import PlanExecutor
 from src.sensorimotor.mock_environment import MockEnvironment
-from src.sensorimotor.world_models import RobotState, WorldState
+from src.sensorimotor.world_models import Obstacle, RobotState, WorldState
 
 
 @pytest.fixture
@@ -49,7 +49,8 @@ def executor(memory, env):
     return PlanExecutor(memory_repository=memory, environment=env)
 
 
-def test_execute_route_status_plan(executor, memory):
+def test_execute_route_status_plan(executor, memory, env):
+    # Set up memory
     memory.record_fact(
         FactAssertion(
             subject="route_A",
@@ -60,6 +61,11 @@ def test_execute_route_status_plan(executor, memory):
             observed_at=datetime.now(UTC),
             context=SpatialContext(),
         )
+    )
+
+    # Set up environment with an obstacle in front of the robot
+    env.configure_obstacle_for_test(
+        Obstacle(obstacle_id="obs_1", x_cm=0.0, y_cm=10.0, location="room_1")
     )
 
     plan = ExecutionPlan(
@@ -78,7 +84,7 @@ def test_execute_route_status_plan(executor, memory):
         observation_operations=[
             ObservationOperation(
                 request=ObservationRequest(
-                    capability="lidar_scan", target="route_A", parameters={"direction": "front"}
+                    capability="lidar_scan", parameters={"direction": "front"}
                 ),
                 purpose="Test lidar scan",
             )
@@ -95,8 +101,17 @@ def test_execute_route_status_plan(executor, memory):
     assert result.memory_results[0].facts[0].subject == "route_A"
 
     assert len(result.observation_results) == 1
-    assert result.observation_results[0].operation_index == 0
-    assert result.observation_results[0].result.capability == "lidar_scan"
+    obs_res = result.observation_results[0]
+    assert obs_res.operation_index == 0
+    assert obs_res.purpose == "Test lidar scan"
+    assert obs_res.result.capability == "lidar_scan"
+    assert type(obs_res.result).__name__ == "SensorObservation"
+    assert obs_res.result.measurements["detected"] is True
+    assert obs_res.result.measurements["nearest_distance_cm"] == 10.0
+
+    # Also check the plan-level metadata
+    assert result.plan_verifiable is True
+    assert result.plan_reason == "Testing route status plan execution."
 
 
 def test_execute_historical_lookup_plan(executor, memory):

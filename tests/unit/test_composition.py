@@ -85,8 +85,16 @@ def test_composition_fallback_flow():
         planner = IntentPlanner(provider, reviewer)
         composition = CompositionService(planner, builder, memory, env)
 
+        from unittest.mock import MagicMock
+
+        env.observe = MagicMock()
+        memory.query_facts = MagicMock()
+
         result = composition.process_question("What is the history of route A?")
 
         assert isinstance(result, PlanningOutcome)
         assert result.fallback is not None
         assert result.fallback.category == "missing_entity"
+
+        env.observe.assert_not_called()
+        memory.query_facts.assert_not_called()
