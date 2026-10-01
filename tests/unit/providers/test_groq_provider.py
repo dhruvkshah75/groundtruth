@@ -95,7 +95,7 @@ def test_propose_intent_extracts_tool_call() -> None:
     assert client.calls[0]["tool_choice"] == "required"
 
 
-def test_propose_intent_falls_back_to_unsupported_on_missing_tools() -> None:
+def test_propose_intent_missing_tool_call_is_malformed() -> None:
     fake_completion = FakeChatCompletion(
         choices=[FakeChatChoice(message=FakeChatCompletionMessage(content="Hello there!"))]
     )
@@ -104,8 +104,87 @@ def test_propose_intent_falls_back_to_unsupported_on_missing_tools() -> None:
 
     result = provider.propose_intent("What is the meaning of life?")
 
+    assert result.get("error") == "missing_tool_call"
+    assert "Hello there!" in result.get("raw_output", "")
+
+
+def test_propose_intent_multiple_tool_calls_rejected_as_malformed() -> None:
+    tool_call_1 = FakeToolCall(
+        name="current_route_status",
+        arguments="{}",
+        call_id="call_1",
+    )
+    tool_call_2 = FakeToolCall(
+        name="current_robot_pose",
+        arguments="{}",
+        call_id="call_2",
+    )
+    fake_completion = FakeChatCompletion(
+        choices=[
+            FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[tool_call_1, tool_call_2]))
+        ]
+    )
+    client = FakeGroqClient([fake_completion])
+    provider = GroqIntentProvider(client=client)
+
+    result = provider.propose_intent("What is the route and where are you?")
+
+    assert result.get("error") == "multiple_tool_calls"
+    assert "Expected exactly 1" in result.get("raw_output", "")
+
+
+def test_propose_intent_invalid_json_arguments_rejected_as_malformed() -> None:
+    tool_call = FakeToolCall(
+        name="current_route_status",
+        arguments="{invalid json",
+        call_id="call_bad_json",
+    )
+    fake_completion = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[tool_call]))]
+    )
+    client = FakeGroqClient([fake_completion])
+    provider = GroqIntentProvider(client=client)
+
+    result = provider.propose_intent("Is the route clear?")
+
+    assert result.get("error") == "invalid_json_arguments"
+
+
+def test_propose_intent_unknown_function_rejected_as_malformed() -> None:
+    tool_call = FakeToolCall(
+        name="execute_arbitrary_code",
+        arguments="{}",
+        call_id="call_hack",
+    )
+    fake_completion = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[tool_call]))]
+    )
+    client = FakeGroqClient([fake_completion])
+    provider = GroqIntentProvider(client=client)
+
+    result = provider.propose_intent("Run code")
+
+    assert result.get("error") == "unknown_function_name"
+    assert result.get("raw_name") == "execute_arbitrary_code"
+
+
+def test_propose_intent_explicit_unsupported_tool() -> None:
+    tool_call = FakeToolCall(
+        name="unsupported",
+        arguments='{"reason": "Cannot answer questions about quantum mechanics"}',
+        call_id="call_unsupported",
+    )
+    fake_completion = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[tool_call]))]
+    )
+    client = FakeGroqClient([fake_completion])
+    provider = GroqIntentProvider(client=client)
+
+    result = provider.propose_intent("What is quantum entanglement?")
+
     assert result["intent"] == "unsupported"
     assert result["entity_mentions"] == []
+    assert result["user_question"] == "What is quantum entanglement?"
 
 
 def test_propose_intent_raises_unavailable_on_client_error() -> None:
@@ -116,6 +195,7 @@ def test_propose_intent_raises_unavailable_on_client_error() -> None:
         provider.propose_intent("Is route A clear?")
 
     assert "Groq API call failed" in str(exc_info.value)
+    assert provider.last_error == "Rate limit reached"
 
 
 def test_repair_intent_submits_error_feedback() -> None:
@@ -247,3 +327,80 @@ def test_create_provider_live_mode_without_key_returns_unconfigured() -> None:
     assert resolved.mode == "live"
     with pytest.raises(IntentProviderUnavailableError):
         provider.propose_intent("test")
+
+
+def test_planner_repairs_malformed_initial_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.contracts import CapabilityDescriptor
+    from src.procedural.capability_validator import CapabilityValidator
+    from src.procedural.intent_coverage_reviewer import IntentCoverageReviewer
+    from src.procedural.intent_planner import IntentPlanner
+
+    # Turn 1: Malformed (plain prose, no tool call)
+    turn1_resp = FakeChatCompletion(
+        choices=[
+            FakeChatChoice(message=FakeChatCompletionMessage(content="I am thinking about it..."))
+        ]
+    )
+    # Turn 2: Repaired tool call
+    tool_call = FakeToolCall(
+        name="current_route_status",
+        arguments='{"entity_mentions": ["front route"]}',
+        call_id="call_repaired",
+    )
+    turn2_resp = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[tool_call]))]
+    )
+
+    client = FakeGroqClient([turn1_resp, turn2_resp])
+    provider = GroqIntentProvider(client=client)
+
+    caps = [
+        CapabilityDescriptor(
+            name="lidar_scan",
+            kind="sensor",
+            description="LiDAR scanner",
+        )
+    ]
+    validator = CapabilityValidator(caps)
+    reviewer = IntentCoverageReviewer(validator)
+    planner = IntentPlanner(provider, reviewer)
+
+    outcome = planner.plan_intent("Is the front route clear?")
+
+    assert outcome.intent is not None
+    assert outcome.intent.intent == "current_route_status"
+    assert outcome.intent.entity_mentions == ["front route"]
+    assert len(client.calls) == 2
+
+
+def test_get_provider_config_default_is_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.providers.config import get_provider_config
+
+    monkeypatch.delenv("GROUNDTRUTH_PROVIDER_MODE", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    config = get_provider_config()
+    assert config.mode == "live"
+    assert config.has_valid_key is False
+
+
+def test_get_provider_config_explicit_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.providers.config import get_provider_config
+
+    monkeypatch.setenv("GROUNDTRUTH_PROVIDER_MODE", "offline")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    config = get_provider_config()
+    assert config.mode == "rule-based"
+
+
+def test_get_provider_config_typo_mode_defaults_to_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.providers.config import get_provider_config
+
+    # A typo like "ofline" must NOT silently fall back to rule-based
+    monkeypatch.setenv("GROUNDTRUTH_PROVIDER_MODE", "ofline")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    config = get_provider_config()
+    assert config.mode == "live"
+    assert config.has_valid_key is False

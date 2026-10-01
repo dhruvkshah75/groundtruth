@@ -200,13 +200,19 @@ def test_react_loop_scenario_a_grounded_conflict_resolution() -> None:
     assert len(response.revisions) == 1
     assert response.revisions[0].successor.object == "blocked"
 
-    # Verify ReAct trace is exposed
+    # Verify ReAct trace is exposed with detailed operations
     assert response.react_trace is not None
     assert response.react_trace.tool_name == "current_route_status"
     assert response.react_trace.tool_call_id == "call_scen_a_1"
     assert response.react_trace.explanation_source == "llm"
     assert response.react_trace.model == "llama-3.3-70b-versatile"
     assert any("observe: lidar_scan" in op for op in response.react_trace.approved_operations)
+    assert len(response.react_trace.operations) >= 2
+    assert all(op["ran"] is True for op in response.react_trace.operations)
+    assert any(
+        op["name"] == "lidar" and len(op["evidence_ids"]) > 0
+        for op in response.react_trace.operations
+    )
 
 
 def test_react_loop_scenario_b_three_perspectives() -> None:
@@ -345,3 +351,143 @@ def test_unconfigured_live_mode_service_health_and_rejection() -> None:
     session = service.get_session("6a35f795-c266-419a-9e17-29007f352936")
     with pytest.raises(IntentProviderUnavailableError, match="GROQ_API_KEY is not configured"):
         session.ask("Is the route clear?")
+
+
+def test_adversarial_completion_rejected_by_response_guard_in_scenario_a() -> None:
+    # Turn 1: Valid route proposal
+    turn1_call = FakeToolCall(
+        name="current_route_status",
+        arguments='{"entity_mentions": ["front route"]}',
+        call_id="call_adv_a",
+    )
+    turn1_resp = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[turn1_call]))]
+    )
+
+    # Turn 2: Adversarial completion claiming route is clear to proceed
+    # even though LiDAR evidence and revision state it is blocked at 12 cm
+    adversarial_text = (
+        "Good news! The front route is clear to proceed, no obstacles ahead, "
+        "and you can safely proceed forward."
+    )
+    turn2_resp = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=adversarial_text))]
+    )
+
+    client = FakeGroqClient([turn1_resp, turn2_resp])
+    agent = _build_test_agent(client)
+
+    agent.environment.replace_world(
+        WorldState(
+            robot=RobotState(
+                robot_id="robot_1",
+                x_cm=0.0,
+                y_cm=0.0,
+                direction="north",
+                location="room_101",
+                frame_of_reference="robot_base",
+            ),
+            obstacles={
+                "obs_01": Obstacle(
+                    obstacle_id="obs_01",
+                    x_cm=0.0,
+                    y_cm=12.0,
+                    location="room_101",
+                    active=True,
+                )
+            },
+        )
+    )
+
+    now = datetime.now(UTC)
+    agent.memory.record_fact(
+        FactAssertion(
+            subject="route_A",
+            predicate="status_is",
+            object="clear",
+            source_agent="static_map",
+            confidence_score=0.95,
+            observed_at=now,
+            context=SpatialContext(location="room_101", frame_of_reference="robot_base"),
+            evidence={"map_version": "v1.0"},
+        )
+    )
+
+    response = agent.ask("Is the front route clear?")
+
+    # Response guard MUST reject the adversarial text and use deterministic fallback
+    assert response.react_trace is not None
+    assert response.react_trace.explanation_source == "deterministic_fallback"
+    assert response.answer != adversarial_text
+    assert "obstruction" in response.answer.lower() or "blocked" in response.answer.lower()
+    assert "safe to proceed" not in response.answer.lower()
+
+
+def test_adversarial_completion_rejected_by_response_guard_in_scenario_b() -> None:
+    turn1_call = FakeToolCall(
+        name="current_object_perception",
+        arguments='{"entity_mentions": ["red box"]}',
+        call_id="call_adv_b",
+    )
+    turn1_resp = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[turn1_call]))]
+    )
+
+    # Turn 2: Adversarial completion claiming camera saw blue and history said red
+    adversarial_text = (
+        "The camera perceives blue under current lighting, while the database history says red."
+    )
+    turn2_resp = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=adversarial_text))]
+    )
+
+    client = FakeGroqClient([turn1_resp, turn2_resp])
+    agent = _build_test_agent(client)
+
+    agent.environment.replace_world(
+        WorldState(
+            robot=RobotState(
+                robot_id="robot_1",
+                x_cm=0.0,
+                y_cm=0.0,
+                direction="north",
+                location="room_101",
+                frame_of_reference="robot_base",
+            ),
+            objects={
+                "box_01": SimulatedObject(
+                    object_id="box_01",
+                    x_cm=10.0,
+                    y_cm=10.0,
+                    location="room_101",
+                    intrinsic_color="red",
+                )
+            },
+            light=AmbientLight(intensity=0.8, color_cast="yellow"),
+        )
+    )
+
+    now = datetime.now(UTC)
+    agent.memory.record_fact(
+        FactAssertion(
+            subject="box_01",
+            predicate="painted_color_is",
+            object="blue",
+            source_agent="bot_02",
+            confidence_score=1.0,
+            observed_at=now,
+            context=SpatialContext(location="room_101"),
+            evidence={"ticket": "MAINT-4091"},
+        )
+    )
+
+    scen_b_q = (
+        "What color does the user think the object is, what color do you register it as, "
+        "and what does your data history say its true state is?"
+    )
+    response = agent.ask(scen_b_q)
+
+    # Guard rejects misattributed perspectives
+    assert response.react_trace is not None
+    assert response.react_trace.explanation_source == "deterministic_fallback"
+    assert response.answer != adversarial_text

@@ -47,6 +47,16 @@ export type Revision = {
   audit_event: AuditEvent;
 };
 
+export type OperationTrace = {
+  name: string;
+  purpose?: string;
+  ran: boolean;
+  status: string;
+  evidence_ids: string[];
+  returned_values: Record<string, unknown> | Array<unknown>;
+  summary: string;
+};
+
 export type ReActTrace = {
   tool_name: string;
   tool_call_id: string;
@@ -55,6 +65,7 @@ export type ReActTrace = {
   execution_summary?: Record<string, unknown> | null;
   explanation_source: "llm" | "deterministic_fallback" | "rule_based";
   model?: string | null;
+  operations?: OperationTrace[];
 };
 
 export type AgentResponse = {

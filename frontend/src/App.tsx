@@ -459,9 +459,29 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
                   </div>
                 </div>
                 <div className="react-step-row">
-                  <span className="step-label">3. Grounded Results</span>
+                  <span className="step-label">3. Executed Values &amp; Evidence</span>
                   <div className="step-content">
-                    {response.revisions.length > 0 ? (
+                    {trace.operations && trace.operations.length > 0 ? (
+                      <div className="trace-ops-detail">
+                        {trace.operations.map((op, i) => (
+                          <div key={i} className="trace-op-item">
+                            <div className="trace-op-header">
+                              <span className={`op-status-badge status-${op.status}`}>
+                                {op.ran ? <Check size={10} /> : null} {op.name} ({op.status})
+                              </span>
+                              {op.evidence_ids.length > 0 && (
+                                <span className="trace-op-ids">
+                                  IDs: {op.evidence_ids.map((id) => (
+                                    <code key={id} className="id-tag">{shortId(id)}</code>
+                                  ))}
+                                </span>
+                              )}
+                            </div>
+                            <div className="trace-op-summary">{op.summary}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : response.revisions.length > 0 ? (
                       <span className="highlight-tag">{response.revisions.length} belief revision recorded</span>
                     ) : response.sensor_telemetry.length > 0 ? (
                       <span className="highlight-tag">{response.sensor_telemetry.length} live sensor reading(s)</span>
@@ -565,6 +585,32 @@ function Inspector({
                   <div><strong>Arguments:</strong> <code>{JSON.stringify(latest.react_trace.arguments)}</code></div>
                   <div><strong>Approved Operations:</strong> {latest.react_trace.approved_operations.join(", ") || "None"}</div>
                   <div><strong>Source:</strong> {latest.react_trace.explanation_source} {latest.react_trace.model ? `(${latest.react_trace.model})` : ""}</div>
+                  {latest.react_trace.operations && latest.react_trace.operations.length > 0 && (
+                    <div style={{ marginTop: "8px" }}>
+                      <strong style={{ fontSize: "10px", display: "block", marginBottom: "4px" }}>
+                        Executed Operations &amp; Evidence:
+                      </strong>
+                      <div className="trace-ops-detail">
+                        {latest.react_trace.operations.map((op, idx) => (
+                          <div key={idx} className="trace-op-item">
+                            <div className="trace-op-header">
+                              <span className={`op-status-badge status-${op.status}`}>
+                                {op.ran ? <Check size={10} /> : null} {op.name}
+                              </span>
+                              {op.evidence_ids.length > 0 && (
+                                <span className="trace-op-ids">
+                                  {op.evidence_ids.map((id) => (
+                                    <code key={id} className="id-tag">{shortId(id)}</code>
+                                  ))}
+                                </span>
+                              )}
+                            </div>
+                            <div className="trace-op-summary">{op.summary}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

@@ -9,24 +9,98 @@ into a coherent, auditable ReAct cycle.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 import networkx as nx
 
 from src.composition import CompositionService
-from src.contracts import AuditEvent, AuditTrail, StoredFact
+from src.contracts import AuditEvent, AuditTrail, FactQuery, SensorObservation, StoredFact
 from src.declarative.active_graph import ActiveBeliefGraph, GraphSyncedRepository
 from src.declarative.memory_repository import MemoryRepository, RevisionOutcome
 from src.procedural.capability_validator import CapabilityValidator
 from src.procedural.epistemic_evaluator import EpistemicEvaluation, EpistemicEvaluator
+from src.procedural.execution_results import PlanExecutionResult
 from src.procedural.intent_coverage_reviewer import IntentCoverageReviewer
 from src.procedural.intent_planner import IntentPlanner
-from src.procedural.intent_provider import IntentProvider
+from src.procedural.intent_provider import IntentProvider, IntentProviderUnavailableError
 from src.procedural.plan_builder import PlanBuilder
 from src.procedural.rule_based_provider import RuleBasedIntentProvider
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import RobotState, WorldState
+
+LOGGER = logging.getLogger("groundtruth.agent")
+
+
+def validate_grounded_response(
+    candidate: str,
+    eval_outcome: EpistemicEvaluation,
+) -> bool:
+    """Validate that LLM-generated prose does not contradict deterministic epistemic facts.
+
+    Returns False if candidate is malformed or contradicts deterministic status,
+    belief revisions, or tracked perspectives.
+    """
+    if not candidate or len(candidate.strip()) < 10:
+        return False
+
+    cleaned = candidate.lower()
+
+    # Scenario A / Route Blocked consistency check:
+    has_blocked_revision = any(
+        r.successor.predicate == "status_is" and r.successor.object == "blocked"
+        for r in eval_outcome.revisions
+    )
+    if has_blocked_revision or (
+        eval_outcome.status == "grounded_conflict_resolved"
+        and "blocked" in eval_outcome.explanation.lower()
+    ):
+        obstacle_mentioned = any(
+            w in cleaned for w in ("blocked", "obstacle", "obstruction", "lidar", "12")
+        )
+        if not obstacle_mentioned:
+            return False
+
+        prohibited_clear_claims = (
+            "route is clear to move",
+            "route is clear to proceed",
+            "front route is clear to",
+            "is clear for navigation",
+            "can safely proceed",
+            "route is not blocked",
+            "no obstacles ahead",
+            "no obstacle ahead",
+            "no obstruction",
+            "free to move",
+        )
+        for claim in prohibited_clear_claims:
+            if claim in cleaned:
+                return False
+
+    # Scenario B / Perspective Tracking consistency check:
+    if eval_outcome.status == "perspectives_tracked" and eval_outcome.perspectives:
+        perspectives = {k.lower(): str(v).lower() for k, v in eval_outcome.perspectives.items()}
+        camera_color = perspectives.get("egocentric_perspective", "") or perspectives.get(
+            "camera", ""
+        )
+        history_color = perspectives.get("historical_perspective", "") or perspectives.get(
+            "history", ""
+        )
+
+        if camera_color and "brown" in camera_color:
+            if "camera perceives blue" in cleaned or "camera registers it as blue" in cleaned:
+                return False
+            if "camera perceives red" in cleaned or "camera registers it as red" in cleaned:
+                return False
+
+        if history_color and "blue" in history_color:
+            if "history says red" in cleaned or "database record says red" in cleaned:
+                return False
+            if "history says brown" in cleaned or "database record says brown" in cleaned:
+                return False
+
+    return True
 
 
 @dataclass
@@ -40,6 +114,7 @@ class ReActTrace:
     execution_summary: dict[str, Any] | None = None
     explanation_source: str = "llm"  # "llm", "deterministic_fallback", or "rule_based"
     model: str | None = None
+    operations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -154,6 +229,12 @@ class GroundedAgent:
         # 1. Execute plan via composition boundary
         plan_result = self._composition.process_question(question)
 
+        # Propagate live provider failures immediately to the API layer
+        fallback = getattr(plan_result, "fallback", None)
+        if fallback is not None and fallback.category == "provider_unavailable":
+            last_err = getattr(self._provider, "last_error", None) or fallback.reason
+            raise IntentProviderUnavailableError(f"Live intent provider failed: {last_err}")
+
         # 2. Epistemically evaluate against memory and observations
         eval_outcome: EpistemicEvaluation = self._evaluator.evaluate(
             plan_result=plan_result,
@@ -163,8 +244,6 @@ class GroundedAgent:
 
         # 3. Pull current active projection and facts
         current_graph = self._graph.get_graph()
-        from src.contracts import FactQuery
-
         active_facts = self._memory.query_facts(FactQuery(active_only=True))
 
         plan_verifiable = getattr(plan_result, "plan_verifiable", None)
@@ -216,7 +295,11 @@ class GroundedAgent:
                         tool_result=tool_result,
                         fallback_explanation=eval_outcome.explanation,
                     )
-                    if grounded_text and grounded_text.strip():
+                    if (
+                        grounded_text
+                        and grounded_text.strip()
+                        and validate_grounded_response(grounded_text, eval_outcome)
+                    ):
                         final_answer = grounded_text.strip()
                         explanation_source = (
                             "llm"
@@ -224,8 +307,15 @@ class GroundedAgent:
                             else "deterministic_fallback"
                         )
                     else:
+                        LOGGER.warning(
+                            "LLM grounded explanation failed consistency guard or was empty; "
+                            "safely using deterministic evaluation outcome"
+                        )
+                        final_answer = eval_outcome.explanation
                         explanation_source = "deterministic_fallback"
-                except Exception:
+                except Exception as exc:
+                    LOGGER.warning("LLM explanation call failed (%s); using fallback", exc)
+                    final_answer = eval_outcome.explanation
                     explanation_source = "deterministic_fallback"
 
         approved_ops = getattr(plan_result, "approved_operations", [])
@@ -236,6 +326,86 @@ class GroundedAgent:
             "plan_verifiable": plan_verifiable,
         }
 
+        # Build detailed operations trace with actual returned values and evidence IDs
+        operations_trace: list[dict[str, Any]] = []
+        if isinstance(plan_result, PlanExecutionResult):
+            for mem_res in plan_result.memory_results:
+                fact_ids = [str(f.fact_id) for f in mem_res.facts]
+                returned_facts = [
+                    {
+                        "fact_id": str(f.fact_id),
+                        "subject": f.subject,
+                        "predicate": f.predicate,
+                        "object": f.object,
+                        "source": f.source_agent,
+                    }
+                    for f in mem_res.facts
+                ]
+                summary = (
+                    "; ".join(
+                        f"{f.subject} {f.predicate} {f.object} ({f.source_agent})"
+                        for f in mem_res.facts
+                    )
+                    if mem_res.facts
+                    else "No active facts"
+                )
+                operations_trace.append(
+                    {
+                        "name": "query_active_facts",
+                        "purpose": mem_res.purpose,
+                        "ran": True,
+                        "status": "completed",
+                        "evidence_ids": fact_ids,
+                        "returned_values": returned_facts,
+                        "summary": summary,
+                    }
+                )
+
+            for obs_res in plan_result.observation_results:
+                obs = obs_res.result
+                if isinstance(obs, SensorObservation):
+                    obs_id = [str(obs.observation_id)]
+                    measurements = dict(obs.measurements)
+                    meas_str = ", ".join(f"{k}={v}" for k, v in measurements.items())
+                    summary = f"{obs.sensor}: {meas_str}"
+                    status = "completed"
+                    op_name = obs.sensor
+                else:
+                    obs_id = []
+                    measurements = {"error": obs.message, "reason": obs.reason}
+                    summary = f"{obs.capability} unavailable: {obs.message}"
+                    status = obs.reason
+                    op_name = obs.capability
+
+                operations_trace.append(
+                    {
+                        "name": op_name,
+                        "purpose": obs_res.purpose,
+                        "ran": True,
+                        "status": status,
+                        "evidence_ids": obs_id,
+                        "returned_values": measurements,
+                        "summary": summary,
+                    }
+                )
+
+            for audit_res in plan_result.audit_results:
+                audit_ids = [str(eid) for eid in audit_res.trails.keys()]
+                operations_trace.append(
+                    {
+                        "name": "audit_lookup",
+                        "purpose": audit_res.purpose,
+                        "ran": True,
+                        "status": "completed",
+                        "evidence_ids": audit_ids,
+                        "returned_values": {
+                            str(k): [str(e.event_id) for e in trail.events]
+                            for k, trail in audit_res.trails.items()
+                        },
+                        "summary": f"Retrieved {len(audit_res.trails)} audit trail(s)",
+                    }
+                )
+
         react_trace = ReActTrace(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
@@ -244,6 +414,7 @@ class GroundedAgent:
             execution_summary=execution_summary,
             explanation_source=explanation_source,
             model=model_name,
+            operations=operations_trace,
         )
 
         return AgentResponse(

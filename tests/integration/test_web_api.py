@@ -6,9 +6,12 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 from uuid import uuid4
 
+from src.providers import ProviderConfig
 from src.web.server import create_server
+from src.web.service import AgentService
 
 
 def _request(base_url: str, path: str, session_id: str, payload: dict | None = None):
@@ -132,6 +135,45 @@ def test_api_returns_503_when_live_mode_unconfigured(tmp_path) -> None:
         assert status == 503
         assert error_resp["code"] == "provider_unavailable"
         assert "GROQ_API_KEY is not configured" in error_resp["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_api_returns_503_when_configured_live_provider_request_fails(tmp_path: Path) -> None:
+    from src.agent import GroundedAgent
+    from src.providers.groq_provider import GroqIntentProvider
+
+    (tmp_path / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
+
+    class FailingClient:
+        def create_chat_completion(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("Groq upstream service error 503")
+
+    failing_provider = GroqIntentProvider(client=FailingClient())
+    configured_svc = AgentService(config=ProviderConfig(mode="live", api_key="gsk_valid_key_123"))
+
+    session_id = str(uuid4())
+    session = configured_svc.get_session(session_id)
+    session.agent = GroundedAgent.create(provider=failing_provider)
+
+    server = create_server(port=0, web_root=tmp_path, service=configured_svc)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+
+    try:
+        status, error_resp = _request(
+            base_url,
+            "/api/ask",
+            session_id,
+            {"question": "Is the route clear?"},
+        )
+        assert status == 503
+        assert error_resp["code"] == "provider_unavailable"
+        assert "Live intent provider failed" in error_resp["error"]
+        assert "Groq upstream service error 503" in error_resp["error"]
     finally:
         server.shutdown()
         server.server_close()

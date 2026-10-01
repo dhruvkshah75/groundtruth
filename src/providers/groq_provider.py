@@ -74,6 +74,8 @@ class GroqIntentProvider:
     ) -> None:
         self._client = client
         self._model = model
+        self.provider_mode: str = "live"
+        self.last_error: str | None = None
         self.last_tool_call_id: str = "call_init"
         self.last_tool_name: str = ""
         self.last_tool_args: dict[str, Any] = {}
@@ -99,6 +101,7 @@ class GroqIntentProvider:
             )
         except Exception as exc:
             LOGGER.exception("Groq API error during propose_intent")
+            self.last_error = str(exc)
             raise IntentProviderUnavailableError(f"Groq API call failed: {exc}") from exc
 
         return self._extract_tool_call_payload(response, user_question)
@@ -126,6 +129,7 @@ class GroqIntentProvider:
             )
         except Exception as exc:
             LOGGER.exception("Groq API error during repair_intent")
+            self.last_error = str(exc)
             raise IntentProviderUnavailableError(f"Groq repair call failed: {exc}") from exc
 
         return self._extract_tool_call_payload(response, user_question)
@@ -158,6 +162,7 @@ class GroqIntentProvider:
             )
         except Exception as exc:
             LOGGER.exception("Groq API error during reconsider_unsupported")
+            self.last_error = str(exc)
             raise IntentProviderUnavailableError(
                 f"Groq reconsideration call failed: {exc}"
             ) from exc
@@ -216,18 +221,22 @@ class GroqIntentProvider:
         return fallback_explanation
 
     def _extract_tool_call_payload(self, response: Any, user_question: str) -> dict[str, Any]:
-        """Parse function-calling response into IntentRequest dictionary format."""
+        """Parse function-calling response into IntentRequest dictionary format.
+
+        Malformed responses (missing tool calls, multiple calls, invalid arguments,
+        or unknown function names) are returned as invalid payloads so the IntentPlanner
+        can execute its bounded single repair attempt. Only legitimate invocations of the
+        'unsupported' tool produce intent='unsupported'.
+        """
         try:
-            # Handle both SDK object response and mock dict response
             choices = getattr(response, "choices", None)
             if choices is None and isinstance(response, dict):
                 choices = response.get("choices", [])
 
             if not choices:
                 return {
-                    "intent": "unsupported",
-                    "entity_mentions": [],
-                    "user_question": user_question,
+                    "error": "no_choices",
+                    "raw_output": "No choices returned from model",
                 }
 
             message = getattr(choices[0], "message", None)
@@ -239,11 +248,18 @@ class GroqIntentProvider:
                 tool_calls = message.get("tool_calls", [])
 
             if not tool_calls:
-                # Model returned regular text instead of a tool call
+                content = getattr(message, "content", "")
+                if not content and isinstance(message, dict):
+                    content = message.get("content", "")
                 return {
-                    "intent": "unsupported",
-                    "entity_mentions": [],
-                    "user_question": user_question,
+                    "error": "missing_tool_call",
+                    "raw_output": str(content) if content else "No function call provided",
+                }
+
+            if len(tool_calls) != 1:
+                return {
+                    "error": "multiple_tool_calls",
+                    "raw_output": f"Expected exactly 1 function call, got {len(tool_calls)}",
                 }
 
             tool_call = tool_calls[0]
@@ -263,31 +279,52 @@ class GroqIntentProvider:
             if not call_id and isinstance(tool_call, dict):
                 call_id = tool_call.get("id", "call_1")
 
-            parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            entity_mentions = (
-                parsed_args.get("entity_mentions", []) if isinstance(parsed_args, dict) else []
-            )
+            try:
+                parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except (json.JSONDecodeError, TypeError) as exc:
+                return {
+                    "error": "invalid_json_arguments",
+                    "raw_output": f"Failed to parse function arguments JSON: {exc}",
+                }
+
+            if not isinstance(parsed_args, dict):
+                return {
+                    "error": "invalid_arguments_structure",
+                    "raw_output": "Function arguments must be a JSON object",
+                }
+
+            if fn_name not in ALLOWED_INTENTS:
+                return {
+                    "error": "unknown_function_name",
+                    "raw_name": fn_name,
+                    "raw_output": f"Unknown function '{fn_name}'",
+                }
+
+            entity_mentions = parsed_args.get("entity_mentions", [])
+            if not isinstance(entity_mentions, list):
+                entity_mentions = []
 
             # Save state for ReAct explanation round
             self.last_tool_call_id = str(call_id)
             self.last_tool_name = str(fn_name)
-            self.last_tool_args = parsed_args if isinstance(parsed_args, dict) else {}
+            self.last_tool_args = parsed_args
             self.last_trace = {
                 "tool_call_id": self.last_tool_call_id,
                 "tool_name": self.last_tool_name,
                 "arguments": self.last_tool_args,
             }
 
-            intent_val = fn_name if fn_name in ALLOWED_INTENTS else "unsupported"
-
             return {
-                "intent": intent_val,
+                "intent": fn_name,
                 "entity_mentions": [str(m) for m in entity_mentions],
                 "user_question": user_question,
             }
         except Exception as exc:
             LOGGER.warning("Failed to extract tool call payload: %s", exc)
-            return {"intent": "unsupported", "entity_mentions": [], "user_question": user_question}
+            return {
+                "error": "payload_extraction_failure",
+                "raw_output": str(exc),
+            }
 
     @staticmethod
     def _extract_message_content(response: Any) -> str:

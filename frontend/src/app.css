@@ -230,3 +230,12 @@ td small { display: block; margin-top: 3px; color: #6d6d6d; font-size: 8px; }
 .model-tag { color: #888; font-size: 9px; }
 .trace-kv { display: grid; gap: 5px; font-size: 10px; color: #bbb; }
 .trace-kv code { color: var(--accent); }
+.trace-ops-detail { display: grid; gap: 6px; }
+.trace-op-item { padding: 5px 8px; border: 1px solid rgb(255 255 255 / 6%); border-radius: 6px; background: rgb(0 0 0 / 20%); }
+.trace-op-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 3px; }
+.op-status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 600; }
+.op-status-badge.status-completed { background: rgb(97 216 202 / 12%); color: #61d8ca; }
+.op-status-badge.status-blocked, .op-status-badge.status-failed { background: rgb(241 155 148 / 12%); color: #f19b94; }
+.trace-op-ids { display: inline-flex; flex-wrap: wrap; gap: 4px; font-size: 8px; color: #888; }
+.id-tag { padding: 1px 4px; border-radius: 3px; background: #333; color: #edc185; font-size: 8px; font-family: var(--font-mono); }
+.trace-op-summary { font-size: 9px; color: #bbb; line-height: 1.4; word-break: break-word; }

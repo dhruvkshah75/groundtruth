@@ -314,6 +314,7 @@ def _response_to_dict(response: AgentResponse) -> dict[str, object]:
             "execution_summary": response.react_trace.execution_summary,
             "explanation_source": response.react_trace.explanation_source,
             "model": response.react_trace.model,
+            "operations": response.react_trace.operations,
         }
 
     return {

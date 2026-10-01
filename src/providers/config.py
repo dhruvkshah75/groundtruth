@@ -58,14 +58,13 @@ def get_provider_config() -> ProviderConfig:
     api_key = os.environ.get("GROQ_API_KEY", "").strip() or None
     model = os.environ.get("GROQ_MODEL", "").strip() or DEFAULT_GROQ_MODEL
 
-    # If explicitly requested offline/rule-based
-    if mode_env in ("offline", "rule-based", "rule_based", "rules"):
+    # Require explicit offline/rule-based mode selection.
+    # Without explicit offline selection, default to live mode (which reports unconfigured
+    # when GROQ_API_KEY is absent, rather than silently falling back to rule-based).
+    if mode_env in ("offline", "rule-based", "rule_based", "test"):
         mode: Literal["live", "rule-based"] = "rule-based"
-    elif mode_env in ("live", "groq", "llm"):
-        mode = "live"
     else:
-        # Default policy: live mode if key is present; otherwise rule-based
-        mode = "live" if api_key else "rule-based"
+        mode = "live"
 
     return ProviderConfig(
         mode=mode,
