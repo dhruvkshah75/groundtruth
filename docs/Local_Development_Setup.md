@@ -92,11 +92,43 @@ Never edit `uv.lock` by hand. Before adding a new package, check whether it can 
 
 ## LLM configuration
 
-The current `main` branch does **not** include a Groq or other live LLM adapter. The browser app uses `RuleBasedIntentProvider` and reports `deterministic local demo` from `/api/health`. Setting `GROQ_API_KEY` does not currently connect a model.
+GroundTruth supports both a live LLM ReAct loop (backed by Groq) and an explicit offline deterministic mode (using `RuleBasedIntentProvider`).
 
-The LLM function-calling/ReAct integration is tracked by [GT-07, issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17). Until that work is merged, you can run and test the scenarios offline as described above. Do not present the current provider as an LLM.
+### Environment variables and `.env`
 
-When GT-07 adds a real provider, this section must be updated with the provider's exact environment-variable and model configuration. Never put keys in source code, issues, pull requests, screenshots, or commits; tests should inject fake provider responses and run without secrets or network access.
+Create a `.env` file in the repository root (ignored by Git) or set environment variables in your shell:
+
+```bash
+# Required for live LLM ReAct mode
+GROQ_API_KEY="gsk_..."
+
+# Optional model selection (default: llama-3.3-70b-versatile)
+GROQ_MODEL="llama-3.3-70b-versatile"
+
+# Optional explicit mode override: "live" or "offline" (default: "live" if key present, else "offline")
+GROUNDTRUTH_PROVIDER_MODE="live"
+```
+
+### Provider modes and behaviors
+
+1. **Live LLM ReAct mode (`GROUNDTRUTH_PROVIDER_MODE=live` or `GROQ_API_KEY` present):**
+   - The agent invokes Groq using official function calling with strict schemas (`current_route_status`, `current_object_perception`, etc.).
+   - Python validates the proposed function call, executes approved Tier 1/Tier 3 operations, and evaluates epistemic ground truth.
+   - Tool execution results are returned to the model as verified tool output; the model synthesizes a concise grounded response.
+   - `/api/health` reports `status: "ok"`, `provider: "GroqIntentProvider"`, `llm_ready: true`.
+
+2. **Unconfigured live mode (live selected without `GROQ_API_KEY`):**
+   - `/api/health` reports `status: "degraded"` and `llm_ready: false` with a clear setup error message.
+   - The UI displays an unconfigured warning banner and does **not** silently fall back to rule-based answers or fabricate results.
+   - Submitting questions to `/api/ask` returns HTTP 503 (`provider_unavailable`).
+
+3. **Explicit offline mode (`GROUNDTRUTH_PROVIDER_MODE=offline`):**
+   - Uses `RuleBasedIntentProvider` for deterministic testing and offline local demonstrations.
+   - `/api/health` reports `provider: "RuleBasedIntentProvider"`, `provider_mode: "Offline (deterministic rules)"`.
+
+4. **Testing safety:**
+   - Automated tests (`uv run pytest`) run completely offline using injectable client doubles (`FakeGroqClient`).
+   - Never commit API keys or credentials to Git.
 
 ## Healthy-clone check
 

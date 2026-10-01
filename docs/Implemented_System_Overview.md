@@ -2,7 +2,7 @@
 
 This document describes the code that is currently on `main`. It is a plain-language guide for teammates who need to run, explain, or present the project without reading every source file.
 
-> **Current status:** the browser UI and the Python agent are connected, and the composed deterministic agent runs both demonstration scenarios against real Tier 1 and Tier 3 components. The current provider is `RuleBasedIntentProvider`. There is **no live LLM or LLM function-calling/ReAct loop in the app yet**. That is Project Milestone 2 and is tracked by [GT-07, issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17).
+> **Current status:** Project Milestone 2 (LLM ReAct Tool Integration) is complete. The Python agent connects to a real LLM function-calling loop via `GroqIntentProvider` (`llama-3.3-70b-versatile`), with explicit offline mode support via `RuleBasedIntentProvider`. The React frontend renders the full ReAct cycle trace, provider readiness, and supporting epistemic state.
 
 ## 1. What GroundTruth is for
 
@@ -18,15 +18,15 @@ For example, a static map may say a route is clear while a fresh LiDAR observati
 
 | Area | What currently runs |
 | --- | --- |
-| Browser UI | React + TypeScript + Vite in `frontend/`; chat, scenario presets, reset, and a system inspector. |
+| Browser UI | React + TypeScript + Vite in `frontend/`; chat, ReAct tool trace, scenario presets, reset, and system inspector. |
 | Local API | Python standard-library HTTP server in `src/web/server.py`. It serves the built UI and JSON endpoints. |
 | Agent | `GroundedAgent` in `src/agent.py` composes Tier 1 memory/graph, Tier 2 planning/execution/evaluation, and Tier 3 mock sensors. |
-| Intent provider | `RuleBasedIntentProvider`: local keyword/rule logic, not an LLM. |
+| Intent provider | `GroqIntentProvider` (live LLM function calling via Groq) or `RuleBasedIntentProvider` (offline/test mode). |
 | Memory | SQLite `MemoryRepository`; the web demo creates an in-memory database for each browser session. |
 | Active graph | NetworkX graph derived from active SQLite facts; it can be rebuilt from the repository. |
 | Environment | Deterministic `MockEnvironment` with LiDAR, camera, ambient-light, and pose capabilities. |
 | Evidence decision | Deterministic Python in `EpistemicEvaluator`; it selects supported conclusions and records justified revisions. |
-| LLM/ReAct | Not implemented in the current app. See [GT-07](https://github.com/dhruvkshah75/groundtruth/issues/17). |
+| LLM/ReAct | Implemented: bounded 2-turn cycle (model tool proposal -> Python execution -> tool output -> grounded answer). |
 
 The Streamlit dashboard has been removed. The React app is the UI to use and maintain.
 
@@ -108,26 +108,30 @@ For a fact such as `route_A status_is blocked`, `route_A` is the **entity**, `st
 
 ```text
 User types a question or loads a preset
-  -> React calls the local Python HTTP API
-  -> X-Session-ID selects that browser's AgentSession
-  -> AgentSession calls GroundedAgent.ask(question)
-  -> rule-based provider proposes an allowed intent
-  -> deterministic planner validates and builds the evidence plan
-  -> executor queries SQLite and/or calls MockEnvironment.observe(...)
-  -> EpistemicEvaluator applies the evidence policy and may revise memory
-  -> API returns answer, status, facts, graph, sensor telemetry, revisions, and environment
-  -> React displays those returned values in chat and the system inspector
+  -> React sends question to /api/ask with X-Session-ID
+  -> Turn 1 (Model Tool Proposal):
+     - LLM receives user question and allowed INTENT_TOOLS schema
+     - LLM emits structured tool call (e.g., current_route_status(entity_mentions=['front route']))
+  -> IntentPlanner validates intent (enforcing bounded 1-attempt repair and coverage review)
+  -> Deterministic PlanBuilder & PlanExecutor run approved operations (queries SQLite & samples MockEnvironment)
+  -> EpistemicEvaluator applies deterministic evidence policy & records justified belief revisions in SQLite
+  -> Turn 2 (Grounded Explanation Synthesis):
+     - Python returns real typed observation & memory results to the LLM as verified tool output
+     - LLM synthesizes concise grounded explanation adhering strictly to evidence
+     - Safe fallback: if LLM fails, deterministic grounded evaluation text is preserved
+  -> API returns answer, ReAct trace, status, perspectives, revisions, telemetry, active facts & graph
+  -> React renders chat turn with ReAct trace dropdown, provider badges, and live system inspector
 ```
 
-There is currently **no call to a model API anywhere in this path**. The answer comes from deterministic Python templates and evaluation rules. The frontend does not invent replacement facts when the API fails; it displays the API error.
+Python strictly owns facts, capability verification, plan construction, sensor execution, conflict resolution, and memory writes. The LLM acts as a bounded language interface for intent interpretation and grounded response synthesis.
 
 ### Frontend/API routes
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/health` | Reports that the API is running and names the provider actually wired in (`RuleBasedIntentProvider`, deterministic local demo). This does not mean an LLM is available. |
+| `GET /api/health` | Reports API status, active provider (`GroqIntentProvider` or `RuleBasedIntentProvider`), `llm_ready` readiness, model name, and configuration error details. |
 | `GET /api/state` | Returns the current session's chat history, graph, ledger, audit events, environment, and capabilities. |
-| `POST /api/ask` | Runs one user question through the current deterministic agent. |
+| `POST /api/ask` | Runs one user question through the ReAct cognitive agent loop. |
 | `POST /api/scenarios/scenario-a` | Resets and seeds Scenario A in the backend session. |
 | `POST /api/scenarios/scenario-b` | Resets and seeds Scenario B in the backend session. |
 | `POST /api/reset` | Clears that session's agent, in-memory ledger, and chat history. |
@@ -149,19 +153,19 @@ These are controlled backend fixtures. The LiDAR reading itself is computed from
 
 ### What happens when asked
 
-1. The current rule-based provider recognizes route/clear/forward wording and proposes `current_route_status` for the route.
+1. The configured intent provider (e.g. `GroqIntentProvider` via function calling in live mode, or `RuleBasedIntentProvider` in offline mode) proposes `current_route_status` for the route.
 2. The planner validates the intent. The resolver maps the route mention to `route_A`.
 3. The deterministic plan requests active route-status memory and a fresh `lidar_scan` for the front direction.
 4. SQLite returns the static-map claim. Tier 3 calculates an obstacle directly ahead and returns `blocked` at `12.0 cm`, along with an observation ID and spatial context.
 5. `EpistemicEvaluator` verifies that the stored claim and observation apply to the same location and frame. Since the static-map claim says clear and the fresh sensor says blocked, the evaluator applies `lidar_overrides_map`.
 6. Tier 1 records the LiDAR-backed blocked claim, marks the old clear claim superseded, and writes an audit event. The graph projection refreshes from active facts and shows the active route as blocked.
-7. The deterministic evaluator returns an answer explaining the conflict and revision. React displays the answer, status, audit/revision details, sensor telemetry, ledger, graph, and environment values.
+7. In live mode, these real tool execution results are returned to the LLM (Turn 2) to synthesize a grounded natural language response. In offline mode or if explanation synthesis fails, deterministic Python generates the outcome text. React displays the answer, status, ReAct execution trace, audit/revision details, sensor telemetry, ledger, graph, and environment values.
 
 The expected answer is equivalent to:
 
 > No, my static mapping says it is clear, but my live LiDAR readings indicate a physical obstruction at 12.0 cm right now. I have downgraded my map confidence and updated my belief graph.
 
-This wording is currently generated by deterministic Python, not by an LLM. The “updated my belief graph” claim is supported by the repository revision and derived graph state; it should not be reported if the write did not happen.
+In live mode, the LLM generates this explanation grounded in the verified tool results without altering deterministic facts, status, or belief revisions. If the LLM call fails or is unavailable, deterministic Python generates the safe fallback wording. The “updated my belief graph” claim is supported by the repository revision and derived graph state; it should not be reported if the write did not happen.
 
 ### What the 12 cm means
 
@@ -183,7 +187,7 @@ The red object and yellow lighting are backend environment configuration. The ca
 
 ### What happens when asked
 
-1. The rule-based provider recognizes the color/perspective wording and proposes `current_object_perception` for the box.
+1. The configured intent provider proposes `current_object_perception` for the box.
 2. The deterministic plan requests a camera observation for the resolved object.
 3. The camera returns the actual observed object ID (`box_01`), apparent color (`brown`), observation ID, and lighting in observation context.
 4. The evaluator extracts the expected color from the user's wording and queries historical color claims for the **object ID returned by the camera**. It does not guess the history subject from an unrelated text match.
@@ -191,17 +195,17 @@ The red object and yellow lighting are backend environment configuration. The ca
    - **User expectation:** red, because that is the target color stated in the question.
    - **Current egocentric camera view:** brown under yellow lighting.
    - **Historical/third-party record:** the latest stored color claim says blue, from `bot_02`.
-6. React shows the distinct perspective cards, sensor telemetry, provenance/ledger facts, and environment lighting/object state.
+6. In live mode, the LLM receives these typed perspective results and explains the distinction clearly. In offline mode, deterministic Python generates the perspective breakdown text. React shows the distinct perspective cards, sensor telemetry, provenance/ledger facts, ReAct trace, and environment lighting/object state.
 
 The historical blue statement means **“the database contains a sourced record saying blue”**. It does not prove the object is physically blue now. If there is no historical color fact, the agent reports that no record was found; it must not invent blue or `bot_02`.
 
-As with Scenario A, the current final wording and perspective extraction are deterministic Python; no LLM makes the response today.
+In live mode, the LLM synthesizes natural language over the verified perspectives; in offline mode, deterministic Python provides the response text.
 
 ## 8. What the UI shows
 
-- **Left panel:** API connection/provider details, Scenario A and B presets, reset, and the three layer names.
-- **Center:** conversation, returned answer/status, perspective cards, revision summary, and question composer.
-- **Right system inspector:** Tier 2 result/plan reason/verification, audit events and sensor telemetry; perspectives; Tier 1 active graph and full SQLite ledger; Tier 3 world version, pose, light, obstacles, objects, and advertised sensors.
+- **Left panel:** API connection/provider details, provider mode indicator, Scenario A and B presets, reset, and the three layer names.
+- **Center:** conversation, returned answer/status, collapsible ReAct tool trace, perspective cards, revision summary, and question composer.
+- **Right system inspector:** ReAct execution trace card, Tier 2 result/plan reason/verification, audit events and sensor telemetry; perspectives; Tier 1 active graph and full SQLite ledger; Tier 3 world version, pose, light, obstacles, objects, and advertised sensors.
 - **Layout controls:** the left panel can be hidden/shown; the right inspector can be hidden/shown and resized on wide screens. The UI is responsive on smaller screens.
 
 The inspector reports facts returned by the backend. “No observation”, “no history”, and “no executable plan” are explicit empty states rather than substitutes filled with example values.
@@ -216,16 +220,15 @@ The inspector reports facts returned by the backend. “No observation”, “no
 - Tier 2 intent validation, one bounded malformed-response repair, capability checks, deterministic plan creation, plan execution, unsupported-intent review, and safe outcomes.
 - Deterministic mock LiDAR, camera, ambient light, and pose behavior.
 - `GroundedAgent` composition, deterministic evidence evaluation, Scenario A revision, and Scenario B perspective separation.
+- Real LLM ReAct integration via `GroqIntentProvider`, structured function calling, Turn 2 grounded explanation synthesis with safe deterministic fallback.
+- Inspectable ReAct execution traces in both React conversation history and System Inspector.
+- Explicit provider modes (live LLM vs. offline rule-based) with clear health reporting, UI warnings, and 503 error handling.
 - React/TypeScript UI connected to a local session-scoped Python API; API and frontend integration tests.
 - No Streamlit UI or Streamlit runtime dependency.
 
 ### Not implemented yet
 
-- A real Groq/Llama/other LLM adapter in the application.
-- LLM structured/function calling, a model-to-tool-result ReAct loop, and model-generated grounded response wording.
 - A public robot movement/action execution API, physical hardware integration, learned vision, or persistent multi-user session storage.
-
-The next planned task is [GT-07, issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17), which covers the real LLM ReAct loop, React provider/status/trace updates, and refreshed current-system documentation. Until it is implemented and tested, present the existing app as a **deterministic end-to-end prototype of the layer integration and Scenario A/B evidence flow**, not as completion of the LLM/ReAct milestone.
 
 ## 10. Where to read the code and run it
 
@@ -235,9 +238,10 @@ The next planned task is [GT-07, issue #17](https://github.com/dhruvkshah75/grou
 | Tier 1 repository and graph | `src/declarative/memory_repository.py`, `active_graph.py`, `consistency.py` |
 | Tier 2 plan and evaluation | `src/procedural/intent_planner.py`, `plan_builder.py`, `plan_executor.py`, `epistemic_evaluator.py` |
 | Tier 3 world and sensors | `src/sensorimotor/world_models.py`, `mock_environment.py` |
+| LLM ReAct & Provider Adapter | `src/providers/groq_provider.py`, `tools.py`, `config.py`, `__init__.py` |
 | Agent composition | `src/composition.py`, `src/agent.py` |
 | Web service/API | `src/web/service.py`, `src/web/server.py` |
 | React UI | `frontend/src/App.tsx`, `api.ts`, `types.ts`, `app.css` |
-| Scenario/API tests | `tests/integration/test_epistemic_scenarios.py`, `tests/integration/test_web_api.py`, `tests/unit/web/test_service.py` |
+| Scenario/API/ReAct tests | `tests/integration/test_epistemic_scenarios.py`, `tests/integration/test_web_api.py`, `tests/integration/test_react_flow.py`, `tests/unit/providers/test_groq_provider.py` |
 
 Follow [Local Development Setup](Local_Development_Setup.md) to run the app. Automated tests use local deterministic components and do not need an LLM API key or internet connection.

@@ -5,6 +5,7 @@ description = "Three-tier grounded cognitive agent with auditable belief revisio
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "groq>=1.7.0",
     "networkx>=3.3",
     "pydantic>=2.8",
 ]

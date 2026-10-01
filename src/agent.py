@@ -30,6 +30,19 @@ from src.sensorimotor.world_models import RobotState, WorldState
 
 
 @dataclass
+class ReActTrace:
+    """Inspecting the bounded ReAct cycle."""
+
+    tool_name: str
+    tool_call_id: str
+    arguments: dict[str, Any]
+    approved_operations: list[str]
+    execution_summary: dict[str, Any] | None = None
+    explanation_source: str = "llm"  # "llm", "deterministic_fallback", or "rule_based"
+    model: str | None = None
+
+
+@dataclass
 class AgentResponse:
     """Comprehensive structured outcome returned by GroundedAgent."""
 
@@ -45,6 +58,7 @@ class AgentResponse:
     graph: nx.MultiDiGraph = field(default_factory=nx.MultiDiGraph)
     plan_verifiable: bool | None = None
     plan_reason: str | None = None
+    react_trace: ReActTrace | None = None
 
 
 class GroundedAgent:
@@ -57,12 +71,14 @@ class GroundedAgent:
         graph: ActiveBeliefGraph,
         environment: MockEnvironment,
         evaluator: EpistemicEvaluator | None = None,
+        provider: IntentProvider | None = None,
     ) -> None:
         self._composition = composition
         self._memory = memory
         self._graph = graph
         self._environment = environment
         self._evaluator = evaluator or EpistemicEvaluator()
+        self._provider = provider
 
     @classmethod
     def create(
@@ -105,6 +121,7 @@ class GroundedAgent:
             graph=abg,
             environment=env,
             evaluator=evaluator,
+            provider=intent_prov,
         )
 
     @property
@@ -121,6 +138,11 @@ class GroundedAgent:
     def graph(self) -> ActiveBeliefGraph:
         """Direct access to the Tier 1 NetworkX graph projection."""
         return self._graph
+
+    @property
+    def provider(self) -> IntentProvider | None:
+        """Direct access to the underlying intent provider."""
+        return self._provider
 
     def close(self) -> None:
         """Release the owned SQLite connection when the session is discarded."""
@@ -147,9 +169,86 @@ class GroundedAgent:
 
         plan_verifiable = getattr(plan_result, "plan_verifiable", None)
 
+        # 4. Synthesize final answer via ReAct loop when provider supports it
+        final_answer = eval_outcome.explanation
+        explanation_source = "rule_based"
+        tool_name = "intent_evaluation"
+        tool_call_id = "deterministic_0"
+        tool_args: dict[str, Any] = {}
+        model_name = None
+
+        if self._provider is not None:
+            tool_name = getattr(self._provider, "last_tool_name", "") or "intent_evaluation"
+            tool_call_id = getattr(self._provider, "last_tool_call_id", "") or "deterministic_0"
+            tool_args = getattr(self._provider, "last_tool_args", {}) or {}
+            model_name = getattr(self._provider, "model_name", None)
+
+            if hasattr(self._provider, "generate_grounded_explanation"):
+                tool_result = {
+                    "status": eval_outcome.status,
+                    "perspectives": eval_outcome.perspectives,
+                    "revisions": [
+                        {
+                            "old_fact_id": str(r.audit_event.input_fact_ids[0])
+                            if r.audit_event.input_fact_ids
+                            else None,
+                            "new_fact_id": str(r.successor.fact_id),
+                            "reason": r.audit_event.reason,
+                            "new_fact": (
+                                f"{r.successor.subject} {r.successor.predicate} "
+                                f"{r.successor.object}"
+                            ),
+                        }
+                        for r in eval_outcome.revisions
+                    ],
+                    "sensor_observations": eval_outcome.sensor_telemetry,
+                    "active_memory_facts": [
+                        f"{f.subject} {f.predicate} {f.object} (source: {f.source_agent})"
+                        for f in eval_outcome.memory_facts
+                    ],
+                    "deterministic_evaluation_summary": eval_outcome.explanation,
+                }
+                try:
+                    grounded_text = self._provider.generate_grounded_explanation(
+                        user_question=question,
+                        tool_name=tool_name,
+                        tool_call_id=tool_call_id,
+                        tool_result=tool_result,
+                        fallback_explanation=eval_outcome.explanation,
+                    )
+                    if grounded_text and grounded_text.strip():
+                        final_answer = grounded_text.strip()
+                        explanation_source = (
+                            "llm"
+                            if final_answer != eval_outcome.explanation
+                            else "deterministic_fallback"
+                        )
+                    else:
+                        explanation_source = "deterministic_fallback"
+                except Exception:
+                    explanation_source = "deterministic_fallback"
+
+        approved_ops = getattr(plan_result, "approved_operations", [])
+        execution_summary = {
+            "memory_queries_count": len(getattr(plan_result, "memory_results", [])),
+            "observations_count": len(getattr(plan_result, "observation_results", [])),
+            "audit_lookups_count": len(getattr(plan_result, "audit_results", [])),
+            "plan_verifiable": plan_verifiable,
+        }
+
+        react_trace = ReActTrace(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            arguments=tool_args,
+            approved_operations=list(approved_ops),
+            execution_summary=execution_summary,
+            explanation_source=explanation_source,
+            model=model_name,
+        )
+
         return AgentResponse(
             question=question,
-            answer=eval_outcome.explanation,
+            answer=final_answer,
             status=eval_outcome.status,
             perspectives=eval_outcome.perspectives,
             revisions=eval_outcome.revisions,
@@ -160,6 +259,7 @@ class GroundedAgent:
             graph=current_graph,
             plan_verifiable=plan_verifiable,
             plan_reason=_plan_reason(plan_result),
+            react_trace=react_trace,
         )
 
 

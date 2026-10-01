@@ -107,3 +107,32 @@ def test_api_rejects_invalid_session_and_empty_question(tmp_path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_api_returns_503_when_live_mode_unconfigured(tmp_path) -> None:
+    from src.providers import ProviderConfig
+    from src.web.service import AgentService
+
+    unconfigured_svc = AgentService(config=ProviderConfig(mode="live", api_key=None))
+    server = create_server(port=0, web_root=tmp_path, service=unconfigured_svc)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    session_id = str(uuid4())
+    try:
+        status, health = _request(base_url, "/api/health", session_id)
+        assert status == 200
+        assert health["status"] == "degraded"
+        assert health["llm_ready"] is False
+        assert "GROQ_API_KEY is not configured" in health["error"]
+
+        status, error_resp = _request(
+            base_url, "/api/ask", session_id, {"question": "Is the route clear?"}
+        )
+        assert status == 503
+        assert error_resp["code"] == "provider_unavailable"
+        assert "GROQ_API_KEY is not configured" in error_resp["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

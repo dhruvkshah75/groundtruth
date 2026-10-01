@@ -14,6 +14,7 @@ import {
   PanelRightOpen,
   RotateCcw,
   ShieldCheck,
+  Sparkles,
   X,
 } from "lucide-react";
 import { api } from "./api";
@@ -221,13 +222,29 @@ function App() {
         <div className="brand-block">
           <p className="eyebrow">GroundTruth</p>
           <h1>I, Agent</h1>
-          <div className={`connection-line ${backendReachable ? "connected" : "disconnected"}`}>
+          <div className={`connection-line ${backendReachable ? (health?.llm_ready ? "connected" : health?.status === "degraded" ? "warning" : "connected") : "disconnected"}`}>
             <span className="connection-dot" aria-hidden="true" />
-            <span>{backendReachable ? "Python API connected" : error ? "Backend not connected" : "Checking backend connection…"}</span>
+            <span>
+              {backendReachable
+                ? health?.llm_ready
+                  ? "LLM ReAct loop active"
+                  : health?.status === "degraded"
+                  ? "Live LLM (unconfigured)"
+                  : "Offline mode (rules)"
+                : error
+                ? "Backend not connected"
+                : "Checking backend connection…"}
+            </span>
           </div>
           <p className="provider-note">
             {health ? `Intent provider: ${health.provider_mode}.` : "Provider details appear after API connection."}
           </p>
+          {health?.error && (
+            <div className="provider-warning-box">
+              <CircleAlert size={14} style={{ flexShrink: 0, marginTop: "1px" }} />
+              <span>{health.error}</span>
+            </div>
+          )}
         </div>
 
         <section className="scenario-section" aria-labelledby="scenario-heading">
@@ -276,7 +293,17 @@ function App() {
             <p className="top-subtitle">Epistemic agent workspace</p>
           </div>
           <div className="provider-chip">
-            {backendReachable ? <ShieldCheck size={15} /> : <CircleAlert size={15} />}
+            {backendReachable ? (
+              health?.llm_ready ? (
+                <ShieldCheck size={15} />
+              ) : health?.status === "degraded" ? (
+                <CircleAlert size={15} style={{ color: "#f19b94" }} />
+              ) : (
+                <ShieldCheck size={15} />
+              )
+            ) : (
+              <CircleAlert size={15} />
+            )}
             <span>{health ? health.provider_mode : "Backend not connected"}</span>
           </div>
           <button className="mobile-panel-button" type="button" onClick={() => { setControlsOpen(false); setInspectorOpen(true); }}>
@@ -370,6 +397,9 @@ function App() {
 }
 
 function ConversationTurn({ response }: { response: AgentResponse }) {
+  const [showTrace, setShowTrace] = useState(false);
+  const trace = response.react_trace;
+
   return (
     <article className="conversation-turn">
       <div className="user-message">{response.question}</div>
@@ -377,8 +407,80 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
         <div className="agent-heading">
           <div className="agent-icon"><BrainCircuit size={16} /></div>
           <div><strong>I, Agent</strong><span>Grounded reasoning assistant</span></div>
-          <span className={`status-badge status-${response.status}`}>{response.status.replaceAll("_", " ")}</span>
+          <div className="status-badges-group">
+            {trace && (
+              <span className={`trace-source-badge source-${trace.explanation_source}`}>
+                {trace.explanation_source === "llm"
+                  ? "ReAct LLM"
+                  : trace.explanation_source === "rule_based"
+                  ? "Rule-based"
+                  : "Deterministic Fallback"}
+              </span>
+            )}
+            <span className={`status-badge status-${response.status}`}>{response.status.replaceAll("_", " ")}</span>
+          </div>
         </div>
+
+        {trace && (
+          <div className="react-trace-container">
+            <button
+              type="button"
+              className="react-trace-toggle"
+              onClick={() => setShowTrace((open) => !open)}
+              aria-expanded={showTrace}
+            >
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                <Sparkles size={12} />
+                <span>ReAct Tool Cycle: <code>{trace.tool_name}</code></span>
+              </span>
+              <ChevronDown size={13} className={`trace-chevron ${showTrace ? "open" : ""}`} />
+            </button>
+            {showTrace && (
+              <div className="react-trace-details">
+                <div className="react-step-row">
+                  <span className="step-label">1. Proposed Tool</span>
+                  <div className="step-content">
+                    <code>{trace.tool_name}({JSON.stringify(trace.arguments)})</code>
+                    <small>Call ID: {trace.tool_call_id}</small>
+                  </div>
+                </div>
+                <div className="react-step-row">
+                  <span className="step-label">2. Approved Operations</span>
+                  <div className="step-content">
+                    {trace.approved_operations.length > 0 ? (
+                      <div className="ops-list">
+                        {trace.approved_operations.map((op, i) => (
+                          <span key={i} className="op-tag"><Check size={11} /> {op}</span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="empty-detail">No external operations required</span>
+                    )}
+                  </div>
+                </div>
+                <div className="react-step-row">
+                  <span className="step-label">3. Grounded Results</span>
+                  <div className="step-content">
+                    {response.revisions.length > 0 ? (
+                      <span className="highlight-tag">{response.revisions.length} belief revision recorded</span>
+                    ) : response.sensor_telemetry.length > 0 ? (
+                      <span className="highlight-tag">{response.sensor_telemetry.length} live sensor reading(s)</span>
+                    ) : (
+                      <span className="highlight-tag">Active memory facts verified</span>
+                    )}
+                  </div>
+                </div>
+                <div className="react-step-row">
+                  <span className="step-label">4. Response Synthesis</span>
+                  <div className="step-content">
+                    <span className="model-tag">Source: {trace.explanation_source} {trace.model ? `(${trace.model})` : ""}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <p className="answer-text">{response.answer}</p>
         {response.perspectives && (
           <div className="perspective-cards">
@@ -455,6 +557,17 @@ function Inspector({
             <ValueCard label="Response status">{latest?.status ?? "No agent response yet."}</ValueCard>
             <ValueCard label="Plan rationale">{latest?.plan_reason ?? "No plan has run yet."}</ValueCard>
             <ValueCard label="Plan verification">{latest?.plan_verifiable === true ? "Verifiable" : latest?.plan_verifiable === false ? "Unverifiable" : "No executable plan was created."}</ValueCard>
+            {latest?.react_trace && (
+              <div className="inspector-card">
+                <p className="value-label">ReAct Execution Cycle</p>
+                <div className="trace-kv">
+                  <div><strong>Proposed Tool:</strong> <code>{latest.react_trace.tool_name}</code></div>
+                  <div><strong>Arguments:</strong> <code>{JSON.stringify(latest.react_trace.arguments)}</code></div>
+                  <div><strong>Approved Operations:</strong> {latest.react_trace.approved_operations.join(", ") || "None"}</div>
+                  <div><strong>Source:</strong> {latest.react_trace.explanation_source} {latest.react_trace.model ? `(${latest.react_trace.model})` : ""}</div>
+                </div>
+              </div>
+            )}
             <div className="inspector-card">
               <p className="value-label">Belief revisions and audit events</p>
               {state?.audit_events.length ? state.audit_events.map((event) => <AuditEventView key={event.event_id} event={event} />) : <p className="empty-detail">No audit events have been recorded.</p>}
