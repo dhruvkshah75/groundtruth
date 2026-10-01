@@ -6,6 +6,7 @@ This project uses [uv](https://docs.astral.sh/uv/) to manage Python, the virtual
 
 - Git
 - `uv` (this project targets Python 3.11+)
+- Node.js 20.19+ and npm (for the TypeScript/React frontend)
 
 Install `uv` using the official instructions for your operating system: <https://docs.astral.sh/uv/getting-started/installation/>. Confirm the installation:
 
@@ -36,15 +37,46 @@ uv run pytest tests/integration/test_groundedness.py -q
 # Run the composed agent demo
 uv run python -m src.main
 
-# Start the dashboard once implemented
-uv run streamlit run src/observability/dashboard.py
-
 # Format and lint before opening a pull request
 uv run ruff format .
 uv run ruff check .
 ```
 
-## Adding a dependency
+## Frontend setup
+
+The browser interface is a TypeScript/React app built with Vite. During development, Vite proxies `/api` requests to the Python server at `http://127.0.0.1:8765`.
+
+Open two terminals from the repository root.
+
+Terminal 1 — Python API:
+
+```bash
+uv run python -m src.web.server
+```
+
+Terminal 2 — React development server:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://127.0.0.1:5173>.
+
+For a single-server local run, build the frontend and then start the Python server:
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+uv run python -m src.web.server
+```
+
+Open <http://127.0.0.1:8765>. Scenario state and SQLite facts live in memory for the server process and are isolated by browser session.
+
+## Adding a Python dependency
 
 Only add packages needed by the issue you own. `uv add` updates both `pyproject.toml` and `uv.lock`; commit both files together.
 
@@ -54,9 +86,6 @@ uv add pydantic networkx
 
 # Development-only dependency
 uv add --dev pytest ruff
-
-# Optional UI integration dependency
-uv add streamlit
 ```
 
 Never edit `uv.lock` by hand. Before adding a new package, check whether it can be solved using the standard library, Pydantic, SQLite, or NetworkX.

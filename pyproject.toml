@@ -7,7 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "networkx>=3.3",
     "pydantic>=2.8",
-    "streamlit>=1.64.0",
 ]
 
 [dependency-groups]

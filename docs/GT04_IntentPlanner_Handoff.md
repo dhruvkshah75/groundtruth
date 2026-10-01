@@ -419,7 +419,7 @@ evaluated without changing the core planner.
 - Unsupported and clarification outcomes contain no operations.
 - Duplicate descriptors and kind mismatches are configuration failures.
 - Procedural modules import no `sqlite3`, NetworkX, concrete repository,
-  concrete `MockEnvironment`, provider SDK, Streamlit, or EvidenceResolver.
+  concrete `MockEnvironment`, provider SDK, frontend runtime, or EvidenceResolver.
 - All tests run offline with fake provider/resolver/registry objects.
 
 ## Implementation order

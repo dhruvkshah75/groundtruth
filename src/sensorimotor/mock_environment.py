@@ -60,6 +60,10 @@ class MockEnvironment:
         # Return a fresh list (or deep copies) to prevent external mutation
         return [cap.model_copy(deep=True) for cap in self._capabilities]
 
+    def get_world_state(self) -> WorldState:
+        """Return a detached snapshot of the current simulated world."""
+        return self._world.model_copy(deep=True)
+
     def replace_world(self, new_world: WorldState) -> None:
         """Replace the world and advance this environment's version once."""
         replacement = new_world.model_copy(deep=True)

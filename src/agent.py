@@ -15,7 +15,7 @@ from typing import Any
 import networkx as nx
 
 from src.composition import CompositionService
-from src.contracts import AuditEvent, StoredFact
+from src.contracts import AuditEvent, AuditTrail, StoredFact
 from src.declarative.active_graph import ActiveBeliefGraph, GraphSyncedRepository
 from src.declarative.memory_repository import MemoryRepository, RevisionOutcome
 from src.procedural.capability_validator import CapabilityValidator
@@ -39,10 +39,12 @@ class AgentResponse:
     perspectives: dict[str, str] | None = None
     revisions: list[RevisionOutcome] = field(default_factory=list)
     audit_events: list[AuditEvent] = field(default_factory=list)
+    audit_trails: list[AuditTrail] = field(default_factory=list)
     active_facts: list[StoredFact] = field(default_factory=list)
     sensor_telemetry: list[dict[str, Any]] = field(default_factory=list)
     graph: nx.MultiDiGraph = field(default_factory=nx.MultiDiGraph)
-    plan_verifiable: bool = True
+    plan_verifiable: bool | None = None
+    plan_reason: str | None = None
 
 
 class GroundedAgent:
@@ -120,6 +122,11 @@ class GroundedAgent:
         """Direct access to the Tier 1 NetworkX graph projection."""
         return self._graph
 
+    def close(self) -> None:
+        """Release the owned SQLite connection when the session is discarded."""
+        self._memory.remove_write_listener(self._graph.invalidate)
+        self._memory.close()
+
     def ask(self, question: str) -> AgentResponse:
         """Execute one complete grounded query cycle: plan -> execute -> evaluate -> synthesize."""
         # 1. Execute plan via composition boundary
@@ -138,7 +145,7 @@ class GroundedAgent:
 
         active_facts = self._memory.query_facts(FactQuery(active_only=True))
 
-        plan_verifiable = getattr(plan_result, "plan_verifiable", True)
+        plan_verifiable = getattr(plan_result, "plan_verifiable", None)
 
         return AgentResponse(
             question=question,
@@ -147,8 +154,19 @@ class GroundedAgent:
             perspectives=eval_outcome.perspectives,
             revisions=eval_outcome.revisions,
             audit_events=eval_outcome.audit_events,
+            audit_trails=eval_outcome.audit_trails,
             active_facts=active_facts,
             sensor_telemetry=eval_outcome.sensor_telemetry,
             graph=current_graph,
             plan_verifiable=plan_verifiable,
+            plan_reason=_plan_reason(plan_result),
         )
+
+
+def _plan_reason(plan_result: object) -> str | None:
+    """Expose the deterministic plan rationale or a structured planning failure."""
+    reason = getattr(plan_result, "plan_reason", None)
+    if reason:
+        return str(reason)
+    fallback = getattr(plan_result, "fallback", None)
+    return str(getattr(fallback, "reason", "")) or None

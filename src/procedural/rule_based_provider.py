@@ -18,6 +18,15 @@ class RuleBasedIntentProvider(IntentProvider):
         """Classify user question into one of the supported GroundTruth intents."""
         q = user_question.lower().strip()
 
+        # Combined user/camera/history questions need a live camera observation;
+        # the evaluator then retrieves history for the observed object's ID.
+        if "color" in q and any(term in q for term in ("user", "perspective", "register")):
+            return {
+                "intent": "current_object_perception",
+                "entity_mentions": [self._extract_entity(q, default="red box")],
+                "user_question": user_question,
+            }
+
         # 1. Audit explanation queries
         if "why" in q or "audit" in q or "replaced" in q or "superseded" in q:
             entity = self._extract_entity(q, default="route_A")

@@ -78,7 +78,7 @@ All data passed between layers must be strictly defined using **Pydantic** data 
 
 ### Role 4: The Integration & UI Lead (Testing & Dashboard)
 * **Your Job:** You are the glue. You write the Pydantic data contracts that Roles 1, 2, and 3 must follow. You also build the visual dashboard to make the project look amazing for grading.
-* **Beginner Homework:** Learn the basics of `pydantic` in Python. Check out **Streamlit** (streamlit.io).
+* **Beginner Homework:** Learn the basics of `pydantic` in Python and the React, TypeScript, and Vite frontend stack.
 
 ---
 
@@ -87,7 +87,7 @@ All data passed between layers must be strictly defined using **Pydantic** data 
 * **Phase 1: Setup & Mocking (Weeks 1-3):** Build the dummy environment and the strict data rules. No AI is used yet. Role 3 finishes the Fake Robot Environment, Role 2 finishes the SQLite Database schema.
 * **Phase 2: Building the Brain (Weeks 4-7):** Get the LLM to talk to the fake robot and the database. Role 1 writes the ReAct loop and "Tools".
 * **Phase 3: Solving the Conflicts (Weeks 8-11):** Solve Scenario A (Groundedness conflict between map and sensor) and Scenario B (Perspective conflict between user, sensor, and database).
-* **Phase 4: Final Polish & Dashboard (Weeks 12-14):** Get an A+ on the project. Role 4 finishes the Streamlit live dashboard.
+* **Phase 4: Final Polish & Dashboard (Weeks 12-14):** Get an A+ on the project. Role 4 finishes the React and TypeScript browser UI and connects it to the Python agent API.
 
 ---
 
@@ -102,7 +102,7 @@ To ensure this project outshines everything else in the class, we will bake thes
 3. **Environment "Perturbations" (Tier 3):**
    Add a "Flickering Lights" or "Sensor Noise" mode that causes the simulated camera to occasionally report the wrong colors. The LLM then has to use statistical reasoning to figure out the truth.
 4. **Time-Travel Graphs:** We will save a history of every graph state so the AI can time-travel and say *"I used to think the path was clear at 10:00 AM, but I changed my mind at 10:05 AM."*
-5. **The Live UI:** The Streamlit dashboard will visually blow the evaluators away by showing all 3 layers running live side-by-side in the browser.
+5. **The Live UI:** The browser UI will show all 3 layers side-by-side using live state returned by the Python agent API.
 
 ---
 

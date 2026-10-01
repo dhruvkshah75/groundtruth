@@ -27,3 +27,8 @@ data/*.sqlite
 *.sqlite3
 
 skills-lock.json
+
+# JavaScript frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo

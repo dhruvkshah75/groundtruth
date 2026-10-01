@@ -110,6 +110,12 @@ class EpistemicEvaluator:
             for obs in plan_result.observation_results
         ):
             reasons = plan_result.blocking_reasons or ["Required sensor capability is unavailable."]
+            unavailable = [
+                obs.result.message
+                for obs in plan_result.observation_results
+                if isinstance(obs.result, ObservationUnavailable)
+            ]
+            reasons = list(dict.fromkeys([*reasons, *unavailable]))
             reason_str = "; ".join(reasons)
             # Collect memory facts if available
             facts = [f for mem in plan_result.memory_results for f in mem.facts]
@@ -120,6 +126,9 @@ class EpistemicEvaluator:
                     "Preserving stored memory without ungrounded assumptions."
                 ),
                 memory_facts=facts,
+                sensor_telemetry=[
+                    obs.result.model_dump(mode="json") for obs in plan_result.observation_results
+                ],
             )
 
         # 3. Collect observations and memory facts
@@ -128,7 +137,7 @@ class EpistemicEvaluator:
             for obs in plan_result.observation_results
             if isinstance(obs.result, SensorObservation)
         ]
-        telemetry = [obs.measurements for obs in observations]
+        telemetry = [obs.model_dump(mode="json") for obs in observations]
         memory_facts = [f for mem in plan_result.memory_results for f in mem.facts]
 
         # 4. Scenario B: Perspective Tracking (Theory of Mind)
@@ -143,7 +152,6 @@ class EpistemicEvaluator:
             return self._evaluate_perspectives(
                 user_question=user_question,
                 observations=observations,
-                memory_facts=memory_facts,
                 memory_repo=memory_repo,
             )
 
@@ -201,52 +209,104 @@ class EpistemicEvaluator:
     ) -> EpistemicEvaluation:
         """Scenario A: compare active map belief with live LiDAR and revise if conflicted."""
         measurements = lidar_obs.measurements
-        sensor_status = measurements.get("status", "unknown")
+        sensor_status = measurements.get("status")
         nearest_dist = measurements.get("nearest_distance_cm")
-        telemetry = [measurements]
+        telemetry = [lidar_obs.model_dump(mode="json")]
 
-        # Find active route status fact from memory
+        # A route claim only applies to this observed place and frame of reference.
+        map_facts = [
+            f
+            for f in memory_facts
+            if f.predicate == "status_is"
+            and f.superseded_by is None
+            and f.object in ("clear", "blocked")
+        ]
+        contextual_facts = [
+            fact for fact in map_facts if _contexts_match(fact.context, lidar_obs.context)
+        ]
+        if map_facts and not contextual_facts:
+            return EpistemicEvaluation(
+                status="unverifiable",
+                explanation=(
+                    "The live LiDAR observation and stored route claim use different spatial "
+                    "contexts, so I cannot safely compare or revise them."
+                ),
+                memory_facts=map_facts,
+                sensor_telemetry=telemetry,
+            )
+
+        if len({fact.object for fact in contextual_facts}) > 1:
+            return EpistemicEvaluation(
+                status="ambiguous",
+                explanation=(
+                    "Stored route claims disagree with each other in the observed context. "
+                    "The live LiDAR result is available, but the map claim needs review."
+                ),
+                memory_facts=contextual_facts,
+                sensor_telemetry=telemetry,
+            )
+
+        # Prefer the explicitly sourced static map claim when several sources agree.
         map_fact = next(
-            (f for f in memory_facts if f.predicate == "status_is" and f.superseded_by is None),
-            None,
+            (fact for fact in contextual_facts if fact.source_agent == "static_map"),
+            contextual_facts[-1] if contextual_facts else None,
         )
 
-        # Contradiction: Map says clear, but LiDAR detected physical obstruction
-        if map_fact and map_fact.object == "clear" and sensor_status == "blocked":
+        if sensor_status not in ("clear", "blocked"):
+            return EpistemicEvaluation(
+                status="unverifiable",
+                explanation="LiDAR did not return a recognized clear/blocked route status.",
+                memory_facts=contextual_facts,
+                sensor_telemetry=telemetry,
+            )
+
+        # A fresh, relevant LiDAR result revises a contradictory stored route belief.
+        if map_fact and map_fact.object != sensor_status:
             dist_str = f" at {nearest_dist:.1f}cm" if nearest_dist is not None else ""
-            dist_val = nearest_dist if nearest_dist is not None else 12.0
 
             # Execute atomic belief revision in Tier 1
             successor_assertion = FactAssertion(
                 version="v1",
                 subject=map_fact.subject,
                 predicate="status_is",
-                object="blocked",
+                object=sensor_status,
                 source_agent="lidar_sensor",
-                confidence_score=0.99,
+                confidence_score=lidar_obs.confidence_score,
                 observed_at=lidar_obs.observed_at,
                 context=lidar_obs.context,
                 evidence={
-                    "lidar_distance_cm": dist_val,
+                    "lidar_distance_cm": nearest_dist,
                     "sensor": "lidar",
-                    "status": "blocked",
+                    "status": sensor_status,
                     "observation_id": str(lidar_obs.observation_id),
                 },
             )
 
+            revision_reason = (
+                f"Live LiDAR reading detected physical obstacle{dist_str}"
+                if sensor_status == "blocked"
+                else "Live LiDAR reported that the route is clear"
+            )
             revision = memory_repo.record_revision(
                 old_fact_id=map_fact.fact_id,
                 replacement=successor_assertion,
-                reason=f"Live LiDAR reading detected physical obstacle{dist_str}",
+                reason=revision_reason,
                 policy_rule="lidar_overrides_map",
                 revised_at=self._clock(),
             )
 
-            explanation = (
-                f"No, my static mapping says it is clear, but my live LiDAR readings indicate "
-                f"a physical obstruction{dist_str} right now. I have downgraded my map confidence "
-                "and updated my belief graph."
-            )
+            if map_fact.object == "clear" and sensor_status == "blocked":
+                explanation = (
+                    "No, my static mapping says it is clear, but my live LiDAR readings indicate "
+                    f"a physical obstruction{dist_str} right now. I have downgraded my map "
+                    "confidence and updated my belief graph."
+                )
+            else:
+                explanation = (
+                    f"My static mapping says the route is {map_fact.object}, but my live LiDAR "
+                    f"readings indicate it is {sensor_status}{dist_str} right now. I recorded the "
+                    "new sensor-backed belief and updated the active belief graph."
+                )
 
             return EpistemicEvaluation(
                 status="grounded_conflict_resolved",
@@ -257,39 +317,38 @@ class EpistemicEvaluator:
                 sensor_telemetry=telemetry,
             )
 
-        # Agreement: Map says clear and LiDAR says clear
-        if map_fact and map_fact.object == "clear" and sensor_status == "clear":
+        if map_fact and map_fact.object == sensor_status:
+            if sensor_status == "clear":
+                answer = "Yes, the route is clear. The stored route claim and live LiDAR agree."
+            else:
+                answer = "Route is blocked as recorded. The live LiDAR confirms the stored claim."
             return EpistemicEvaluation(
                 status="verified",
-                explanation=(
-                    "Yes, the route is clear. Both the static map and live LiDAR scan "
-                    "confirm no obstacles are ahead."
-                ),
+                explanation=answer,
                 memory_facts=memory_facts,
                 sensor_telemetry=telemetry,
             )
 
-        # Route blocked in map and confirmed by LiDAR
-        if map_fact and map_fact.object == "blocked" and sensor_status == "blocked":
+        if map_fact is None:
+            if sensor_status == "blocked":
+                distance = f" at {nearest_dist:.1f}cm" if nearest_dist is not None else ""
+                answer = (
+                    f"Live LiDAR reports the route is blocked{distance}; "
+                    "no stored map claim was found."
+                )
+            else:
+                answer = "Live LiDAR reports the route is clear; no stored map claim was found."
             return EpistemicEvaluation(
                 status="verified",
-                explanation=(
-                    f"Route is blocked as recorded. LiDAR confirms an obstacle is "
-                    f"present at {nearest_dist}cm."
-                ),
-                memory_facts=memory_facts,
+                explanation=answer,
+                memory_facts=[],
                 sensor_telemetry=telemetry,
             )
 
-        # Default fallback for other combinations
-        map_status = map_fact.object if map_fact else "unknown"
         return EpistemicEvaluation(
-            status="verified",
-            explanation=(
-                f"Route status verified: map indicates '{map_status}', "
-                f"sensor indicates '{sensor_status}'."
-            ),
-            memory_facts=memory_facts,
+            status="unverifiable",
+            explanation="The route could not be compared with a relevant stored status claim.",
+            memory_facts=contextual_facts,
             sensor_telemetry=telemetry,
         )
 
@@ -297,80 +356,75 @@ class EpistemicEvaluator:
         self,
         user_question: str,
         observations: list[SensorObservation],
-        memory_facts: list[StoredFact],
         memory_repo: EpistemicMemoryInterface,
     ) -> EpistemicEvaluation:
         """Scenario B: isolate User, Egocentric (camera), and Historical perspectives."""
-        telemetry = [obs.measurements for obs in observations]
+        telemetry = [obs.model_dump(mode="json") for obs in observations]
 
         # 1. User Perspective: Extract requested color/target from question
-        user_expected_color = "red"  # default target per Scenario B
         match = re.search(r"\b(red|blue|green|yellow|brown|black|white)\b", user_question.lower())
-        if match:
-            user_expected_color = match.group(1)
+        user_expected_color = match.group(1) if match else None
 
         # 2. Egocentric Perspective: What does the camera register right now?
         camera_obs = next((obs for obs in observations if obs.capability == "camera_detect"), None)
-        egocentric_color = "unknown"
-        lighting_condition = "normal"
+        egocentric_color = None
+        lighting_condition = None
+        observed_object_id = None
 
         if camera_obs:
             meas = camera_obs.measurements
-            lighting_condition = camera_obs.context.extra_context.get("lighting", "normal")
+            lighting_condition = camera_obs.context.extra_context.get("lighting")
+            observed_object_id = meas.get("object_id")
             if "apparent_color" in meas:
                 egocentric_color = meas["apparent_color"]
             elif "objects" in meas and meas["objects"]:
-                egocentric_color = meas["objects"][0].get("apparent_color", "unknown")
+                observed_object_id = meas["objects"][0].get("object_id")
+                egocentric_color = meas["objects"][0].get("apparent_color")
 
-        # 3. Historical / Third-Party Perspective: Query SQLite provenance records
-        # Look for facts from external maintenance bots (e.g. bot_02, painted_blue)
-        target_subject = memory_facts[0].subject if memory_facts else "box_01"
-        historical_facts = memory_repo.query_facts(
-            FactQuery(subject=target_subject, active_only=False)
-        )
-        if not historical_facts and memory_facts:
-            historical_facts = memory_facts
-
-        historical_color = "blue"  # default per Scenario B
-        source_agent = "bot_02"
-
-        for fact in historical_facts:
-            # Check fact object or evidence payload
-            if fact.predicate in ("perceived_color_is", "painted_color_is", "color_is"):
-                historical_color = fact.object
-                source_agent = fact.source_agent
-                break
-            if isinstance(fact.evidence, dict) and "action" in fact.evidence:
-                action = str(fact.evidence.get("action"))
-                if "blue" in action:
-                    historical_color = "blue"
-                    source_agent = fact.source_agent
-                    break
+        # Query history only for the object ID returned by the live camera.
+        historical_facts: list[StoredFact] = []
+        if isinstance(observed_object_id, str) and observed_object_id:
+            historical_facts = memory_repo.query_facts(
+                FactQuery(subject=observed_object_id, active_only=False)
+            )
+        color_facts = [
+            fact
+            for fact in historical_facts
+            if fact.predicate in ("perceived_color_is", "painted_color_is", "color_is")
+        ]
+        latest_color_fact = max(color_facts, key=lambda fact: fact.created_at, default=None)
 
         perspectives = {
             "user_perspective": (
-                f"{user_expected_color.capitalize()} "
-                f"(user expects a {user_expected_color} target based on prompt/mention)"
+                f"{user_expected_color.capitalize()} (user expects a {user_expected_color} target, "
+                "as stated in the question)."
+                if user_expected_color
+                else "The question does not state an expected color."
             ),
             "egocentric_perspective": (
-                f"{egocentric_color.capitalize()} "
-                f"(currently sensed as {egocentric_color} by camera under "
-                f"ambient {lighting_condition} lighting)"
+                f"{egocentric_color.capitalize()} (currently sensed by the camera"
+                + (f" under {lighting_condition} lighting)." if lighting_condition else ").")
+                if egocentric_color
+                else "No camera color was returned."
             ),
             "historical_perspective": (
-                f"{historical_color.capitalize()} "
-                f"(validated as {historical_color} via logged provenance record "
-                f"from maintenance bot '{source_agent}')"
+                f"{latest_color_fact.object.capitalize()} (latest logged color claim from "
+                f"'{latest_color_fact.source_agent}', recorded "
+                f"{latest_color_fact.created_at.isoformat()}."
+                if latest_color_fact
+                else (
+                    f"No historical color record was found for {observed_object_id}."
+                    if observed_object_id
+                    else "No object ID was returned by the camera, so history was not queried."
+                )
             ),
         }
 
-        explanation = (
-            f"Perspective breakdown:\n"
-            f"1. User Perspective: Expects a {user_expected_color} target.\n"
-            f"2. Egocentric Perspective: Currently senses {egocentric_color} "
-            f"due to ambient environment parameters ({lighting_condition} lighting).\n"
-            f"3. Historical/Third-Party Perspective: Validated as {historical_color} "
-            f"via logged provenance update from '{source_agent}'."
+        explanation = "Perspective breakdown:\n"
+        explanation += f"1. User Perspective: {perspectives['user_perspective']}\n"
+        explanation += f"2. Egocentric Perspective: {perspectives['egocentric_perspective']}\n"
+        explanation += (
+            f"3. Historical/Third-Party Perspective: {perspectives['historical_perspective']}"
         )
 
         return EpistemicEvaluation(
@@ -380,3 +434,17 @@ class EpistemicEvaluator:
             memory_facts=historical_facts,
             sensor_telemetry=telemetry,
         )
+
+
+def _contexts_match(fact_context: Any, observation_context: Any) -> bool:
+    """Require overlapping place and frame data to agree before comparison."""
+    for field_name in ("location", "frame_of_reference"):
+        fact_value = getattr(fact_context, field_name)
+        observation_value = getattr(observation_context, field_name)
+        if (
+            fact_value is not None
+            and observation_value is not None
+            and fact_value != observation_value
+        ):
+            return False
+    return True
