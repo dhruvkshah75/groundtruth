@@ -655,7 +655,7 @@ function Inspector({
                   <div><strong>Source:</strong> {latest.react_trace.explanation_source} {latest.react_trace.model ? `(${latest.react_trace.model})` : ""}</div>
                   {latest.react_trace.operations && latest.react_trace.operations.length > 0 && (
                     <div style={{ marginTop: "8px" }}>
-                      <strong style={{ fontSize: "10px", display: "block", marginBottom: "4px" }}>
+                      <strong style={{ fontSize: "11px", display: "block", marginBottom: "5px" }}>
                         Executed Operations &amp; Evidence:
                       </strong>
                       <div className="trace-ops-detail">
