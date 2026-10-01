@@ -229,10 +229,13 @@ class EpistemicEvaluator:
 
         # 7. General historical / fact lookup
         if memory_facts:
-            facts_summary = "; ".join(f"{f.subject} {f.predicate} {f.object}" for f in memory_facts)
+            facts_summary = "; ".join(
+                f"{f.subject} {f.predicate} {f.object} (source: {f.source_agent})"
+                for f in memory_facts
+            )
             return EpistemicEvaluation(
                 status="verified",
-                explanation=f"Retrieved active facts from memory: {facts_summary}.",
+                explanation=f"Retrieved stored facts from memory: {facts_summary}.",
                 memory_facts=memory_facts,
                 sensor_telemetry=telemetry,
             )

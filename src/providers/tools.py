@@ -68,7 +68,9 @@ INTENT_TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Look up historical facts or past records in long-term memory. Used "
                 "for past events, prior states, or data provenance history without "
-                "live sensor observations."
+                "live sensor observations. entity_mentions must contain only the "
+                "record subject being asked about; a named source such as bot_02 is "
+                "provenance, not another entity mention."
             ),
             "parameters": {
                 "type": "object",
@@ -77,7 +79,15 @@ INTENT_TOOLS: list[dict[str, Any]] = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Entity mention(s) to query in memory, e.g. ['box_01'].",
-                    }
+                    },
+                    "source_agent_mentions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional provenance source(s) explicitly named by the user, "
+                            "such as ['bot_02']; keep these separate from the record subject."
+                        ),
+                    },
                 },
                 "required": ["entity_mentions"],
                 "additionalProperties": False,
@@ -182,7 +192,10 @@ INTENT_PROPOSAL_SYSTEM_PROMPT = (
     "the approved set that best captures their intent.\n\n"
     "Rules:\n"
     "1. You MUST call one of the provided functions. Do not respond with conversational text.\n"
-    "2. Extract exact entity mentions from the question (e.g. 'front route', 'red box').\n"
+    "2. Put the record subject being queried (e.g. 'front route', 'red box') in "
+    "entity_mentions. For a historical lookup that names who created or reported a record, "
+    "put that source in source_agent_mentions (e.g. 'bot_02'); never mix source names into "
+    "entity_mentions. These fields are semantic roles and may contain any explicit entity names.\n"
     "3. For a multi-perspective question that asks both what an object currently looks like "
     "and what its history says, call 'current_object_perception'. The evaluator uses the "
     "object ID returned by the camera to retrieve its stored history. Do not choose "

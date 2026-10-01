@@ -407,6 +407,52 @@ def test_compound_perspective_question_uses_camera_if_llm_picks_history_only() -
     )
 
 
+def test_historical_lookup_separates_source_agent_from_target_entity() -> None:
+    source_and_target_call = FakeToolCall(
+        name="historical_fact_lookup",
+        arguments=(
+            '{"entity_mentions": ["red box"], "source_agent_mentions": ["maintenance_bot_7"]}'
+        ),
+        call_id="call_history_source_1",
+    )
+    first_response = FakeChatCompletion(
+        choices=[
+            FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[source_and_target_call]))
+        ]
+    )
+
+    def echo_grounded_summary(messages: list[dict[str, Any]]) -> FakeChatCompletion:
+        tool_message = next(message for message in messages if message.get("role") == "tool")
+        summary = json.loads(tool_message["content"])["deterministic_evaluation_summary"]
+        return FakeChatCompletion(
+            choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=summary))]
+        )
+
+    agent = _build_test_agent(FakeGroqClient([first_response, echo_grounded_summary]))
+    agent.memory.record_fact(
+        FactAssertion(
+            subject="box_01",
+            predicate="painted_color_is",
+            object="blue",
+            source_agent="maintenance_bot_7",
+            confidence_score=1.0,
+            observed_at=datetime.now(UTC),
+            context=SpatialContext(location="room_101"),
+            evidence={"ticket": "MAINT-4091"},
+        )
+    )
+
+    response = agent.ask("What color did maintenance_bot_7 record for the red box?")
+
+    assert response.status == "verified"
+    assert "blue" in response.answer.lower()
+    assert "maintenance_bot_7" in response.answer.lower()
+    assert response.react_trace is not None
+    assert any(
+        operation["name"] == "query_active_facts" for operation in response.react_trace.operations
+    )
+
+
 def test_robot_pose_observation_is_reported_in_grounded_answer() -> None:
     pose_call = FakeToolCall(
         name="current_robot_pose",

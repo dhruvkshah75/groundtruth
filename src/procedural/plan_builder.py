@@ -151,13 +151,24 @@ class PlanBuilder:
         entity = self._resolve_one_entity(intent)
         if isinstance(entity, PlanningFallback):
             return PlanningOutcome(fallback=entity)
+        source_agents = intent.source_agent_mentions
+        if len(source_agents) > 1:
+            return self._fallback(
+                "unsupported_intent",
+                "This request supports one provenance source filter at a time.",
+            )
+        source_agent = source_agents[0] if source_agents else None
 
         return self._plan(
             intent=intent,
             entity_ids=[entity],
             memory_operations=[
                 MemoryQueryOperation(
-                    query=FactQuery(subject=entity, active_only=False),
+                    query=FactQuery(
+                        subject=entity,
+                        source_agent=source_agent,
+                        active_only=False,
+                    ),
                     purpose="Read historical facts for the requested entity.",
                 )
             ],
@@ -219,18 +230,19 @@ class PlanBuilder:
 
     def _resolve_one_entity(self, intent: IntentRequest) -> str | PlanningFallback:
         """Resolve exactly one entity mention for an entity-based intent."""
-        if not intent.entity_mentions:
+        mentions = list(intent.entity_mentions)
+        if not mentions:
             return self._new_fallback(
                 "missing_entity",
                 "This request needs one entity mention.",
             )
-        if len(intent.entity_mentions) > 1:
+        if len(mentions) > 1:
             return self._new_fallback(
                 "unsupported_intent",
                 "This request supports one entity mention at a time.",
             )
 
-        resolution = self._entity_resolver.resolve_entity(intent.entity_mentions[0])
+        resolution = self._entity_resolver.resolve_entity(mentions[0])
         return self._entity_result(resolution)
 
     @staticmethod

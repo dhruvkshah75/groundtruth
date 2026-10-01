@@ -327,6 +327,15 @@ class GroqIntentProvider:
                     "raw_output": "entity_mentions must be an array of strings",
                 }
 
+            source_agent_mentions = parsed_args.get("source_agent_mentions", [])
+            if not isinstance(source_agent_mentions, list) or any(
+                not isinstance(source, str) for source in source_agent_mentions
+            ):
+                return {
+                    "error": "invalid_source_agent_mentions",
+                    "raw_output": "source_agent_mentions must be an array of strings",
+                }
+
             # Save state for ReAct explanation round
             self.last_tool_call_id = str(call_id)
             self.last_tool_name = str(fn_name)
@@ -340,6 +349,7 @@ class GroqIntentProvider:
             return {
                 "intent": fn_name,
                 "entity_mentions": entity_mentions,
+                "source_agent_mentions": source_agent_mentions,
                 "user_question": user_question,
             }
         except Exception as exc:

@@ -352,7 +352,18 @@ class IntentRequest(BaseModel):
         "unsupported",
     ]
     entity_mentions: list[str] = Field(default_factory=list)
+    source_agent_mentions: list[str] = Field(default_factory=list)
     user_question: str = Field(min_length=1)
+
+    @field_validator("source_agent_mentions")
+    @classmethod
+    def source_agents_must_be_non_empty_and_unique(cls, values: list[str]) -> list[str]:
+        """Keep explicit provenance filters distinct from queried entities."""
+        if any(not value.strip() or value != value.strip() for value in values):
+            raise ValueError("source_agent_mentions must contain non-empty, trimmed values")
+        if len(values) != len(set(values)):
+            raise ValueError("source_agent_mentions must not contain duplicates")
+        return values
 
 
 class GroundedResult(BaseModel):
