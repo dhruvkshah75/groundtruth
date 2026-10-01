@@ -1,47 +1,39 @@
-# GroundTruth: Epistemic Agent Architecture
+# GroundTruth: Three-Layer Epistemic Agent
 
-A three-layer cognitive system for grounded agents that validates beliefs against sensor reality and tracks perspective.
+GroundTruth is a student project about answering questions using evidence from stored claims and a robot's current simulated environment. Its central idea is simple: an old map, a live sensor, and a user's expectation may disagree, so the system should preserve their sources and context instead of treating every claim as the same kind of truth.
 
-## Architecture
+## Three layers
 
-GroundTruth separates language understanding, stored evidence, and live
-observations into three tiers:
+1. **Tier 1 — Declarative memory:** SQLite stores sourced facts, timestamps, confidence, revisions, and audit history. NetworkX is a rebuildable projection of active facts, not another source of truth.
+2. **Tier 2 — Procedural layer:** deterministic current code validates an intent, resolves entities, builds and executes a safe evidence plan, and applies the conflict/perspective rules. A real LLM provider is planned, not connected yet.
+3. **Tier 3 — Sensorimotor layer:** the deterministic mock environment calculates LiDAR, camera, ambient-light, and robot-pose observations from its configured world.
 
-```text
-User question
-    ↓
-Tier 2: classify the request, choose the evidence needed, and apply policy
-   ↙                                                               ↘
-Tier 1: store and retrieve facts, history, and audit records    Tier 3: provide
-                                                               sensor readings
+The Python layer owns the evidence and answer logic. The browser displays data returned by that backend; it does not substitute canned answers when requests fail. Scenario presets seed repeatable backend test worlds.
+
+## Run the app
+
+Install Python dependencies with `uv sync --all-groups`. You also need Node.js 20.19+ and npm.
+
+Start the Python API in one terminal:
+
+```bash
+uv run python -m src.web.server
 ```
 
-Tier 1 is the long-term evidence store. It keeps facts with their sources,
-observation times, confidence, and revision history. SQLite is the source of
-truth; the active NetworkX graph is a derived view for relationship queries.
+Start the React development server in a second terminal:
 
-Tier 3 represents the robot's environment. It advertises available sensors
-and permitted actions, and supplies observations such as LiDAR or camera
-results. Tier 1 and Tier 3 do not call each other; Tier 2 coordinates requests
-between them.
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-### How Tier 2 plans a request
+Open <http://127.0.0.1:5173>. See [Local Development Setup](docs/Local_Development_Setup.md) for production build instructions and verification commands.
 
-The LLM helps map flexible wording to one approved intent, such as
-`current_route_status` or `historical_fact_lookup`. Python validates that
-intent, resolves entity names to canonical IDs, checks available capabilities,
-and builds a typed evidence plan. The LLM does not invent database queries,
-sensors, or final facts.
+## Documentation
 
-For example, “Can I move forward?” can become a route-status intent. Tier 2
-then plans an active route-status lookup in Tier 1 and a fresh LiDAR
-observation when LiDAR is available. A later executor performs those
-operations; the plan itself contains requests, not readings or conclusions.
-
-If the provider returns a valid `unsupported` intent, Tier 2 checks a small
-set of documented wording rules. One supported candidate may receive one
-constrained provider reconsideration. No candidate produces a safe unsupported
-result; several candidates produce clarification choices. These fallback
-paths create no evidence operations and make no claim about the environment.
-
+- [Current Agent and Scenario Guide](docs/Implemented_System_Overview.md) — what currently runs, key terms, complete Scenario A/B walkthroughs, and limitations.
+- [Documentation index](docs/README.md) — architecture, tier guides, and project context.
+- [Architecture decisions](docs/Architecture_Decisions.md) — the approved tier boundaries and evidence policy.
+- [GT-07 / Issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) — planned real LLM ReAct integration and frontend update.
 

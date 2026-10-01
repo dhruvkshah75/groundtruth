@@ -6,6 +6,8 @@ This is the current implementation guide for GroundTruth. Read it before buildin
 
 The original [I, Agent masterplan](I_Agent_Masterplan.md) explains the assignment vision. The [alternatives analysis](Potential%20Issues%20vs%20Alternatives.md) records risks and possible designs. This document records the design selected for implementation so teammates do not make conflicting decisions.
 
+> **Implementation status on `main`:** the composed Python agent, deterministic mock sensors, React frontend, and session-scoped web API are implemented. The app currently uses `RuleBasedIntentProvider`; no live LLM or function-calling/ReAct provider is connected yet. The LLM sections below describe the approved target architecture, not a claim that the milestone is already implemented. See [Current Agent and Scenario Guide](Implemented_System_Overview.md) for the exact current behavior and [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) for the pending LLM milestone.
+
 ## The problem we are solving
 
 An LLM can write a convincing answer even when an old map, a current sensor, and a user statement disagree. GroundTruth prevents that by separating:
@@ -22,7 +24,7 @@ The agent must be able to say not only what it believes, but also which evidence
 
 > The LLM is a bounded language interface. It is not the authority on facts.
 
-The LLM may understand a user's wording and write a friendly explanation. Deterministic Python code retrieves evidence, validates tool use, chooses the operational belief, records revisions, and refuses unsupported claims.
+When the planned LLM adapter is implemented, the LLM may understand a user's wording and write a friendly explanation. Deterministic Python code must retrieve evidence, validate tool use, choose the operational belief, record revisions, and refuse unsupported claims. **Today**, question interpretation and final explanation are also deterministic; no model is connected.
 
 This is important because the LLM can be probabilistic. Given the same sentence twice, it may produce slightly different wording or a different tool plan. SQLite queries, sensor calculations, and conflict rules must instead produce repeatable results that can be tested and audited.
 
@@ -265,6 +267,6 @@ Build in this order:
 4. Tier 2 intent validation, PlanBuilder, and response guard using mocked Tier 1/Tier 3 responses.
 5. Tier 3 mock LiDAR/camera environment.
 6. Deterministic Scenario A and Scenario B tests.
-7. LLM tool-calling adapter and optional dashboard.
+7. LLM tool-calling/ReAct adapter connected to the existing React dashboard (tracked by GT-07 / issue #17).
 
 Confidence decay, compound plans, `derive` queries, RAG over documents, learned trust, and real hardware are later enhancements, not core dependencies.

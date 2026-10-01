@@ -1,261 +1,243 @@
-# GroundTruth: implemented system overview
+# GroundTruth: Current Agent and Scenario Guide
 
-This page explains the parts of GroundTruth that are implemented and merged, how they fit together, and what is still waiting for integration. It is written for a teammate who knows the project is a robot agent but has not read every issue or source file.
+This document describes the code that is currently on `main`. It is a plain-language guide for teammates who need to run, explain, or present the project without reading every source file.
 
-## The project in one paragraph
+> **Current status:** the browser UI and the Python agent are connected, and the composed deterministic agent runs both demonstration scenarios against real Tier 1 and Tier 3 components. The current provider is `RuleBasedIntentProvider`. There is **no live LLM or LLM function-calling/ReAct loop in the app yet**. That is Project Milestone 2 and is tracked by [GT-07, issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17).
 
-GroundTruth is designed to answer questions about a robot and its environment using traceable evidence. A stored statement is treated as a claim from a source, not automatically as truth. The system separates durable memory, planning, and physical-world observations so that an old record cannot silently stand in for a fresh sensor reading. Its goal is to be able to say what evidence supports an answer, when it was observed, and why a belief changed.
+## 1. What GroundTruth is for
 
-## What is merged
+GroundTruth demonstrates how an agent should answer questions about a robot and its environment using evidence from different sources. It keeps these responsibilities separate:
 
-| Work | What it provides | GitHub status |
-| --- | --- | --- |
-| Shared contracts | Typed messages shared across tiers: facts, context, entity resolution, intents, observations, and grounded results. | [PR #5](https://github.com/dhruvkshah75/groundtruth/pull/5), [issue #1](https://github.com/dhruvkshah75/groundtruth/issues/1) complete |
-| Tier 1 SQLite ledger (GT-03) | Durable fact storage, exact queries, revisions, audit trails, and alias resolution. | [PR #8](https://github.com/dhruvkshah75/groundtruth/pull/8), [issue #3](https://github.com/dhruvkshah75/groundtruth/issues/3) complete |
-| Tier 1 graph projection (GT-05) | Disposable NetworkX view of active facts, with cache controls and consistency diagnostics. | [PR #11](https://github.com/dhruvkshah75/groundtruth/pull/11), [issue #6](https://github.com/dhruvkshah75/groundtruth/issues/6) complete |
-| Tier 2 planning (GT-04) | Validates a proposed intent, resolves entities, makes a fixed evidence plan, and returns safe fallbacks. | [PR #7](https://github.com/dhruvkshah75/groundtruth/pull/7), [issue #4](https://github.com/dhruvkshah75/groundtruth/issues/4) complete |
+- what the system has recorded before;
+- what the mock robot senses now;
+- how the system compares those claims and decides what it can safely report.
 
-The current source tree does **not** yet contain the Tier 3 mock environment described by [issue #2](https://github.com/dhruvkshah75/groundtruth/issues/2). That issue is still open. Likewise, the merged planning code creates plans but does not yet connect those plans to an executor, a real sensor environment, a final answer renderer, or a live LLM provider.
+For example, a static map may say a route is clear while a fresh LiDAR observation detects an obstacle. The system keeps the source and history of both claims, applies a deterministic policy to the conflict, and records a revision. For an object, the user may expect red, the camera may currently see brown under yellow light, and a maintenance record may say the object was painted blue. These are presented as separate perspectives.
 
-## A few terms
+## 2. Current implementation at a glance
 
-- **Tier 1 — declarative memory:** the evidence ledger. It stores what was asserted, by whom, when, and in what context.
-- **Tier 2 — procedural planning:** turns a user question into a validated intent and a typed list of required evidence operations.
-- **Tier 3 — sensorimotor environment:** will own the simulated robot world and compute observations. The GT-02 implementation is not in the current source tree yet.
-- **Contract:** a validated data shape shared across components. For example, `FactAssertion` describes a claim before it is stored, while `StoredFact` adds its durable ID and revision status.
-- **Entity:** the thing a question or fact concerns, identified internally by a stable canonical ID such as `route_ahead` or `box_01`. A user may refer to it by an alias such as “front route.”
-- **Intent:** the kind of request, not the answer and not a tool call. Examples include `current_route_status` and `historical_fact_lookup`.
-- **ExecutionPlan:** typed instructions saying which evidence to request. In this implementation it is data only; it does not itself execute database queries or sensors.
-- **Evidence ID:** the ID of a stored fact or observation that supports a later answer. A plan or fallback must not invent one.
-- **Context:** the scope in which a fact or observation applies. It can include location, observer, world version, and frame of reference. For example, “12 cm ahead” only has meaning relative to a robot, its pose, and a coordinate frame.
-- **Revision/audit event:** a record that a new claim replaced an older active claim, including why and under which policy rule. The older claim stays in history.
+| Area | What currently runs |
+| --- | --- |
+| Browser UI | React + TypeScript + Vite in `frontend/`; chat, scenario presets, reset, and a system inspector. |
+| Local API | Python standard-library HTTP server in `src/web/server.py`. It serves the built UI and JSON endpoints. |
+| Agent | `GroundedAgent` in `src/agent.py` composes Tier 1 memory/graph, Tier 2 planning/execution/evaluation, and Tier 3 mock sensors. |
+| Intent provider | `RuleBasedIntentProvider`: local keyword/rule logic, not an LLM. |
+| Memory | SQLite `MemoryRepository`; the web demo creates an in-memory database for each browser session. |
+| Active graph | NetworkX graph derived from active SQLite facts; it can be rebuilt from the repository. |
+| Environment | Deterministic `MockEnvironment` with LiDAR, camera, ambient-light, and pose capabilities. |
+| Evidence decision | Deterministic Python in `EpistemicEvaluator`; it selects supported conclusions and records justified revisions. |
+| LLM/ReAct | Not implemented in the current app. See [GT-07](https://github.com/dhruvkshah75/groundtruth/issues/17). |
 
-One useful distinction is **entity versus value**. In a fact such as `route_ahead status_is blocked`, `route_ahead` is the entity, `status_is` is the relationship, and `blocked` is the value. The entity is the thing being discussed; the value is what a source claimed about it.
+The Streamlit dashboard has been removed. The React app is the UI to use and maintain.
 
-## How the implemented pieces fit
+## 3. The three layers in simple terms
+
+### Tier 1 — Declarative memory: recorded claims and their history
+
+Tier 1 stores facts in SQLite. A fact is a claim with a subject, relationship, value, source, confidence, observation time, and context.
+
+Example:
 
 ```text
-Shared contracts
-      ↑                       ↑
-      │                       │
-Tier 1: SQLite ledger     Tier 2: intent and plan
-      │                       │
-      └── NetworkX cache      └── future connection to Tier 3
+subject: route_A
+predicate: status_is
+object: clear
+source_agent: static_map
+confidence_score: 0.95
+context: room_101, robot_base
 ```
 
-The arrows describe shared data formats and planned handoffs, not a complete running end-to-end agent. The merged code supplies the contract, memory, graph, and planning components. Application wiring and execution are still future work.
+The fact says what the static map claimed. It does not prove that the route is clear now. SQLite keeps older facts when a later fact replaces them. A revision marks the old fact as superseded, stores the replacement, and records an audit event explaining why.
 
-### Shared contracts
+The active NetworkX graph is a projection of active facts for relationship views. It is not a second source of truth. SQLite remains authoritative, and the graph can be rebuilt from SQLite.
 
-The Pydantic models in `src/contracts/models.py` are the common vocabulary. They validate required fields and reject malformed data at component boundaries. A `SpatialContext`, for example, can say that a reading belongs to `room_101`, was made by `robot_01`, used `robot_base` as its frame of reference, and came from `world_version=4`.
+In the browser app, each session uses SQLite `:memory:`. This is real SQLite behavior, but the data exists only while that server process/session is alive; it is not persistent storage across server restarts.
 
-The contract layer does not store facts, read sensors, call an LLM, or decide which source is correct.
+### Tier 2 — Procedural layer: decide what evidence is needed and compare it
 
-For example, the shared `IntentRequest` is intentionally small: it contains an allowed `intent`, zero or more user-facing `entity_mentions`, and the original `user_question`. It does not contain SQL, a Python method name, or an arbitrary list of tools. This keeps the provider's output easy to validate and limits what it can ask the rest of the program to do.
+Tier 2 connects the user request to memory and sensors. The current process is deterministic:
 
-### Tier 1: SQLite stores claims and history
+1. `RuleBasedIntentProvider` classifies the wording into an allowed intent.
+2. `IntentPlanner` validates the provider's raw response against the shared `IntentRequest` contract. It preserves the user's original question and has bounded repair/reconsideration behavior.
+3. Entity resolution maps user wording such as “front route” or “red box” to a canonical ID such as `route_A` or `box_01`. Ambiguous or missing entities stop safely; the agent does not choose a random match.
+4. `CapabilityValidator` checks that the requested sensor exists and is registered with the right kind.
+5. `PlanBuilder` turns the validated intent into required typed memory and observation operations.
+6. `CompositionService` and `PlanExecutor` execute those operations through repository and environment interfaces.
+7. `EpistemicEvaluator` compares the actual returned facts and observations. It creates the final status, answer, perspectives, and, where justified, a Tier 1 revision/audit event.
+8. `GroundedAgent` returns the result and current graph/facts to the web service.
 
-`MemoryRepository` in `src/declarative/memory_repository.py` is the durable evidence store. Its main operations are:
+The rule-based provider is a small deterministic classifier. It checks phrases such as “route”, “clear”, “color”, “history”, and “why”. It is useful for repeatable tests and the current local demo, but it does not understand arbitrary wording like a language model and does not perform LLM reasoning.
 
-- `record_fact(assertion)` stores a new claim and returns a `StoredFact`.
-- `query_facts(query)` returns exact matches as typed facts; it can retrieve active or historical facts.
-- `record_revision(...)` atomically stores a replacement, marks the previous fact as superseded, and records an audit event.
-- `get_audit_chain(fact_id)` returns the facts and events needed to trace a belief’s history.
-- `add_alias(...)` and `resolve_entity(...)` map user-facing names to canonical IDs or report ambiguity/missing entities.
+### Tier 3 — Sensorimotor environment: a deterministic mock world
 
-A stored fact keeps several different kinds of information together:
+Tier 3 owns the simulated robot, room, obstacles, objects, and light. It computes observations from that world. It does not read the user's question, query SQLite, or decide which source is true.
 
-| Field | What it tells us |
-| --- | --- |
-| `subject`, `predicate`, `object` | The claim itself, such as `route_ahead status_is blocked`. |
-| `source_agent` | Who or what supplied the claim, such as a map, user, or sensor. |
-| `confidence_score` | The source's confidence value; it is not, by itself, a truth decision. |
-| `observed_at` | When the source says it observed the claim. |
-| `created_at` | When the repository stored the claim. This can differ from `observed_at`. |
-| `context` | The place, observer, world version, frame of reference, and optional extra scope for which it applies. |
-| `evidence` | Supporting source data retained with the claim. |
-| `superseded_by` | Empty for an active claim; otherwise points to its replacement fact. |
+Currently advertised sensor capabilities are:
 
-This distinction helps answer questions such as “When did the sensor see this?” (`observed_at`) versus “When did the agent learn it?” (`created_at`). Historical facts can also be queried without presenting them as the current state.
+- `lidar_scan` — measures a front obstacle or reports a clear scan;
+- `camera_detect` — returns visible object IDs and apparent color;
+- `ambient_light` — returns light intensity and color cast;
+- `robot_pose` — returns robot position and direction.
 
-Example: if a map says a route is clear and a later LiDAR-derived claim says it is blocked, both claims remain in SQLite. A revision links the old claim to the new one and records the reason. The old claim is no longer active, but it is still available for historical questions and audit explanations. Tier 1 preserves evidence; it does not itself decide whether LiDAR should win.
+The mock camera has a documented deterministic rule: a configured red object under yellow light appears brown. This is a testable simulation rule, not a physical color-science model. Test/configuration helpers can replace the world, set the pose, or configure objects and obstacles; these helpers are not public robot action tools.
 
-Here is the same history in simplified form:
+## 4. Terms used in the code and UI
 
-| Fact ID | Claim | Source | Active status |
-| --- | --- | --- | --- |
-| `fact_map_01` | `route_ahead status_is clear` | `static_map` | Superseded by `fact_lidar_02` |
-| `fact_lidar_02` | `route_ahead status_is blocked` | `lidar_sensor` | Active |
+| Term | Plain meaning | Example |
+| --- | --- | --- |
+| **Provider** | The component that interprets or structures a user's question. | Today: `RuleBasedIntentProvider`; planned in GT-07: a real LLM adapter. |
+| **LLM/model** | A language model that can interpret flexible wording. | No LLM is connected in the current app. |
+| **ReAct** | A bounded reason, act, observe cycle: request an allowed operation, receive its result, then respond. | Planned milestone: model selects a constrained intent; Python executes required operations and sends real results back. |
+| **Intent** | The category of the user's request; not the answer and not a Python function call. | `current_route_status` means “ask about a route now”. |
+| **Entity** | The thing being discussed. | `route_A` or `box_01`. |
+| **Alias / canonical ID** | A user-friendly phrase / the stable internal name it resolves to. | “front route” → `route_A`. |
+| **Capability** | A sensor or action the environment says it supports. | `lidar_scan` is a sensor capability. |
+| **Plan operation** | A typed evidence request created by deterministic Python. | Query active route facts; request a fresh LiDAR observation. |
+| **Evidence ID** | A stable ID for one stored fact or observation. | Used to trace which memory claim or sensor reading supports a result. |
+| **Source / provenance** | Who supplied a claim and what record supports it. | `bot_02`, ticket `MAINT-4091`. |
+| **Observation** | A sensor result from one particular world state. | LiDAR saw an obstacle 12 cm ahead in `room_101`. |
+| **Spatial context** | Where, when, and from whose point of view a fact or reading applies. | `room_101`, observer `robot_1`, frame `robot_base`, world version. |
+| **Frame of reference** | The coordinate viewpoint used for a measurement. | `robot_base` means “in coordinates relative to the robot”. |
+| **Belief revision** | A new claim becomes active and supersedes an older claim. | Current LiDAR evidence replaces the active “route is clear” belief. |
+| **Audit event** | A record of why a revision happened and which rule was applied. | `lidar_overrides_map`. |
+| **Graph projection** | A rebuildable NetworkX view of active SQLite facts. | An active edge `route_A —status_is→ blocked`. |
 
-The IDs above are explanatory labels, not literal UUIDs from the database. A historical query can return both rows; an active query returns the second one. The revision audit can explain why the old claim stopped being active.
+For a fact such as `route_A status_is blocked`, `route_A` is the **entity**, `status_is` is the **relationship**, and `blocked` is the **value**. “12 cm” alone has no useful meaning unless it is attached to a sensor, robot, location, time/world version, and frame of reference.
 
-### Tier 1: NetworkX projects active facts
-
-`ActiveBeliefGraph` in `src/declarative/active_graph.py` builds an in-memory `MultiDiGraph` from active `StoredFact` records. Each fact becomes a directed edge from its subject to its object, keyed by that fact’s ID and carrying source, time, confidence, context, and other metadata.
-
-It is a **rebuildable cache**, not a second database. Multiple active claims between the same entities are kept as separate edges. `get_graph()` and `rebuild()` return deep copies so a caller’s edits do not alter the internal cache. `check_graph_consistency` in `src/declarative/consistency.py` compares the graph with active and, when checking stale edges, superseded facts supplied by the caller.
-
-For the example above, the active graph contains an edge for `fact_lidar_02` from `route_ahead` to `blocked`. It does not contain the old `fact_map_01` edge because that fact is superseded. SQLite still has both rows. If two unsuperseded sources make different claims, the graph keeps both edges; it does not choose a winner or erase a disagreement.
-
-Known integration follow-up: cache invalidation is automatic only when writes go through `GraphSyncedRepository`. A direct write to the still-public `MemoryRepository` can bypass it. The team recorded this in [issue #13](https://github.com/dhruvkshah75/groundtruth/issues/13) for the application-connection work. That issue also tracks a documentation correction for the consistency-check call and formatting cleanup from PR #11.
-
-### Tier 2: a provider proposes; Python validates and plans
-
-`IntentProvider` is a small interface. A future real LLM adapter could implement it, while tests use a fake provider with prepared responses. The provider returns raw, untrusted data. It does not receive permission to query memory, call sensors, or execute actions.
-
-`IntentPlanner` checks the provider’s response against the shared `IntentRequest` contract. It preserves the original user question, asks for at most one repair if the response is malformed, and returns a structured safe fallback if the repaired response is still invalid. A provider outage is represented separately from bad structured output.
-
-The allowed intent names are:
-
-| Intent | Meaning in the current planner |
-| --- | --- |
-| `current_route_status` | Ask about the present status of one route/entity. The plan includes active status memory and a LiDAR request if that capability is advertised. |
-| `current_object_perception` | Ask about an object’s current appearance. The plan requests camera observation when available. |
-| `historical_fact_lookup` | Ask what was recorded about an entity over time. The plan queries history and requests no sensor. |
-| `audit_explanation` | Ask why a belief changed. The plan gets matching fact IDs from memory, then requests their audit chains. |
-| `current_robot_pose` | Ask for the robot’s present pose. The plan requests the `robot_pose` observation. |
-| `environment_action` | Ask the robot to do something. It currently stops safely because the plan contract has no approved action name/safety execution flow. |
-| `unsupported` | The provider says the request does not fit the available supported categories. It enters the bounded review described below. |
-
-The allowed list is a contract-level limit; an arbitrary provider label such as `read_weather` is invalid data. It gets the one repair attempt. A valid `unsupported` value is different: it is valid structured data, so it proceeds to the unsupported-request review.
-
-`EntityResolver` is injected into `PlanBuilder`. It resolves a mention to one canonical ID, returns a clarification fallback for multiple candidates, or returns a safe no-plan result when no entity is found. The builder does not guess which ambiguous entity the user meant.
-
-`CapabilityValidator` checks exact advertised capability names and kinds. It prevents a plan from requesting an imaginary sensor or mistaking an action for a sensor. It validates descriptors; it does not run them.
-
-Example plan for “Can I move forward?” after the provider proposes `current_route_status` for `front route` and the resolver maps it to `route_ahead`:
+## 5. Current request flow from the browser
 
 ```text
-intent: current_route_status
-resolved entity: route_ahead
-memory operation: query active route_ahead status_is facts
-observation operation: request lidar_scan for route_ahead (if advertised)
+User types a question or loads a preset
+  -> React calls the local Python HTTP API
+  -> X-Session-ID selects that browser's AgentSession
+  -> AgentSession calls GroundedAgent.ask(question)
+  -> rule-based provider proposes an allowed intent
+  -> deterministic planner validates and builds the evidence plan
+  -> executor queries SQLite and/or calls MockEnvironment.observe(...)
+  -> EpistemicEvaluator applies the evidence policy and may revise memory
+  -> API returns answer, status, facts, graph, sensor telemetry, revisions, and environment
+  -> React displays those returned values in chat and the system inspector
 ```
 
-If LiDAR is absent, the plan can retain the memory lookup but marks current status unverifiable. That prevents an old map claim from being presented as a fresh measurement. This example describes the plan produced by code; no executor currently runs these operations.
+There is currently **no call to a model API anywhere in this path**. The answer comes from deterministic Python templates and evaluation rules. The frontend does not invent replacement facts when the API fails; it displays the API error.
 
-The provider's proposal is conceptually shaped like this:
+### Frontend/API routes
 
-```json
-{
-  "intent": "current_route_status",
-  "entity_mentions": ["front route"],
-  "user_question": "Can I move forward?"
-}
-```
-
-This is a sample of the **provider-to-planner data**, not a complete answer. The planner checks that the intent is allowed and the question has not been changed. `PlanBuilder` then resolves `front route` to a canonical ID and creates the memory and observation request objects. The later executor—when implemented—would perform those requests and pass the resulting evidence to a policy/resolution stage.
-
-Some intents create different plans:
-
-| User asks | Intent | Planned evidence |
-| --- | --- | --- |
-| “What did we record about route A earlier?” | `historical_fact_lookup` | Historical facts for the resolved route; no sensor request. |
-| “Why did the route change from clear to blocked?” | `audit_explanation` | An active fact lookup followed by audit-chain requests for facts returned by that lookup. |
-| “Where are you right now?” | `current_robot_pose` | A `robot_pose` observation; memory is not substituted for current pose. |
-| “Move forward.” | `environment_action` | Safe no-plan fallback until an allowed action name and safety-gated execution path exist. |
-
-These are plan shapes only. They do not mean the underlying history, sensor, or action interface is already connected to a full running agent.
-
-### Why observation context matters
-
-Suppose a future Tier 3 sensor reports “obstacle 12 cm ahead.” The number alone is incomplete. A usable observation needs to be tied to enough context to interpret it, such as:
-
-```text
-location: room_101
-observer: robot_01
-frame_of_reference: robot_base
-world_version: 4
-measurement: nearest obstacle is 12 cm in front
-```
-
-`robot_base` means the measurement is relative to the robot's own coordinate frame. `room_101` tells us where that robot is; `world_version=4` identifies which simulated world state was observed. These example values illustrate the contract's purpose. GT-02 is still open, so the current code does not yet calculate or emit this LiDAR result.
-
-### Unsupported-intent recovery
-
-The code includes a deliberately bounded recovery step for false negatives: the provider may label a supported question `unsupported` even though the agent has a relevant capability. `IntentCoverageReviewer` checks a small set of documented wording rules and checks whether the required capability/data interface is available. It only identifies candidate intent categories; it cannot resolve an entity, make a plan, or call a tool.
-
-The flow is:
-
-1. No wording rule matches: return an uncertain `unsupported_after_review` fallback with no operations.
-2. More than one category matches: return an uncertain fallback with the possible intent choices and matching rule IDs; the user needs to clarify.
-3. Exactly one category matches: ask the provider once more, restricted to that category or `unsupported`.
-4. If reconsideration is invalid, outside the allowed choices, unavailable, or remains `unsupported`, return a safe fallback. Only a valid allowed supported intent continues to normal entity resolution and planning.
-
-The rules are a small allowlist of wording clues, not a hidden general-purpose classifier:
-
-| Wording family | Candidate intent | Required availability |
-| --- | --- | --- |
-| `route`, `path`, `ahead`, `forward`, `blocked`, `blocking`, `obstacle` | `current_route_status` | `lidar_scan` registered as a sensor |
-| `colour`/`color`, `appears`, `looks like`, `visible object` | `current_object_perception` | `camera_detect` registered as a sensor |
-| `where are you`, `current location`, `current position` | `current_robot_pose` | `robot_pose` registered as a sensor |
-| `earlier`, `before`, `historical`, `history` | `historical_fact_lookup` | History interface marked available |
-| `audit`, `why changed`, `why believe`, `evidence history` | `audit_explanation` | Audit interface marked available |
-
-Word/phrase boundaries are used so a larger word containing a clue does not automatically count as a match. History and audit candidates are ignored unless their corresponding availability flags are enabled.
-
-Example: “Is anything blocking me?” is initially classified as `unsupported`. If the coverage rules identify only route status and `lidar_scan` is advertised, the provider is asked to reconsider between `current_route_status` and `unsupported`. If the question matches both route and object-perception rules, the system does not choose one; it returns clarification choices.
-
-This improves recovery for known supported phrasings, but it is not a general natural-language parser. A genuinely unsupported question such as “What is the room temperature?” remains unsupported when there is no matching supported capability. The feature cannot invent tools or evidence.
-
-All planning fallbacks are structured uncertain results: they have no conclusion, evidence IDs, conflicting IDs, or policy rule. Entity ambiguity candidates and intent-category clarification choices are separate fields.
-
-Common outcomes are:
-
-| Situation | Planner outcome | Why it is safe |
-| --- | --- | --- |
-| Entity alias maps to one ID | Continue with the canonical ID. | Memory and observation requests refer to a stable entity. |
-| “The box” maps to two IDs | Return `ambiguous_entity` with both candidate IDs. | The planner does not guess which box was meant. |
-| No known entity matches | Return a no-plan missing-entity fallback. | No tool request is built for a guessed entity. |
-| Provider returns malformed intent twice (initial plus one repair) | Return `invalid_provider_output_after_repair`. | Invalid provider data cannot flow into planning or cause unbounded retries. |
-| Provider returns a well-formed unsupported intent and no wording rule matches | Return `unsupported_after_review`. | A valid but unsupported request stays unsupported; no operations are created. |
-| Unsupported wording matches multiple intent families | Return clarification choices and rule IDs. | The system asks for clarification instead of choosing a category. |
-
-Fallbacks are typed values for later display or logging. They are not natural-language answers, and they do not claim that a sensor or repository was queried.
-
-### What happens to the LLM in the current code
-
-There is no concrete Groq, Llama, or other LLM SDK adapter in the merged source. Tests inject fake providers. When a real adapter is added, it will propose/repair/reconsider an intent only. Deterministic Python will still validate it, resolve entities, check capabilities, and build the evidence plan. The actual evidence retrieval, comparison policy, belief revision decision, and final user-facing response are not implemented as an end-to-end flow yet.
-
-## Current implementation boundaries
-
-| Implemented now | Not implemented/connected yet |
+| Route | Purpose |
 | --- | --- |
-| Shared Pydantic contracts and validation. | Tier 3 `MockEnvironment` and real sensor computations; [GT-02 issue #2](https://github.com/dhruvkshah75/groundtruth/issues/2) remains open. |
-| SQLite facts, exact queries, aliases, atomic revisions, and audit trails. | Runtime wiring that sends a user request through every tier. |
-| Active-fact graph projection and graph/SQLite consistency reports. | An executor that performs the plan’s memory and observation operations. |
-| Intent validation, one malformed-output repair, entity resolution boundary, capability checks, deterministic plan construction, and bounded unsupported-intent review. | Evidence resolution/policy that compares actual memory and sensor results and decides whether to record a belief revision. |
-| Unit and Tier 1 integration tests using fakes or SQLite. | A production LLM adapter, final response generation/guard, dashboard, and public robot actions. |
+| `GET /api/health` | Reports that the API is running and names the provider actually wired in (`RuleBasedIntentProvider`, deterministic local demo). This does not mean an LLM is available. |
+| `GET /api/state` | Returns the current session's chat history, graph, ledger, audit events, environment, and capabilities. |
+| `POST /api/ask` | Runs one user question through the current deterministic agent. |
+| `POST /api/scenarios/scenario-a` | Resets and seeds Scenario A in the backend session. |
+| `POST /api/scenarios/scenario-b` | Resets and seeds Scenario B in the backend session. |
+| `POST /api/reset` | Clears that session's agent, in-memory ledger, and chat history. |
 
-An `ExecutionPlan` should therefore be read as “these are the approved evidence requests,” not “the robot has already queried memory, scanned with LiDAR, or acted.”
+The browser keeps a session UUID in `sessionStorage` and sends it using `X-Session-ID`. The server maintains separate in-memory agent/SQLite/environment state for each session, with a local demo limit of 128 sessions. Restarting the Python server loses these ephemeral sessions. Scenario buttons call backend endpoints; the scenarios are seeded server-side, not painted into the UI as fake answers.
 
-## One request, from start to finish (as components exist today)
+## 6. Scenario A — static map versus live LiDAR
 
-For “Can I move forward?”, the current pieces can be described in this order:
+### What is set up
 
-1. **Intent proposal:** an injected provider returns a raw structure that proposes `current_route_status` and mentions “front route.” In tests, that provider is a fake; no production LLM is connected.
-2. **Intent validation:** `IntentPlanner` checks the structure against `IntentRequest`, verifies the original question, and accepts the value only if it is in the fixed intent set. If malformed, it allows one repair attempt.
-3. **Entity resolution:** the planning path passes “front route” through the injected resolver. A single result becomes its canonical ID, such as `route_ahead`; multiple or missing results stop planning safely.
-4. **Capability validation:** the builder checks whether `lidar_scan` is advertised as a sensor. A missing sensor means the current status cannot be verified; a wrong-kind or invalid registry is treated as a configuration problem.
-5. **Plan construction:** `PlanBuilder` creates an active-memory query and, when available, a LiDAR observation request. These are typed data objects.
-6. **Current stopping point:** the components return the intent or `PlanningOutcome`. No executor runs the operations, no LiDAR is read, no evidence is compared, and no user-facing factual response is generated by the current implementation.
+When **Load Scenario A** is pressed, the Python service resets that browser session and seeds the real in-memory backend components:
 
-This separation matters for presentations: the team has implemented the **validated planning boundary**, not yet the end-to-end robot response loop.
+- `robot_1` is at `(0 cm, 0 cm)` in `room_101`, facing north, with frame `robot_base`.
+- A static-map fact says `route_A status_is clear`, source `static_map`, confidence `0.95`, map version `v1.0`, and evidence source `building_blueprints`.
+- The mock world contains active obstacle `obs_01` at `(0 cm, 12 cm)` in the same room.
+- The UI places a suggested question in the composer: “Is the front route clear to move forward?” The assignment's test question is: “Is your route clear? Justify your response by inspecting your internal system layers.”
 
-## Implementation map
+These are controlled backend fixtures. The LiDAR reading itself is computed from the robot pose and obstacle coordinates; it is not a string hardcoded into the browser response.
 
-- `src/contracts/models.py` — cross-tier data contracts.
-- `src/declarative/memory_repository.py` and `schema.py` — SQLite evidence ledger and schema.
-- `src/declarative/active_graph.py` and `consistency.py` — active graph projection and consistency diagnostics.
-- `src/procedural/intent_provider.py` — provider interface; no LLM SDK.
-- `src/procedural/intent_planner.py` and `intent_coverage_reviewer.py` — intent validation and bounded unsupported review.
-- `src/procedural/entity_resolver.py`, `capability_validator.py`, and `plan_builder.py` — narrow boundaries and deterministic planning.
-- `src/procedural/execution_plan.py` and `fallback_results.py` — typed plans and safe no-plan outcomes.
+### What happens when asked
 
-## Verification note
+1. The current rule-based provider recognizes route/clear/forward wording and proposes `current_route_status` for the route.
+2. The planner validates the intent. The resolver maps the route mention to `route_A`.
+3. The deterministic plan requests active route-status memory and a fresh `lidar_scan` for the front direction.
+4. SQLite returns the static-map claim. Tier 3 calculates an obstacle directly ahead and returns `blocked` at `12.0 cm`, along with an observation ID and spatial context.
+5. `EpistemicEvaluator` verifies that the stored claim and observation apply to the same location and frame. Since the static-map claim says clear and the fresh sensor says blocked, the evaluator applies `lidar_overrides_map`.
+6. Tier 1 records the LiDAR-backed blocked claim, marks the old clear claim superseded, and writes an audit event. The graph projection refreshes from active facts and shows the active route as blocked.
+7. The deterministic evaluator returns an answer explaining the conflict and revision. React displays the answer, status, audit/revision details, sensor telemetry, ledger, graph, and environment values.
 
-After PR #11 was merged, the full test suite on `main` passed: **223 tests**. Ruff lint passed in the review snapshot. Ruff formatting still reported unformatted PR files (and three pre-existing files on `main`); that cleanup and the cache-invalidation integration are tracked in [issue #13](https://github.com/dhruvkshah75/groundtruth/issues/13). These results describe that merged snapshot, not an ongoing CI guarantee.
+The expected answer is equivalent to:
 
-## Reading order
+> No, my static mapping says it is clear, but my live LiDAR readings indicate a physical obstruction at 12.0 cm right now. I have downgraded my map confidence and updated my belief graph.
 
-For more detail, continue with [Architecture Decisions](Architecture_Decisions.md), the [Tier 1 guide](tier1/Tier1_Implementation_Guide.md), and the [Tier 2 guide](tier2/Tier2_Implementation_Guide.md). The original assignment context is in [I, Agent Masterplan](I_Agent_Masterplan.md).
+This wording is currently generated by deterministic Python, not by an LLM. The “updated my belief graph” claim is supported by the repository revision and derived graph state; it should not be reported if the write did not happen.
+
+### What the 12 cm means
+
+The measurement is the forward distance from `robot_1`'s sensor origin to `obs_01` in the simulated `room_101`, in centimetres. The robot faces north; `robot_base` identifies the robot-relative frame. If the robot were in another room, facing another direction, or at another position, the result could differ. The number is not a global coordinate or a measurement from the user's position.
+
+## 7. Scenario B — user, camera, and history
+
+### What is set up
+
+When **Load Scenario B** is pressed, the service resets the session and seeds:
+
+- `robot_1` in `room_101` at `(0 cm, 0 cm)`, facing north.
+- Visible object `box_01`, intrinsic/configured color red, at `(10 cm, 10 cm)`.
+- Yellow ambient light with intensity `0.8`.
+- A Tier 1 fact for `box_01`: `painted_color_is blue`, sourced from `bot_02`, confidence `1.0`, with evidence `action=painted_blue` and ticket `MAINT-4091`.
+- A suggested question in the composer. The assignment asks: “What color does the user think the object is, what color do you register it as, and what does your data history say its true state is?”
+
+The red object and yellow lighting are backend environment configuration. The camera computes the apparent color `brown` from that configuration. The blue value is a separate historical assertion from SQLite; it is not supplied by the camera.
+
+### What happens when asked
+
+1. The rule-based provider recognizes the color/perspective wording and proposes `current_object_perception` for the box.
+2. The deterministic plan requests a camera observation for the resolved object.
+3. The camera returns the actual observed object ID (`box_01`), apparent color (`brown`), observation ID, and lighting in observation context.
+4. The evaluator extracts the expected color from the user's wording and queries historical color claims for the **object ID returned by the camera**. It does not guess the history subject from an unrelated text match.
+5. The evaluator keeps three perspectives separate and returns them to the UI:
+   - **User expectation:** red, because that is the target color stated in the question.
+   - **Current egocentric camera view:** brown under yellow lighting.
+   - **Historical/third-party record:** the latest stored color claim says blue, from `bot_02`.
+6. React shows the distinct perspective cards, sensor telemetry, provenance/ledger facts, and environment lighting/object state.
+
+The historical blue statement means **“the database contains a sourced record saying blue”**. It does not prove the object is physically blue now. If there is no historical color fact, the agent reports that no record was found; it must not invent blue or `bot_02`.
+
+As with Scenario A, the current final wording and perspective extraction are deterministic Python; no LLM makes the response today.
+
+## 8. What the UI shows
+
+- **Left panel:** API connection/provider details, Scenario A and B presets, reset, and the three layer names.
+- **Center:** conversation, returned answer/status, perspective cards, revision summary, and question composer.
+- **Right system inspector:** Tier 2 result/plan reason/verification, audit events and sensor telemetry; perspectives; Tier 1 active graph and full SQLite ledger; Tier 3 world version, pose, light, obstacles, objects, and advertised sensors.
+- **Layout controls:** the left panel can be hidden/shown; the right inspector can be hidden/shown and resized on wide screens. The UI is responsive on smaller screens.
+
+The inspector reports facts returned by the backend. “No observation”, “no history”, and “no executable plan” are explicit empty states rather than substitutes filled with example values.
+
+## 9. What is implemented and what is next
+
+### Implemented on current `main`
+
+- Shared typed contracts for intents, facts, observations, spatial context, and grounded results.
+- SQLite fact storage, entity aliases/resolution, history, atomic revisions, and audit trails.
+- NetworkX active-fact projection and cache consistency support.
+- Tier 2 intent validation, one bounded malformed-response repair, capability checks, deterministic plan creation, plan execution, unsupported-intent review, and safe outcomes.
+- Deterministic mock LiDAR, camera, ambient light, and pose behavior.
+- `GroundedAgent` composition, deterministic evidence evaluation, Scenario A revision, and Scenario B perspective separation.
+- React/TypeScript UI connected to a local session-scoped Python API; API and frontend integration tests.
+- No Streamlit UI or Streamlit runtime dependency.
+
+### Not implemented yet
+
+- A real Groq/Llama/other LLM adapter in the application.
+- LLM structured/function calling, a model-to-tool-result ReAct loop, and model-generated grounded response wording.
+- A public robot movement/action execution API, physical hardware integration, learned vision, or persistent multi-user session storage.
+
+The next planned task is [GT-07, issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17), which covers the real LLM ReAct loop, React provider/status/trace updates, and refreshed current-system documentation. Until it is implemented and tested, present the existing app as a **deterministic end-to-end prototype of the layer integration and Scenario A/B evidence flow**, not as completion of the LLM/ReAct milestone.
+
+## 10. Where to read the code and run it
+
+| Concern | Main files |
+| --- | --- |
+| Shared data shapes | `src/contracts/models.py` |
+| Tier 1 repository and graph | `src/declarative/memory_repository.py`, `active_graph.py`, `consistency.py` |
+| Tier 2 plan and evaluation | `src/procedural/intent_planner.py`, `plan_builder.py`, `plan_executor.py`, `epistemic_evaluator.py` |
+| Tier 3 world and sensors | `src/sensorimotor/world_models.py`, `mock_environment.py` |
+| Agent composition | `src/composition.py`, `src/agent.py` |
+| Web service/API | `src/web/service.py`, `src/web/server.py` |
+| React UI | `frontend/src/App.tsx`, `api.ts`, `types.ts`, `app.css` |
+| Scenario/API tests | `tests/integration/test_epistemic_scenarios.py`, `tests/integration/test_web_api.py`, `tests/unit/web/test_service.py` |
+
+Follow [Local Development Setup](Local_Development_Setup.md) to run the app. Automated tests use local deterministic components and do not need an LLM API key or internet connection.

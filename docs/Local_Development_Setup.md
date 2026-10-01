@@ -92,13 +92,11 @@ Never edit `uv.lock` by hand. Before adding a new package, check whether it can 
 
 ## LLM configuration
 
-The deterministic agent and all tests must work with no LLM key. The optional Groq adapter reads `GROQ_API_KEY` only when explicitly selected. Put local secrets in `.env` (which must be gitignored):
+The current `main` branch does **not** include a Groq or other live LLM adapter. The browser app uses `RuleBasedIntentProvider` and reports `deterministic local demo` from `/api/health`. Setting `GROQ_API_KEY` does not currently connect a model.
 
-```text
-GROQ_API_KEY=replace-with-your-personal-key
-```
+The LLM function-calling/ReAct integration is tracked by [GT-07, issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17). Until that work is merged, you can run and test the scenarios offline as described above. Do not present the current provider as an LLM.
 
-Do not paste keys in source code, issues, pull requests, screenshots, or commits. Use mocked LLM responses in tests.
+When GT-07 adds a real provider, this section must be updated with the provider's exact environment-variable and model configuration. Never put keys in source code, issues, pull requests, screenshots, or commits; tests should inject fake provider responses and run without secrets or network access.
 
 ## Healthy-clone check
 
