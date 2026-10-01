@@ -35,6 +35,44 @@
         }
       },
       "updatedAt": "2026-10-01T06:19:11.122465+00:00"
+    },
+    "/graph": {
+      "targetKind": "new-ui",
+      "projectId": "1b61c172-3e85-477c-90f1-d186adfdda54",
+      "activeDraftId": "7c670fe7-7ceb-431b-9d6d-804c236df9f8",
+      "designSystemPath": ".superdesign/design-system.md",
+      "referenceIds": [
+        "59ba4637-129a-494a-8819-ab3705e785fb"
+      ],
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "frontend/src/App.tsx:1:60",
+        "frontend/src/App.tsx:85:150",
+        "frontend/src/App.tsx:220:420",
+        "frontend/src/app.css:1:55",
+        "frontend/src/app.css:65:105",
+        "frontend/src/app.css:170:220",
+        "frontend/src/api.ts",
+        "frontend/src/types.ts",
+        "frontend/package.json"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "28f616efb47777b0ab004dc39ca4e5fcab8e265899ded1ed23aaf8eed76f9a3e",
+        "frontend/src/App.tsx": "57fbe3c4b0b5da2fb156621c6f6148085e1115c66320f78337c8d5e0915309dc",
+        "frontend/src/app.css": "43da7919235cd4b851e47e21d91cac7f84c042d67946771497497c0c7806e6a9",
+        "frontend/src/api.ts": "7d2f6e1ab3a5f231559d53e11fcf024477a76108c6b52c8470023021282b1b05",
+        "frontend/src/types.ts": "31bf03068a629ca865216d9c68796e39eddd4acc5fc4873976b0a95ae55a4834",
+        "frontend/package.json": "349d72bc63134b3cbbe0eb72edf6d670f88da338e24557b434241260a4bfdba9"
+      },
+      "components": [],
+      "drafts": {
+        "7c670fe7-7ceb-431b-9d6d-804c236df9f8": {
+          "title": "GroundTruth Belief Graph",
+          "visualDirection": "Dark, restrained teal 3D belief graph with provenance details, revision states, and an independent observability route",
+          "currentVersion": 1
+        }
+      },
+      "updatedAt": "2026-10-01T18:22:50+00:00"
     }
   }
 }

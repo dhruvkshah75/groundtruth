@@ -29,6 +29,7 @@
 *::-webkit-scrollbar-thumb:hover { background: #707070; }
 html, body, #root { width: 100%; height: 100%; min-width: 320px; margin: 0; }
 body { height: 100dvh; overflow: hidden; background: var(--surface); }
+.route-loading { display: grid; width: 100%; height: 100dvh; place-items: center; color: var(--muted); background: var(--surface); font-size: 12px; }
 button, textarea { font: inherit; }
 button { color: inherit; }
 button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -44,7 +45,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .conversation-column { grid-column: 3; }
 .inspector { grid-column: 4; }
 .icon-rail { position: relative; z-index: 30; display: flex; min-height: 0; flex-direction: column; align-items: center; gap: 12px; padding: 15px 0; border-right: 1px solid var(--line); background: var(--surface-rail); }
-.rail-button { display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 10px; color: #777; background: transparent; cursor: pointer; transition: background .16s ease, color .16s ease; }
+.rail-button { display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 10px; color: #777; background: transparent; text-decoration: none; cursor: pointer; transition: background .16s ease, color .16s ease; }
 .rail-button:hover, .rail-button.active { color: #ededed; background: #2a2a2a; }
 .rail-scenarios { margin-top: 2px; }
 
@@ -114,6 +115,22 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .revision-heading { display: flex; align-items: center; gap: 7px; color: #e4bf8d; font-size: 11px; }
 .revision-inline p { margin: 7px 0 0; color: #b7a98f; font-size: 10px; line-height: 1.6; }
 .revision-inline code { color: #e0cba9; }
+.audit-trail-inline { margin: 16px 0 0 38px; padding: 13px; border: 1px solid rgb(97 216 202 / 18%); border-radius: 9px; background: rgb(97 216 202 / 4%); }
+.audit-trail-heading { display: flex; align-items: center; gap: 7px; color: var(--accent); }
+.audit-trail-heading strong { color: #cfe0dc; font-size: 11px; font-weight: 600; }
+.audit-trail-heading span { margin-left: auto; color: #78827f; font-size: 9px; }
+.audit-fact-chain { display: flex; gap: 7px; margin-top: 12px; }
+.audit-fact { position: relative; min-width: 0; flex: 1; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #242624; }
+.audit-fact > span { display: block; color: #777; font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
+.audit-fact strong { display: block; margin-top: 5px; color: #d0d0d0; font-size: 10px; font-weight: 500; overflow-wrap: anywhere; }
+.audit-fact strong code { color: var(--accent); }
+.audit-fact small { display: block; margin-top: 5px; color: #777; font-size: 8px; }
+.audit-fact.superseded { border-style: dashed; opacity: .75; }
+.audit-fact > i { position: absolute; z-index: 1; top: 50%; right: -11px; color: #6b8e86; font-size: 12px; font-style: normal; transform: translateY(-50%); }
+.audit-event-explanation { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line); }
+.audit-event-explanation p { margin: 0; color: #c2c2c2; font-size: 10px; line-height: 1.55; }
+.audit-event-explanation small { display: block; margin-top: 4px; color: #858585; font-size: 8px; }
+.audit-event-explanation code { color: #e0cba9; }
 .working-indicator { display: flex; align-items: center; gap: 9px; padding: 12px 0; color: #9e9e9e; font-size: 11px; }
 .composer-wrap { position: sticky; bottom: 0; z-index: 2; width: 100%; max-width: 850px; align-self: center; padding: 16px 38px 18px; background: linear-gradient(180deg, rgb(32 32 32 / 0%), #202020 17%); }
 .composer { padding: 9px; border: 1px solid var(--line-strong); border-radius: 17px; background: #292929; transition: border-color .16s ease; }
@@ -201,7 +218,9 @@ td small { display: block; margin-top: 3px; color: #858585; font-size: 9px; }
   .conversation-inner { padding: 30px 17px 20px; }
   .empty-conversation { margin-top: 4vh; }
   .user-message { max-width: 90%; font-size: 12px; }
-  .answer-text, .pose-summary, .perspective-cards, .revision-inline { margin-left: 0; }
+  .answer-text, .pose-summary, .perspective-cards, .revision-inline, .audit-trail-inline { margin-left: 0; }
+  .audit-fact-chain { flex-direction: column; }
+  .audit-fact > i { display: none; }
   .perspective-cards { grid-template-columns: 1fr; }
   .composer-wrap { padding: 12px 12px 14px; }
   .composer-hint { display: none; }

@@ -6,6 +6,17 @@ def test_scenario_a_uses_live_lidar_and_records_revision() -> None:
     session = AgentService().get_session("39804313-d398-4f3c-a7ae-ea402866a8b8")
     session.load_scenario("scenario-a")
 
+    baseline = session.snapshot()
+    clear_fact = next(
+        edge
+        for edge in baseline["graph"]["edges"]
+        if edge["source"] == "route_A"
+        and edge["predicate"] == "status_is"
+        and edge["target"] == "clear"
+    )
+    assert baseline["graph"]["node_count"] == 17
+    assert not any(edge["target"] == "blocked" for edge in baseline["graph"]["edges"])
+
     result = session.ask(session.suggested_question)
     state = session.snapshot()
 
@@ -14,9 +25,25 @@ def test_scenario_a_uses_live_lidar_and_records_revision() -> None:
     assert len(result["revisions"]) == 1
     assert result["sensor_telemetry"][0]["measurements"]["nearest_distance_cm"] == 12.0
     assert result["sensor_telemetry"][0]["context"]["frame_of_reference"] == "robot_base"
-    assert len(state["ledger"]) == 2
-    assert len(state["graph"]["edges"]) == 1
-    assert state["graph"]["edges"][0]["target"] == "blocked"
+    route_status_history = [
+        fact
+        for fact in state["ledger"]
+        if fact["subject"] == "route_A" and fact["predicate"] == "status_is"
+    ]
+    assert {fact["object"] for fact in route_status_history} == {"clear", "blocked"}
+    assert any(fact["object"] == "clear" and fact["superseded_by"] for fact in route_status_history)
+    blocked_fact = next(
+        edge
+        for edge in state["graph"]["edges"]
+        if edge["source"] == "route_A"
+        and edge["predicate"] == "status_is"
+        and edge["target"] == "blocked"
+    )
+    clear_history = next(fact for fact in route_status_history if fact["object"] == "clear")
+    assert clear_history["fact_id"] == clear_fact["fact_id"]
+    assert clear_history["superseded_by"] == blocked_fact["fact_id"]
+    assert not any(edge["target"] == "clear" for edge in state["graph"]["edges"])
+    assert state["graph"]["node_count"] == 17
     assert len(state["audit_events"]) == 1
 
 
@@ -71,10 +98,11 @@ def test_sessions_are_isolated_and_reset_clears_live_state() -> None:
     first.load_scenario("scenario-a")
 
     assert first.snapshot()["ledger"]
-    assert second.snapshot()["ledger"] == []
+    assert second.snapshot()["graph"]["node_count"] == 17
 
     first.reset()
     reset_state = first.snapshot()
-    assert reset_state["ledger"] == []
+    assert reset_state["graph"]["node_count"] == 17
+    assert reset_state["graph"]["edge_count"] == 17
     assert reset_state["history"] == []
     assert reset_state["environment"]["obstacles"] == {}

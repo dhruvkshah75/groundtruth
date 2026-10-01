@@ -28,7 +28,75 @@ SCENARIO_B_QUESTION = (
 )
 
 
-def _new_agent(config: ProviderConfig | None = None) -> GroundedAgent:
+def _record_scene_facts(agent: GroundedAgent, facts: list[FactAssertion]) -> None:
+    """Add presentation context to memory without changing a scenario's focal claim."""
+    for fact in facts:
+        agent.memory.record_fact(fact)
+
+
+def _record_scene_relations(
+    agent: GroundedAgent,
+    now: datetime,
+    context: SpatialContext,
+    relations: list[tuple[str, str, str, str, float]],
+) -> None:
+    """Store concise scene relationships as sourced Tier 1 facts."""
+    _record_scene_facts(
+        agent,
+        [
+            FactAssertion(
+                subject=subject,
+                predicate=predicate,
+                object=object_id,
+                source_agent=source,
+                confidence_score=confidence,
+                observed_at=now,
+                context=context,
+            )
+            for subject, predicate, object_id, source, confidence in relations
+        ],
+    )
+
+
+def _record_default_beliefs(agent: GroundedAgent) -> None:
+    """Seed neutral facility knowledge. Takes an agent and returns nothing."""
+    now = datetime.now(UTC)
+    context = SpatialContext(
+        location="room_101",
+        frame_of_reference="map",
+        world_version=1,
+    )
+    _record_scene_relations(
+        agent,
+        now,
+        context,
+        [
+            ("robot_1", "located_in", "room_101", "localization", 0.99),
+            ("robot_1", "facing", "north", "localization", 0.99),
+            ("room_101", "part_of", "building_1", "facility_registry", 0.99),
+            ("room_101", "lighting_is", "white", "ambient_light", 0.96),
+            ("room_101", "environment_is", "indoor", "facility_registry", 0.99),
+            ("camera_01", "mounted_on", "robot_1", "robot_config", 1.0),
+            ("camera_01", "calibrated_for", "visible_spectrum", "robot_config", 1.0),
+            ("lidar_front", "mounted_on", "robot_1", "robot_config", 1.0),
+            ("lidar_front", "calibrated_for", "short_range", "robot_config", 1.0),
+            ("corridor_01", "connects_to", "room_101", "static_map", 0.97),
+            ("corridor_01", "leads_to", "loading_bay", "static_map", 0.97),
+            ("charging_station", "located_in", "room_101", "facility_registry", 0.96),
+            ("inventory_system", "operates_in", "loading_bay", "facility_registry", 0.98),
+            ("facility_map", "describes", "building_1", "static_map", 0.99),
+            ("localization_service", "tracks", "robot_1", "robot_config", 1.0),
+            ("facility_map", "status_is", "active", "static_map", 0.99),
+            ("building_1", "contains", "loading_bay", "facility_registry", 0.99),
+        ],
+    )
+
+
+def _new_agent(
+    config: ProviderConfig | None = None,
+    *,
+    seed_default_beliefs: bool = True,
+) -> GroundedAgent:
     provider, _ = create_provider(config)
     memory = MemoryRepository(":memory:")
     for mention, entity_id in (
@@ -55,11 +123,14 @@ def _new_agent(config: ProviderConfig | None = None) -> GroundedAgent:
         ),
         light=AmbientLight(intensity=1.0, color_cast="white"),
     )
-    return GroundedAgent.create(
+    agent = GroundedAgent.create(
         memory=memory,
         environment=MockEnvironment(world=world),
         provider=provider,
     )
+    if seed_default_beliefs:
+        _record_default_beliefs(agent)
+    return agent
 
 
 @dataclass
@@ -76,15 +147,22 @@ class AgentSession:
         self.agent = _new_agent(self.config)
 
     def reset(self) -> None:
-        """Discard the current ephemeral ledger and create a fresh agent."""
+        """Clear session activity and restore the neutral facility belief baseline."""
         self.agent.close()
         self.agent = _new_agent(self.config)
         self.history.clear()
         self.suggested_question = ""
 
+    def _reset_without_baseline(self) -> None:
+        """Clear all session data before loading a controlled scenario preset."""
+        self.agent.close()
+        self.agent = _new_agent(self.config, seed_default_beliefs=False)
+        self.history.clear()
+        self.suggested_question = ""
+
     def load_scenario(self, name: str) -> None:
         """Reset this session and seed one of the documented demonstration worlds."""
-        self.reset()
+        self._reset_without_baseline()
         now = datetime.now(UTC)
         robot = RobotState(
             robot_id="robot_1",
@@ -107,7 +185,38 @@ class AgentSession:
                             y_cm=12.0,
                             location="room_101",
                             active=True,
-                        )
+                        ),
+                        "obs_02": Obstacle(
+                            obstacle_id="obs_02",
+                            x_cm=32.0,
+                            y_cm=38.0,
+                            location="room_101",
+                            active=True,
+                            radius_cm=6.0,
+                        ),
+                    },
+                    objects={
+                        "pallet_04": SimulatedObject(
+                            object_id="pallet_04",
+                            intrinsic_color="brown",
+                            x_cm=-26.0,
+                            y_cm=30.0,
+                            location="room_101",
+                        ),
+                        "box_02": SimulatedObject(
+                            object_id="box_02",
+                            intrinsic_color="green",
+                            x_cm=28.0,
+                            y_cm=34.0,
+                            location="loading_bay",
+                        ),
+                        "waypoint_01": SimulatedObject(
+                            object_id="waypoint_01",
+                            intrinsic_color="white",
+                            x_cm=0.0,
+                            y_cm=45.0,
+                            location="room_101",
+                        ),
                     },
                     light=AmbientLight(intensity=1.0, color_cast="white"),
                 )
@@ -124,6 +233,126 @@ class AgentSession:
                     evidence={"map_version": "v1.0", "source": "building_blueprints"},
                 )
             )
+            scene_context = SpatialContext(
+                location="room_101",
+                frame_of_reference="map",
+                world_version=1,
+            )
+            _record_scene_facts(
+                self.agent,
+                [
+                    FactAssertion(
+                        subject="robot_1",
+                        predicate="located_in",
+                        object="room_101",
+                        source_agent="localization",
+                        confidence_score=0.99,
+                        observed_at=now,
+                        context=scene_context,
+                        evidence={"pose_source": "map_localization"},
+                    ),
+                    FactAssertion(
+                        subject="robot_1",
+                        predicate="facing",
+                        object="north",
+                        source_agent="localization",
+                        confidence_score=0.99,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="route_A",
+                        predicate="starts_at",
+                        object="room_101",
+                        source_agent="static_map",
+                        confidence_score=0.98,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="route_A",
+                        predicate="leads_to",
+                        object="loading_bay",
+                        source_agent="static_map",
+                        confidence_score=0.98,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="room_101",
+                        predicate="connects_to",
+                        object="loading_bay",
+                        source_agent="static_map",
+                        confidence_score=0.97,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="lidar_front",
+                        predicate="mounted_on",
+                        object="robot_1",
+                        source_agent="robot_config",
+                        confidence_score=1.0,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="camera_01",
+                        predicate="mounted_on",
+                        object="robot_1",
+                        source_agent="robot_config",
+                        confidence_score=1.0,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="pallet_04",
+                        predicate="stored_in",
+                        object="room_101",
+                        source_agent="facility_registry",
+                        confidence_score=0.9,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="box_02",
+                        predicate="stored_in",
+                        object="loading_bay",
+                        source_agent="facility_registry",
+                        confidence_score=0.9,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="room_101",
+                        predicate="lighting_is",
+                        object="white",
+                        source_agent="ambient_light",
+                        confidence_score=0.96,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                ],
+            )
+            _record_scene_relations(
+                self.agent,
+                now,
+                scene_context,
+                [
+                    ("building_1", "contains", "room_101", "facility_registry", 0.99),
+                    ("building_1", "contains", "loading_bay", "facility_registry", 0.99),
+                    ("corridor_02", "connects_to", "room_101", "static_map", 0.97),
+                    ("corridor_02", "leads_to", "loading_bay", "static_map", 0.97),
+                    ("patrol_route_01", "includes", "route_A", "mission_registry", 0.98),
+                    ("robot_1", "assigned_to", "patrol_route_01", "mission_registry", 0.98),
+                    ("waypoint_01", "part_of", "route_A", "static_map", 0.97),
+                    ("obs_02", "registered_in", "room_101", "facility_registry", 0.92),
+                    ("inventory_system", "tracks", "box_02", "inventory_system", 0.99),
+                    ("inventory_system", "tracks", "pallet_04", "inventory_system", 0.99),
+                    ("building_1", "connects_to", "corridor_02", "static_map", 0.97),
+                    ("route_A", "includes", "waypoint_01", "static_map", 0.97),
+                ],
+            )
             self.suggested_question = SCENARIO_A_QUESTION
             return
 
@@ -139,7 +368,29 @@ class AgentSession:
                             location="room_101",
                             x_cm=10.0,
                             y_cm=10.0,
-                        )
+                        ),
+                        "box_02": SimulatedObject(
+                            object_id="box_02",
+                            intrinsic_color="green",
+                            location="room_101",
+                            x_cm=-18.0,
+                            y_cm=24.0,
+                        ),
+                        "shelf_01": SimulatedObject(
+                            object_id="shelf_01",
+                            intrinsic_color="gray",
+                            location="room_101",
+                            x_cm=-24.0,
+                            y_cm=32.0,
+                            bounding_box={"width_cm": 80.0, "height_cm": 190.0},
+                        ),
+                        "lamp_02": SimulatedObject(
+                            object_id="lamp_02",
+                            intrinsic_color="yellow",
+                            location="room_101",
+                            x_cm=0.0,
+                            y_cm=55.0,
+                        ),
                     },
                     light=AmbientLight(intensity=0.8, color_cast="yellow"),
                 )
@@ -155,6 +406,126 @@ class AgentSession:
                     context=SpatialContext(location="room_101"),
                     evidence={"action": "painted_blue", "ticket_id": "MAINT-4091"},
                 )
+            )
+            scene_context = SpatialContext(
+                location="room_101",
+                frame_of_reference="map",
+                world_version=1,
+            )
+            _record_scene_facts(
+                self.agent,
+                [
+                    FactAssertion(
+                        subject="robot_1",
+                        predicate="located_in",
+                        object="room_101",
+                        source_agent="localization",
+                        confidence_score=0.99,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="robot_1",
+                        predicate="facing",
+                        object="north",
+                        source_agent="localization",
+                        confidence_score=0.99,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="camera_01",
+                        predicate="mounted_on",
+                        object="robot_1",
+                        source_agent="robot_config",
+                        confidence_score=1.0,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="camera_01",
+                        predicate="observes",
+                        object="room_101",
+                        source_agent="robot_config",
+                        confidence_score=1.0,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="box_01",
+                        predicate="located_in",
+                        object="room_101",
+                        source_agent="facility_registry",
+                        confidence_score=0.94,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="box_01",
+                        predicate="intrinsic_color_is",
+                        object="red",
+                        source_agent="object_registry",
+                        confidence_score=0.98,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="box_02",
+                        predicate="stored_on",
+                        object="shelf_01",
+                        source_agent="facility_registry",
+                        confidence_score=0.91,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="shelf_01",
+                        predicate="located_in",
+                        object="room_101",
+                        source_agent="facility_registry",
+                        confidence_score=0.96,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="light_01",
+                        predicate="illuminates",
+                        object="room_101",
+                        source_agent="facility_registry",
+                        confidence_score=0.97,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                    FactAssertion(
+                        subject="room_101",
+                        predicate="lighting_is",
+                        object="yellow",
+                        source_agent="ambient_light",
+                        confidence_score=0.96,
+                        observed_at=now,
+                        context=scene_context,
+                    ),
+                ],
+            )
+            _record_scene_relations(
+                self.agent,
+                now,
+                scene_context,
+                [
+                    ("building_1", "contains", "room_101", "facility_registry", 0.99),
+                    ("building_1", "contains", "loading_bay", "facility_registry", 0.99),
+                    ("corridor_02", "connects_to", "room_101", "static_map", 0.97),
+                    ("corridor_02", "leads_to", "loading_bay", "static_map", 0.97),
+                    ("inspection_route_01", "includes", "room_101", "mission_registry", 0.98),
+                    ("robot_1", "assigned_to", "inspection_route_01", "mission_registry", 0.98),
+                    ("lamp_02", "located_in", "room_101", "facility_registry", 0.95),
+                    ("lamp_02", "color_cast_is", "yellow", "ambient_light", 0.96),
+                    ("inventory_system", "tracks", "box_01", "inventory_system", 0.99),
+                    ("inventory_system", "tracks", "box_02", "inventory_system", 0.99),
+                    ("building_1", "connects_to", "corridor_02", "static_map", 0.97),
+                    ("inspection_route_01", "passes_through", "corridor_02", "static_map", 0.97),
+                    ("shelf_01", "stocked_by", "inventory_system", "facility_registry", 0.95),
+                ],
             )
             self.suggested_question = SCENARIO_B_QUESTION
             return

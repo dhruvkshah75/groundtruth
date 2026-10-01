@@ -43,18 +43,27 @@ def test_frontend_api_health_state_scenario_ask_and_reset(tmp_path) -> None:
             assert page.status == 200
             assert b"GroundTruth" in page.read()
 
+        with urllib.request.urlopen(f"{base_url}/graph", timeout=5) as graph_page:
+            assert graph_page.status == 200
+            assert b"GroundTruth" in graph_page.read()
+
         status, health = _request(base_url, "/api/health", session_id)
         assert status == 200
         assert health["provider"] == "RuleBasedIntentProvider"
 
         status, initial = _request(base_url, "/api/state", session_id)
         assert status == 200
-        assert initial["ledger"] == []
+        assert initial["graph"]["node_count"] == 17
+        assert initial["graph"]["edge_count"] == 17
         assert initial["history"] == []
 
         status, loaded = _request(base_url, "/api/scenarios/scenario-a", session_id, {})
         assert status == 200
         assert loaded["environment"]["obstacles"]["obs_01"]["y_cm"] == 12.0
+        assert loaded["graph"]["node_count"] == 17
+        assert loaded["graph"]["edge_count"] >= 20
+        assert {"obs_01", "obs_02"} <= set(loaded["environment"]["obstacles"])
+        assert {"pallet_04", "box_02"} <= set(loaded["environment"]["objects"])
 
         status, answered = _request(
             base_url,
@@ -64,11 +73,19 @@ def test_frontend_api_health_state_scenario_ask_and_reset(tmp_path) -> None:
         )
         assert status == 200
         assert answered["history"][-1]["status"] == "grounded_conflict_resolved"
-        assert answered["graph"]["edges"][0]["target"] == "blocked"
+        assert any(
+            edge["source"] == "route_A"
+            and edge["predicate"] == "status_is"
+            and edge["target"] == "blocked"
+            for edge in answered["graph"]["edges"]
+        )
 
         status, scenario_b = _request(base_url, "/api/scenarios/scenario-b", session_id, {})
         assert status == 200
         assert scenario_b["environment"]["light"]["color_cast"] == "yellow"
+        assert scenario_b["graph"]["node_count"] == 17
+        assert scenario_b["graph"]["edge_count"] >= 20
+        assert {"box_01", "box_02", "shelf_01"} <= set(scenario_b["environment"]["objects"])
         status, perspectives = _request(
             base_url,
             "/api/ask",
@@ -84,7 +101,8 @@ def test_frontend_api_health_state_scenario_ask_and_reset(tmp_path) -> None:
 
         status, reset = _request(base_url, "/api/reset", session_id, {})
         assert status == 200
-        assert reset["ledger"] == []
+        assert reset["graph"]["node_count"] == 17
+        assert reset["graph"]["edge_count"] == 17
         assert reset["history"] == []
     finally:
         server.shutdown()

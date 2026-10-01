@@ -134,9 +134,11 @@ Python strictly owns facts, capability verification, plan construction, sensor e
 | `POST /api/ask` | Runs one user question through the ReAct cognitive agent loop. |
 | `POST /api/scenarios/scenario-a` | Resets and seeds Scenario A in the backend session. |
 | `POST /api/scenarios/scenario-b` | Resets and seeds Scenario B in the backend session. |
-| `POST /api/reset` | Clears that session's agent, in-memory ledger, and chat history. |
+| `POST /api/reset` | Clears conversation and scenario state, then restores the neutral 17-node facility belief baseline. |
 
 The browser keeps a session UUID in `sessionStorage` and sends it using `X-Session-ID`. The server maintains separate in-memory agent/SQLite/environment state for each session, with a local demo limit of 128 sessions. Restarting the Python server loses these ephemeral sessions. Scenario buttons call backend endpoints; the scenarios are seeded server-side, not painted into the UI as fake answers.
+
+A fresh or reset browser session contains a small neutral facility graph. It records stable relationships between the robot, room, sensors, map, and supporting systems. Asking a question can read this graph without automatically turning the answer into a new belief. Scenario presets replace the neutral graph with their controlled facts so their before-and-after behavior remains repeatable.
 
 ## 6. Scenario A — static map versus live LiDAR
 

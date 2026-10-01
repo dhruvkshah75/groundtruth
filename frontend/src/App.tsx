@@ -9,6 +9,7 @@ import {
   Database,
   FlaskConical,
   LoaderCircle,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightOpen,
@@ -239,6 +240,14 @@ function App() {
         >
           {controlsShown ? <PanelLeftClose size={18} strokeWidth={1.8} /> : <PanelLeftOpen size={18} strokeWidth={1.8} />}
         </button>
+        <a
+          className="rail-button"
+          href="/graph"
+          aria-label="Open belief graph"
+          title="Belief graph"
+        >
+          <Network size={18} strokeWidth={1.8} />
+        </a>
         <button
           className={`rail-button ${inspectorOpen ? "active" : ""}`}
           type="button"
@@ -571,6 +580,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
             ))}
           </div>
         )}
+        {response.audit_trails.length > 0 && <AuditTrailInline response={response} />}
         {response.revisions.length > 0 && (
           <div className="revision-inline">
             <div className="revision-heading"><Check size={15} /><strong>Belief revision recorded</strong></div>
@@ -583,6 +593,49 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
         )}
       </div>
     </article>
+  );
+}
+
+function AuditTrailInline({ response }: { response: AgentResponse }) {
+  const facts = [
+    ...new Map(
+      response.audit_trails
+        .flatMap((trail) => trail.facts)
+        .map((fact) => [fact.fact_id, fact]),
+    ).values(),
+  ].sort((left, right) => left.created_at.localeCompare(right.created_at));
+  const events = [
+    ...new Map(
+      response.audit_trails
+        .flatMap((trail) => trail.events)
+        .map((event) => [event.event_id, event]),
+    ).values(),
+  ];
+
+  return (
+    <section className="audit-trail-inline" aria-label="Retrieved belief history">
+      <div className="audit-trail-heading">
+        <Database size={15} />
+        <strong>Belief history retrieved</strong>
+        <span>{events.length} revision {events.length === 1 ? "event" : "events"}</span>
+      </div>
+      <div className="audit-fact-chain">
+        {facts.map((fact, index) => (
+          <div className={`audit-fact ${fact.superseded_by ? "superseded" : "active"}`} key={fact.fact_id}>
+            <span>{fact.superseded_by ? "Previous belief" : "Current belief"}</span>
+            <strong>{fact.subject} <code>{fact.predicate}</code> {fact.object}</strong>
+            <small>{fact.source_agent} · {Math.round(fact.confidence_score * 100)}% confidence</small>
+            {index < facts.length - 1 && <i aria-hidden="true">→</i>}
+          </div>
+        ))}
+      </div>
+      {events.map((event) => (
+        <div className="audit-event-explanation" key={event.event_id}>
+          <p>{event.reason}</p>
+          <small>Policy: <code>{event.policy_rule}</code> · {formatTime(event.created_at)}</small>
+        </div>
+      ))}
+    </section>
   );
 }
 

@@ -56,6 +56,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 "Frontend build is missing. Run `npm install` and `npm run build` first.",
             )
             return
+        if path == "/graph":
+            self.path = "/index.html"
         super().do_GET()
 
     def do_POST(self) -> None:
