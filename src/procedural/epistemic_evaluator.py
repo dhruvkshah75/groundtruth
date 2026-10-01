@@ -208,15 +208,45 @@ class EpistemicEvaluator:
         # 6. Audit lookups
         if plan_result.audit_results:
             trails: list[AuditTrail] = []
-            events: list[AuditEvent] = []
+            events_by_id: dict[object, AuditEvent] = {}
             for ar in plan_result.audit_results:
                 for trail in ar.trails.values():
                     trails.append(trail)
-                    events.extend(trail.events)
+                    for event in trail.events:
+                        events_by_id[event.event_id] = event
+            events = list(events_by_id.values())
+            facts_by_id = {fact.fact_id: fact for trail in trails for fact in trail.facts}
+            event_explanations: list[str] = []
+            for event in events:
+                output_ids = set(event.output_fact_ids)
+                previous = next(
+                    (
+                        facts_by_id[fact_id]
+                        for fact_id in event.input_fact_ids
+                        if fact_id not in output_ids and fact_id in facts_by_id
+                    ),
+                    None,
+                )
+                current = next(
+                    (
+                        facts_by_id[fact_id]
+                        for fact_id in event.output_fact_ids
+                        if fact_id in facts_by_id
+                    ),
+                    None,
+                )
+                if previous and current:
+                    event_explanations.append(
+                        f"{current.subject} {current.predicate} changed from "
+                        f"{previous.object} (source: {previous.source_agent}) to "
+                        f"{current.object} (source: {current.source_agent}). "
+                        f"Reason: {event.reason} Policy: {event.policy_rule}."
+                    )
+                else:
+                    event_explanations.append(f"{event.reason} Policy: {event.policy_rule}.")
             explanation = (
-                f"Audit trail retrieved with {len(events)} revision event(s) "
-                "explaining past belief changes."
-                if events
+                "Audit history: " + " ".join(event_explanations)
+                if event_explanations
                 else "No revision history found for the requested entity."
             )
             return EpistemicEvaluation(

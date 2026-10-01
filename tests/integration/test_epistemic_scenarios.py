@@ -393,6 +393,11 @@ def test_audit_explanation_query() -> None:
         event = audit_response.audit_events[0]
         assert event.policy_rule == "lidar_overrides_map"
         assert "Live LiDAR reading detected physical obstacle" in event.reason
+        assert "route_A status_is changed from clear" in audit_response.answer
+        assert "to blocked" in audit_response.answer
+        assert "static_map" in audit_response.answer
+        assert "lidar_sensor" in audit_response.answer
+        assert "Policy: lidar_overrides_map" in audit_response.answer
 
 
 # ---------------------------------------------------------------------------
