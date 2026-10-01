@@ -17,6 +17,8 @@ The demo includes two end-to-end scenarios:
 
 ![GroundTruth running Scenario A in the React interface](docs/assets/current-agent-demo.png)
 
+![GroundTruth interactive belief graph showing active facts and provenance](docs/assets/graph-demo.png)
+
 **LLM/ReAct status:** The app implements a real bounded LLM function-calling ReAct loop via `GroqIntentProvider` (milestone [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17)), while retaining an explicit offline mode with `RuleBasedIntentProvider`. Python strictly owns fact validation, approved operations, belief revisions, and deterministic response guards. The React UI exposes live provider status, collapsible ReAct tool execution traces (with executed operations, measurements, and evidence IDs), and epistemic telemetry.
 
 The browser demo uses session-scoped in-memory SQLite and mock-world state. Restarting the Python server clears those demo sessions. The frontend displays backend results and API errors; it does not replace missing backend data with canned scenario answers.
