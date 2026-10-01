@@ -183,9 +183,14 @@ INTENT_PROPOSAL_SYSTEM_PROMPT = (
     "Rules:\n"
     "1. You MUST call one of the provided functions. Do not respond with conversational text.\n"
     "2. Extract exact entity mentions from the question (e.g. 'front route', 'red box').\n"
-    "3. Do not author SQL queries, Python code, database commands, or direct "
+    "3. For a multi-perspective question that asks both what an object currently looks like "
+    "and what its history says, call 'current_object_perception'. The evaluator uses the "
+    "object ID returned by the camera to retrieve its stored history. Do not choose "
+    "'historical_fact_lookup' alone for that comparison. Use 'historical_fact_lookup' only "
+    "when the user asks about stored or past facts without asking for a current sensor view.\n"
+    "4. Do not author SQL queries, Python code, database commands, or direct "
     "hardware sensor calls.\n"
-    "4. If the question does not match any capability or memory lookup, call 'unsupported'.\n"
+    "5. If the question does not match any capability or memory lookup, call 'unsupported'.\n"
 )
 
 GROUNDED_EXPLANATION_SYSTEM_PROMPT = (

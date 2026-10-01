@@ -93,6 +93,9 @@ def test_propose_intent_extracts_tool_call() -> None:
     assert provider.last_tool_name == "current_route_status"
     assert len(client.calls) == 1
     assert client.calls[0]["tool_choice"] == "required"
+    system_prompt = client.calls[0]["messages"][0]["content"]
+    assert "multi-perspective question" in system_prompt
+    assert "Do not choose 'historical_fact_lookup' alone" in system_prompt
 
 
 def test_propose_intent_missing_tool_call_is_malformed() -> None:

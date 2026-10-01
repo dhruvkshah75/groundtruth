@@ -1,5 +1,7 @@
 """Validation lifecycle for one provider-proposed intent."""
 
+import re
+
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from src.contracts import GroundedResult, IntentRequest
@@ -7,6 +9,21 @@ from src.contracts import GroundedResult, IntentRequest
 from .fallback_results import FallbackCategory, PlanningFallback
 from .intent_coverage_reviewer import IntentCoverageReviewer
 from .intent_provider import IntentProvider, IntentProviderUnavailableError
+
+
+def _enforce_compound_perspective_contract(
+    intent: IntentRequest, normalized_question: str
+) -> IntentRequest:
+    """Require live object perception for questions comparing user, camera, and history."""
+    question = normalized_question.casefold()
+    asks_about_color = re.search(r"\bcolou?r\b", question)
+    asks_user_view = re.search(r"\b(user|expect|expects|think|thinks)\b", question)
+    asks_live_view = re.search(r"\b(register|see|camera|sense|currently|perceive)\b", question)
+    asks_history = re.search(r"\b(history|historical|stored|record|true state)\b", question)
+
+    if asks_about_color and asks_user_view and asks_live_view and asks_history:
+        return intent.model_copy(update={"intent": "current_object_perception"})
+    return intent
 
 
 class IntentPlannerOutcome(BaseModel):
@@ -84,6 +101,7 @@ class IntentPlanner:
 
         intent, validation_error = self._validate_intent(raw_proposal, normalized_question)
         if intent is not None:
+            intent = _enforce_compound_perspective_contract(intent, normalized_question)
             return self._review_unsupported_if_needed(intent, normalized_question)
 
         try:
@@ -96,6 +114,9 @@ class IntentPlanner:
 
         repaired_intent, _ = self._validate_intent(raw_repair, normalized_question)
         if repaired_intent is not None:
+            repaired_intent = _enforce_compound_perspective_contract(
+                repaired_intent, normalized_question
+            )
             return self._review_unsupported_if_needed(repaired_intent, normalized_question)
 
         return self._fallback(

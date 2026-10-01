@@ -164,6 +164,47 @@ class EpistemicEvaluator:
                 memory_repo=memory_repo,
             )
 
+        # A successful pose observation is direct evidence for current-location
+        # questions. Keep its position and frame context in the evaluated result.
+        pose_obs = next((obs for obs in observations if obs.capability == "robot_pose"), None)
+        if pose_obs:
+            measurements = pose_obs.measurements
+            required_measurements = ("robot_id", "x_cm", "y_cm", "direction")
+            missing = [key for key in required_measurements if measurements.get(key) is None]
+            if missing:
+                return EpistemicEvaluation(
+                    status="unverifiable",
+                    explanation=(
+                        "The pose sensor returned an incomplete reading; missing "
+                        f"{', '.join(missing)}."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+
+            context_parts = [
+                value
+                for value in (
+                    pose_obs.context.location,
+                    f"frame of reference: {pose_obs.context.frame_of_reference}"
+                    if pose_obs.context.frame_of_reference
+                    else None,
+                )
+                if value
+            ]
+            context_text = f" in {', '.join(context_parts)}" if context_parts else ""
+            explanation = (
+                f"The robot ({measurements['robot_id']}) is at x={measurements['x_cm']} cm, "
+                f"y={measurements['y_cm']} cm{context_text}, facing "
+                f"{measurements['direction']}."
+            )
+            return EpistemicEvaluation(
+                status="verified",
+                explanation=explanation,
+                memory_facts=memory_facts,
+                sensor_telemetry=telemetry,
+            )
+
         # 6. Audit lookups
         if plan_result.audit_results:
             trails: list[AuditTrail] = []

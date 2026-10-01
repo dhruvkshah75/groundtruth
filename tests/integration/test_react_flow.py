@@ -333,6 +333,112 @@ def test_react_loop_scenario_b_three_perspectives() -> None:
     assert response.react_trace.explanation_source == "llm"
 
 
+def test_compound_perspective_question_uses_camera_if_llm_picks_history_only() -> None:
+    history_only_call = FakeToolCall(
+        name="historical_fact_lookup",
+        arguments='{"entity_mentions": ["red box"]}',
+        call_id="call_history_only_1",
+    )
+    first_response = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[history_only_call]))]
+    )
+
+    def echo_grounded_summary(messages: list[dict[str, Any]]) -> FakeChatCompletion:
+        tool_message = next(message for message in messages if message.get("role") == "tool")
+        summary = json.loads(tool_message["content"])["deterministic_evaluation_summary"]
+        return FakeChatCompletion(
+            choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=summary))]
+        )
+
+    client = FakeGroqClient([first_response, echo_grounded_summary])
+    agent = _build_test_agent(client)
+    agent.environment.replace_world(
+        WorldState(
+            robot=RobotState(
+                robot_id="robot_1",
+                x_cm=0.0,
+                y_cm=0.0,
+                direction="north",
+                location="room_101",
+                frame_of_reference="robot_base",
+            ),
+            objects={
+                "box_01": SimulatedObject(
+                    object_id="box_01",
+                    intrinsic_color="red",
+                    location="room_101",
+                    x_cm=10.0,
+                    y_cm=10.0,
+                )
+            },
+            light=AmbientLight(intensity=0.8, color_cast="yellow"),
+        )
+    )
+    agent.memory.record_fact(
+        FactAssertion(
+            subject="box_01",
+            predicate="painted_color_is",
+            object="blue",
+            source_agent="bot_02",
+            confidence_score=1.0,
+            observed_at=datetime.now(UTC),
+            context=SpatialContext(location="room_101"),
+            evidence={"ticket": "MAINT-4091"},
+        )
+    )
+
+    question = (
+        "What color does the user think the red box is, what color do you register it as, "
+        "and what does your data history say its true state is?"
+    )
+    response = agent.ask(question)
+
+    assert response.status == "perspectives_tracked"
+    assert response.perspectives is not None
+    assert "red" in response.perspectives["user_perspective"].lower()
+    assert "brown" in response.perspectives["egocentric_perspective"].lower()
+    assert "blue" in response.perspectives["historical_perspective"].lower()
+    assert response.react_trace is not None
+    assert response.react_trace.tool_name == "historical_fact_lookup"
+    assert any(
+        operation["name"] == "camera"
+        or operation["returned_values"].get("apparent_color") == "brown"
+        for operation in response.react_trace.operations
+    )
+
+
+def test_robot_pose_observation_is_reported_in_grounded_answer() -> None:
+    pose_call = FakeToolCall(
+        name="current_robot_pose",
+        arguments='{"entity_mentions": []}',
+        call_id="call_pose_1",
+    )
+    pose_response = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[pose_call]))]
+    )
+
+    def echo_grounded_summary(messages: list[dict[str, Any]]) -> FakeChatCompletion:
+        tool_message = next(message for message in messages if message.get("role") == "tool")
+        summary = json.loads(tool_message["content"])["deterministic_evaluation_summary"]
+        return FakeChatCompletion(
+            choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=summary))]
+        )
+
+    agent = _build_test_agent(FakeGroqClient([pose_response, echo_grounded_summary]))
+
+    response = agent.ask("What is the robot's current position and which way is it facing?")
+
+    assert response.react_trace is not None
+    assert any(
+        operation["name"] == "pose_sensor" and operation["returned_values"]["direction"] == "north"
+        for operation in response.react_trace.operations
+    )
+    assert response.status == "verified"
+    assert response.sensor_telemetry
+    assert "robot_1" in response.answer
+    assert "north" in response.answer
+
+
 def test_react_loop_safe_fallback_when_turn2_explanation_fails() -> None:
     # Turn 1: Propose tool call successfully
     turn1_call = FakeToolCall(

@@ -110,7 +110,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .composer-wrap { position: sticky; bottom: 0; z-index: 2; width: 100%; max-width: 850px; align-self: center; padding: 16px 38px 18px; background: linear-gradient(180deg, rgb(32 32 32 / 0%), #202020 17%); }
 .composer { padding: 9px; border: 1px solid var(--line-strong); border-radius: 17px; background: #292929; transition: border-color .16s ease; }
 .composer:focus-within { border-color: rgb(97 216 202 / 47%); }
-.composer textarea { display: block; width: 100%; resize: vertical; min-height: 50px; max-height: 180px; padding: 6px 9px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 12px; line-height: 1.6; }
+.composer textarea { display: block; width: 100%; resize: vertical; min-height: 50px; max-height: 180px; padding: 6px 9px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 15px; line-height: 1.5; }
 .composer textarea::placeholder { color: #737373; }
 .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .composer-provider { display: inline-flex; align-items: center; gap: 6px; padding: 0 7px; color: #777; font-size: 9px; }
