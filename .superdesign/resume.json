@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "/": {
+      "targetKind": "existing-ui",
+      "projectId": "1b61c172-3e85-477c-90f1-d186adfdda54",
+      "baselineDraftId": "27204f33-7cd7-4c6b-b100-6ecbe3fd91f8",
+      "activeDraftId": "27204f33-7cd7-4c6b-b100-6ecbe3fd91f8",
+      "designSystemPath": ".superdesign/design-system.md",
+      "referenceIds": [
+        "88c88180-3800-4950-bf0f-0df4bc7b8ea7"
+      ],
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "frontend/src/App.tsx",
+        "frontend/src/api.ts",
+        "frontend/src/types.ts",
+        "frontend/src/app.css",
+        "frontend/vite.config.ts"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "28f616efb47777b0ab004dc39ca4e5fcab8e265899ded1ed23aaf8eed76f9a3e",
+        "frontend/src/App.tsx": "d5d11583bc76de6b110dcbc27112d6346dfe038e700168feee7a027c30f0357f",
+        "frontend/src/api.ts": "7d2f6e1ab3a5f231559d53e11fcf024477a76108c6b52c8470023021282b1b05",
+        "frontend/src/types.ts": "1dd74900291424a72ac4018dfcd2b43033d420a1103eff9cbe2ead623f05c160",
+        "frontend/src/app.css": "6fbc0478449ff587b33b75dd8cb05f9795b75281a42ba8129bd4560f064f54fe",
+        "frontend/vite.config.ts": "aa6599800102ca2cf7a0987ce3df7e48e1444f21ca9abbfbf0c125cf51ebf25c"
+      },
+      "components": [],
+      "drafts": {
+        "27204f33-7cd7-4c6b-b100-6ecbe3fd91f8": {
+          "title": "GroundTruth / I, Agent Workspace",
+          "visualDirection": "Minimal dark chat workspace with a narrow rail, scenario controls, and backend inspector",
+          "currentVersion": 3
+        }
+      },
+      "updatedAt": "2026-10-01T06:19:11.122465+00:00"
+    }
+  }
+}

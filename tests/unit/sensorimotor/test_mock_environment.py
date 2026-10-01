@@ -93,6 +93,18 @@ def test_registry_contains_four_capabilities():
     assert names == {"lidar_scan", "camera_detect", "ambient_light", "robot_pose"}
 
 
+def test_world_state_snapshot_is_detached_from_environment():
+    env = MockEnvironment(world=build_scenario_a_world())
+
+    snapshot = env.get_world_state()
+    snapshot.robot.location = "changed_room"
+    snapshot.obstacles["obstacle_01"].active = False
+
+    actual = env.get_world_state()
+    assert actual.robot.location == "room_101"
+    assert actual.obstacles["obstacle_01"].active is True
+
+
 def test_lidar_scenario_a(fixed_clock, deterministic_uuid_factory):
     world = build_scenario_a_world()
     env = MockEnvironment(world=world, clock=fixed_clock, id_factory=deterministic_uuid_factory)
