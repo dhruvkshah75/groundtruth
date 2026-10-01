@@ -109,6 +109,10 @@ uv run ruff format --check .
 uv run ruff check .
 ```
 
+## Continuous integration
+
+GitHub Actions runs the same core checks for every push and pull request. The backend job installs the locked Python dependencies with `uv`, runs the full pytest suite, checks Ruff formatting, and runs Ruff lint. The frontend job installs the locked npm dependencies and runs `npm run build`, which includes the TypeScript check and production Vite build. The workflow is defined in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+
 All four commands must pass from a fresh clone. If a command modifies tracked files, include those changes in the same pull request.
 
 ## Git workflow
