@@ -288,7 +288,6 @@ def test_generate_grounded_explanation_success() -> None:
         tool_name="current_route_status",
         tool_call_id="call_abc",
         tool_result={"status": "grounded_conflict_resolved", "obstacle_distance_cm": 12.0},
-        fallback_explanation="Deterministic fallback",
     )
 
     assert "LiDAR detects an obstacle at 12.0cm" in explanation
@@ -309,8 +308,23 @@ def test_generate_grounded_explanation_propagates_provider_unavailability() -> N
             tool_name="current_route_status",
             tool_call_id="call_abc",
             tool_result={"status": "grounded_conflict_resolved"},
-            fallback_explanation="Safe deterministic fallback.",
         )
+
+
+def test_generate_grounded_explanation_returns_empty_for_empty_completion() -> None:
+    empty_completion = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=" "))]
+    )
+    provider = GroqIntentProvider(client=FakeGroqClient([empty_completion]))
+
+    response = provider.generate_grounded_explanation(
+        user_question="Is the front route clear?",
+        tool_name="current_route_status",
+        tool_call_id="call_abc",
+        tool_result={"status": "grounded_conflict_resolved"},
+    )
+
+    assert response == ""
 
 
 def test_unconfigured_groq_provider_raises_informative_errors() -> None:

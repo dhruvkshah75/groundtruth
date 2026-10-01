@@ -243,7 +243,6 @@ class GroundedAgent:
                         tool_name=tool_name,
                         tool_call_id=tool_call_id,
                         tool_result=tool_result,
-                        fallback_explanation=eval_outcome.explanation,
                     )
                     if (
                         grounded_text

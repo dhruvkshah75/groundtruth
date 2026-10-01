@@ -175,9 +175,8 @@ class GroqIntentProvider:
         tool_name: str,
         tool_call_id: str,
         tool_result: dict[str, Any],
-        fallback_explanation: str,
     ) -> str:
-        """Send execution results back to LLM as tool output and return grounded response."""
+        """Send execution results to the LLM and return its raw response text."""
         result_str = json.dumps(tool_result, ensure_ascii=False)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": GROUNDED_EXPLANATION_SYSTEM_PROMPT},
@@ -213,14 +212,13 @@ class GroqIntentProvider:
             content = self._extract_message_content(response)
             if content and content.strip():
                 return content.strip()
+            return ""
         except Exception as exc:
             LOGGER.warning("Groq API error during grounded explanation generation: %s", exc)
             self.last_error = str(exc)
             raise IntentProviderUnavailableError(
                 f"Groq grounded explanation call failed: {exc}"
             ) from exc
-
-        return fallback_explanation
 
     def _extract_tool_call_payload(self, response: Any, user_question: str) -> dict[str, Any]:
         """Parse function-calling response into IntentRequest dictionary format.

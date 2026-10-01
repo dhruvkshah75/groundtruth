@@ -368,6 +368,31 @@ def test_react_loop_safe_fallback_when_turn2_explanation_fails() -> None:
         agent.ask("Is the front route clear?")
 
 
+def test_empty_turn2_completion_uses_truthful_deterministic_trace_source() -> None:
+    turn1_call = FakeToolCall(
+        name="current_route_status",
+        arguments='{"entity_mentions": ["front route"]}',
+        call_id="call_empty_turn2",
+    )
+    client = FakeGroqClient(
+        [
+            FakeChatCompletion(
+                choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[turn1_call]))]
+            ),
+            FakeChatCompletion(
+                choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=" "))]
+            ),
+        ]
+    )
+    agent = _build_test_agent(client)
+
+    response = agent.ask("Is the front route clear?")
+
+    assert response.react_trace is not None
+    assert response.react_trace.explanation_source == "deterministic_fallback"
+    assert response.answer
+
+
 def test_unconfigured_live_mode_service_health_and_rejection() -> None:
     config = ProviderConfig(mode="live", api_key=None)
     service = AgentService(config=config)
