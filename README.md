@@ -2,6 +2,21 @@
 
 GroundTruth is a student project about answering questions using evidence from stored claims and a robot's current simulated environment. Its central idea is simple: an old map, a live sensor, and a user's expectation may disagree, so the system should preserve their sources and context instead of treating every claim as the same kind of truth.
 
+## Current project status
+
+The current project is a working local demo with a React/TypeScript interface connected to a Python API and agent. The backend runs a deterministic intent provider, retrieves facts from Tier 1, obtains observations from the Tier 3 mock environment, applies the evidence and conflict rules, and returns the result for the UI to display.
+
+The demo includes two end-to-end scenarios:
+
+- **Scenario A — map and LiDAR conflict:** stored map memory says the front route is clear, while the simulated LiDAR detects an obstacle 12 cm ahead. The agent records a belief revision and shows its evidence and audit details.
+- **Scenario B — distinct color perspectives:** the user expects a red object, the simulated camera can perceive it as brown under yellow lighting, and Tier 1 history can contain a third-party record that it was painted blue. The agent reports these as separate perspectives.
+
+![GroundTruth running Scenario A in the React interface](docs/assets/current-agent-demo.png)
+
+**LLM/ReAct status:** The current app does not call an LLM. Intent classification and response wording are deterministic. The next milestone is to add the bounded LLM function-calling/ReAct loop and connect its provider status and execution trace to this interface; that work is tracked in [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17). Until then, describe the current app as a deterministic end-to-end prototype of the layer integration and Scenario A/B evidence flow.
+
+The browser demo uses session-scoped in-memory SQLite and mock-world state. Restarting the Python server clears those demo sessions. The frontend displays backend results and API errors; it does not replace missing backend data with canned scenario answers.
+
 ## Three layers
 
 1. **Tier 1 — Declarative memory:** SQLite stores sourced facts, timestamps, confidence, revisions, and audit history. NetworkX is a rebuildable projection of active facts, not another source of truth.
@@ -36,4 +51,3 @@ Open <http://127.0.0.1:5173>. See [Local Development Setup](docs/Local_Developme
 - [Documentation index](docs/README.md) — architecture, tier guides, and project context.
 - [Architecture decisions](docs/Architecture_Decisions.md) — the approved tier boundaries and evidence policy.
 - [GT-07 / Issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) — planned real LLM ReAct integration and frontend update.
-
