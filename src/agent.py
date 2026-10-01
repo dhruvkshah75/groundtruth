@@ -10,6 +10,7 @@ into a coherent, auditable ReAct cycle.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,70 +38,19 @@ def validate_grounded_response(
     candidate: str,
     eval_outcome: EpistemicEvaluation,
 ) -> bool:
-    """Validate that LLM-generated prose does not contradict deterministic epistemic facts.
+    """Accept only the deterministic rendering of the verified evaluation.
 
-    Returns False if candidate is malformed or contradicts deterministic status,
-    belief revisions, or tracked perspectives.
+    Free-form text cannot be reliably checked for every contradiction or unsupported
+    claim with keyword rules. Normalize harmless formatting differences, then fail
+    closed for any semantic change. The verified Python rendering remains authoritative.
     """
-    if not candidate or len(candidate.strip()) < 10:
+    if not candidate or not eval_outcome.explanation:
         return False
 
-    cleaned = candidate.lower()
+    def normalized(text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
 
-    # Scenario A / Route Blocked consistency check:
-    has_blocked_revision = any(
-        r.successor.predicate == "status_is" and r.successor.object == "blocked"
-        for r in eval_outcome.revisions
-    )
-    if has_blocked_revision or (
-        eval_outcome.status == "grounded_conflict_resolved"
-        and "blocked" in eval_outcome.explanation.lower()
-    ):
-        obstacle_mentioned = any(
-            w in cleaned for w in ("blocked", "obstacle", "obstruction", "lidar", "12")
-        )
-        if not obstacle_mentioned:
-            return False
-
-        prohibited_clear_claims = (
-            "route is clear to move",
-            "route is clear to proceed",
-            "front route is clear to",
-            "is clear for navigation",
-            "can safely proceed",
-            "route is not blocked",
-            "no obstacles ahead",
-            "no obstacle ahead",
-            "no obstruction",
-            "free to move",
-        )
-        for claim in prohibited_clear_claims:
-            if claim in cleaned:
-                return False
-
-    # Scenario B / Perspective Tracking consistency check:
-    if eval_outcome.status == "perspectives_tracked" and eval_outcome.perspectives:
-        perspectives = {k.lower(): str(v).lower() for k, v in eval_outcome.perspectives.items()}
-        camera_color = perspectives.get("egocentric_perspective", "") or perspectives.get(
-            "camera", ""
-        )
-        history_color = perspectives.get("historical_perspective", "") or perspectives.get(
-            "history", ""
-        )
-
-        if camera_color and "brown" in camera_color:
-            if "camera perceives blue" in cleaned or "camera registers it as blue" in cleaned:
-                return False
-            if "camera perceives red" in cleaned or "camera registers it as red" in cleaned:
-                return False
-
-        if history_color and "blue" in history_color:
-            if "history says red" in cleaned or "database record says red" in cleaned:
-                return False
-            if "history says brown" in cleaned or "database record says brown" in cleaned:
-                return False
-
-    return True
+    return normalized(candidate) == normalized(eval_outcome.explanation)
 
 
 @dataclass
@@ -301,11 +251,7 @@ class GroundedAgent:
                         and validate_grounded_response(grounded_text, eval_outcome)
                     ):
                         final_answer = grounded_text.strip()
-                        explanation_source = (
-                            "llm"
-                            if final_answer != eval_outcome.explanation
-                            else "deterministic_fallback"
-                        )
+                        explanation_source = "llm"
                     else:
                         LOGGER.warning(
                             "LLM grounded explanation failed consistency guard or was empty; "
@@ -313,6 +259,8 @@ class GroundedAgent:
                         )
                         final_answer = eval_outcome.explanation
                         explanation_source = "deterministic_fallback"
+                except IntentProviderUnavailableError:
+                    raise
                 except Exception as exc:
                     LOGGER.warning("LLM explanation call failed (%s); using fallback", exc)
                     final_answer = eval_outcome.explanation

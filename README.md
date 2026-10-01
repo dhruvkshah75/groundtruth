@@ -55,4 +55,3 @@ Open <http://127.0.0.1:5173>. See [Local Development Setup](docs/Local_Developme
 - [Documentation index](docs/README.md) — architecture, tier guides, and project context.
 - [Architecture decisions](docs/Architecture_Decisions.md) — the approved tier boundaries and evidence policy.
 - [GT-07 / Issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) — real LLM ReAct integration and frontend connection.
-

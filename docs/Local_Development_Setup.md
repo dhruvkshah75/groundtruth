@@ -105,7 +105,7 @@ GROQ_API_KEY="gsk_..."
 # Optional model selection (default: llama-3.3-70b-versatile)
 GROQ_MODEL="llama-3.3-70b-versatile"
 
-# Optional explicit mode override: "live" or "offline" (default: "live" if key present, else "offline")
+# Optional explicit mode override: "live" or "offline" (default: "live")
 GROUNDTRUTH_PROVIDER_MODE="live"
 ```
 
@@ -114,7 +114,7 @@ GROUNDTRUTH_PROVIDER_MODE="live"
 1. **Live LLM ReAct mode (`GROUNDTRUTH_PROVIDER_MODE=live` or `GROQ_API_KEY` present):**
    - The agent invokes Groq using official function calling with strict schemas (`current_route_status`, `current_object_perception`, etc.).
    - Python validates the proposed function call, executes approved Tier 1/Tier 3 operations, and evaluates epistemic ground truth.
-   - Tool execution results are returned to the model as verified tool output; the model synthesizes a concise grounded response.
+   - Tool execution results are returned to the model as verified tool output. Python accepts the model's final text only when it matches the deterministic, evidence-backed rendering (case and punctuation differences are ignored); otherwise Python returns that rendering directly.
    - `/api/health` reports `status: "ok"`, `provider: "GroqIntentProvider"`, `llm_ready: true`.
 
 2. **Unconfigured live mode (live selected without `GROQ_API_KEY`):**

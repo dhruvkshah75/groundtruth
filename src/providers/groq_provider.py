@@ -214,9 +214,11 @@ class GroqIntentProvider:
             if content and content.strip():
                 return content.strip()
         except Exception as exc:
-            LOGGER.warning(
-                "Grounded explanation generation failed, using deterministic fallback: %s", exc
-            )
+            LOGGER.warning("Groq API error during grounded explanation generation: %s", exc)
+            self.last_error = str(exc)
+            raise IntentProviderUnavailableError(
+                f"Groq grounded explanation call failed: {exc}"
+            ) from exc
 
         return fallback_explanation
 
@@ -300,9 +302,32 @@ class GroqIntentProvider:
                     "raw_output": f"Unknown function '{fn_name}'",
                 }
 
+            function_schema = next(
+                tool["function"] for tool in INTENT_TOOLS if tool["function"]["name"] == fn_name
+            )
+            parameters = function_schema["parameters"]
+            allowed_fields = set(parameters["properties"])
+            required_fields = set(parameters["required"])
+            supplied_fields = set(parsed_args)
+            if supplied_fields - allowed_fields:
+                return {
+                    "error": "unexpected_arguments",
+                    "raw_output": "Function arguments contain fields outside the approved schema",
+                }
+            if required_fields - supplied_fields:
+                return {
+                    "error": "missing_required_arguments",
+                    "raw_output": "Function arguments are missing required schema fields",
+                }
+
             entity_mentions = parsed_args.get("entity_mentions", [])
-            if not isinstance(entity_mentions, list):
-                entity_mentions = []
+            if not isinstance(entity_mentions, list) or any(
+                not isinstance(mention, str) for mention in entity_mentions
+            ):
+                return {
+                    "error": "invalid_entity_mentions",
+                    "raw_output": "entity_mentions must be an array of strings",
+                }
 
             # Save state for ReAct explanation round
             self.last_tool_call_id = str(call_id)
@@ -316,7 +341,7 @@ class GroqIntentProvider:
 
             return {
                 "intent": fn_name,
-                "entity_mentions": [str(m) for m in entity_mentions],
+                "entity_mentions": entity_mentions,
                 "user_question": user_question,
             }
         except Exception as exc:

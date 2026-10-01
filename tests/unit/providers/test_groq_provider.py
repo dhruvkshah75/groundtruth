@@ -168,10 +168,35 @@ def test_propose_intent_unknown_function_rejected_as_malformed() -> None:
     assert result.get("raw_name") == "execute_arbitrary_code"
 
 
+@pytest.mark.parametrize(
+    ("arguments", "expected_error"),
+    [
+        ('{"entity_mentions": "front route"}', "invalid_entity_mentions"),
+        ('{"entity_mentions": ["front route", 12]}', "invalid_entity_mentions"),
+        ('{"entity_mentions": ["front route"], "intent": "unsupported"}', "unexpected_arguments"),
+        ("{}", "missing_required_arguments"),
+    ],
+)
+def test_propose_intent_rejects_arguments_that_do_not_match_tool_schema(
+    arguments: str, expected_error: str
+) -> None:
+    tool_call = FakeToolCall(
+        name="current_route_status", arguments=arguments, call_id="call_invalid_args"
+    )
+    completion = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[tool_call]))]
+    )
+    provider = GroqIntentProvider(client=FakeGroqClient([completion]))
+
+    result = provider.propose_intent("Is the front route clear?")
+
+    assert result.get("error") == expected_error
+
+
 def test_propose_intent_explicit_unsupported_tool() -> None:
     tool_call = FakeToolCall(
         name="unsupported",
-        arguments='{"reason": "Cannot answer questions about quantum mechanics"}',
+        arguments="{}",
         call_id="call_unsupported",
     )
     fake_completion = FakeChatCompletion(
@@ -274,19 +299,18 @@ def test_generate_grounded_explanation_success() -> None:
     assert "obstacle_distance_cm" in tool_msg["content"]
 
 
-def test_generate_grounded_explanation_fallback_on_exception() -> None:
+def test_generate_grounded_explanation_propagates_provider_unavailability() -> None:
     client = FakeGroqClient([Exception("Connection timeout")])
     provider = GroqIntentProvider(client=client)
 
-    explanation = provider.generate_grounded_explanation(
-        user_question="Is the front route clear?",
-        tool_name="current_route_status",
-        tool_call_id="call_abc",
-        tool_result={"status": "grounded_conflict_resolved"},
-        fallback_explanation="Safe deterministic fallback.",
-    )
-
-    assert explanation == "Safe deterministic fallback."
+    with pytest.raises(IntentProviderUnavailableError, match="grounded explanation call failed"):
+        provider.generate_grounded_explanation(
+            user_question="Is the front route clear?",
+            tool_name="current_route_status",
+            tool_call_id="call_abc",
+            tool_result={"status": "grounded_conflict_resolved"},
+            fallback_explanation="Safe deterministic fallback.",
+        )
 
 
 def test_unconfigured_groq_provider_raises_informative_errors() -> None:

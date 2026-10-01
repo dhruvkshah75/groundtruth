@@ -1,12 +1,12 @@
 # GroundTruth Architecture Decisions
 
+> **Implementation status:** the composed Python agent, deterministic mock sensors, React frontend, session-scoped web API, and live Groq function-calling/ReAct provider are implemented. `RuleBasedIntentProvider` remains available only in explicit offline mode. See [Current Agent and Scenario Guide](Implemented_System_Overview.md) for the runtime flow and Scenario A/B behavior.
+
 ## What this document is
 
 This is the current implementation guide for GroundTruth. Read it before building Tier 1 or Tier 2.
 
 The original [I, Agent masterplan](I_Agent_Masterplan.md) explains the assignment vision. The [alternatives analysis](Potential%20Issues%20vs%20Alternatives.md) records risks and possible designs. This document records the design selected for implementation so teammates do not make conflicting decisions.
-
-> **Implementation status on `main`:** the composed Python agent, deterministic mock sensors, React frontend, and session-scoped web API are implemented. The app currently uses `RuleBasedIntentProvider`; no live LLM or function-calling/ReAct provider is connected yet. The LLM sections below describe the approved target architecture, not a claim that the milestone is already implemented. See [Current Agent and Scenario Guide](Implemented_System_Overview.md) for the exact current behavior and [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) for the pending LLM milestone.
 
 ## The problem we are solving
 
@@ -24,7 +24,7 @@ The agent must be able to say not only what it believes, but also which evidence
 
 > The LLM is a bounded language interface. It is not the authority on facts.
 
-When the planned LLM adapter is implemented, the LLM may understand a user's wording and write a friendly explanation. Deterministic Python code must retrieve evidence, validate tool use, choose the operational belief, record revisions, and refuse unsupported claims. **Today**, question interpretation and final explanation are also deterministic; no model is connected.
+The live LLM understands a user's wording and proposes a constrained intent and final wording. Deterministic Python retrieves evidence, validates tool use, chooses the operational belief, records revisions, and controls the trusted response. In explicit offline mode, a rule-based provider handles intent classification. Final model prose is accepted only when it matches Python's deterministic evidence-backed rendering.
 
 This is important because the LLM can be probabilistic. Given the same sentence twice, it may produce slightly different wording or a different tool plan. SQLite queries, sensor calculations, and conflict rules must instead produce repeatable results that can be tested and audited.
 

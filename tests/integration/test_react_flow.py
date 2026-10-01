@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
@@ -81,6 +82,8 @@ class FakeGroqClient:
         next_resp = self.responses.pop(0)
         if isinstance(next_resp, Exception):
             raise next_resp
+        if callable(next_resp):
+            return next_resp(messages)
         return next_resp
 
 
@@ -135,15 +138,15 @@ def test_react_loop_scenario_a_grounded_conflict_resolution() -> None:
         choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[turn1_call]))]
     )
 
-    # Turn 2: Model synthesizes grounded explanation given tool results
+    # Turn 2: Model returns the exact verified explanation provided in tool results
     turn2_resp = FakeChatCompletion(
         choices=[
             FakeChatChoice(
                 message=FakeChatCompletionMessage(
                     content=(
-                        "The route was previously listed as clear by static map blueprints, "
-                        "but real-time LiDAR detected an obstacle 12.0cm ahead, "
-                        "updating internal beliefs."
+                        "No, my static mapping says it is clear, but my live LiDAR readings "
+                        "indicate a physical obstruction at 12.0cm right now. I have "
+                        "downgraded my map confidence and updated my belief graph."
                     )
                 )
             )
@@ -194,7 +197,7 @@ def test_react_loop_scenario_a_grounded_conflict_resolution() -> None:
     # Verify Turn 1 & Turn 2 happened
     assert len(client.calls) == 2
     assert response.status == "grounded_conflict_resolved"
-    assert "LiDAR detected an obstacle 12.0cm ahead" in response.answer
+    assert "physical obstruction at 12.0cm" in response.answer
 
     # Verify Python owns facts and belief revisions
     assert len(response.revisions) == 1
@@ -204,6 +207,8 @@ def test_react_loop_scenario_a_grounded_conflict_resolution() -> None:
     assert response.react_trace is not None
     assert response.react_trace.tool_name == "current_route_status"
     assert response.react_trace.tool_call_id == "call_scen_a_1"
+    # Arbitrary paraphrases are not trusted as final factual responses. The model
+    # still receives the real tool result, while Python renders the verified answer.
     assert response.react_trace.explanation_source == "llm"
     assert response.react_trace.model == "llama-3.3-70b-versatile"
     assert any("observe: lidar_scan" in op for op in response.react_trace.approved_operations)
@@ -213,6 +218,44 @@ def test_react_loop_scenario_a_grounded_conflict_resolution() -> None:
         op["name"] == "lidar" and len(op["evidence_ids"]) > 0
         for op in response.react_trace.operations
     )
+
+
+def test_malformed_entity_argument_uses_exactly_one_planner_repair() -> None:
+    malformed_call = FakeToolCall(
+        name="current_route_status",
+        arguments='{"entity_mentions": "front route"}',
+        call_id="call_malformed",
+    )
+    repaired_call = FakeToolCall(
+        name="current_route_status",
+        arguments='{"entity_mentions": ["front route"]}',
+        call_id="call_repaired",
+    )
+    client = FakeGroqClient(
+        [
+            FakeChatCompletion(
+                choices=[
+                    FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[malformed_call]))
+                ]
+            ),
+            FakeChatCompletion(
+                choices=[
+                    FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[repaired_call]))
+                ]
+            ),
+            FakeChatCompletion(
+                choices=[FakeChatChoice(message=FakeChatCompletionMessage(content="Done."))]
+            ),
+        ]
+    )
+    agent = _build_test_agent(client)
+
+    response = agent.ask("Is the front route clear?")
+
+    assert len(client.calls) == 3
+    assert client.calls[0]["tools"] == client.calls[1]["tools"]
+    assert response.react_trace is not None
+    assert response.react_trace.tool_call_id == "call_repaired"
 
 
 def test_react_loop_scenario_b_three_perspectives() -> None:
@@ -226,22 +269,15 @@ def test_react_loop_scenario_b_three_perspectives() -> None:
         choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[turn1_call]))]
     )
 
-    # Turn 2: Model synthesizes grounded explanation distinguishing 3 perspectives
-    turn2_resp = FakeChatCompletion(
-        choices=[
-            FakeChatChoice(
-                message=FakeChatCompletionMessage(
-                    content=(
-                        "You asked about the red box. The live egocentric camera "
-                        "perceives it as brown under yellow lighting, while verified "
-                        "maintenance logs from bot_02 record its painted state as blue."
-                    )
-                )
-            )
-        ]
-    )
+    # Turn 2 returns the deterministic, evidence-backed summary from the tool result.
+    def echo_grounded_summary(messages: list[dict[str, Any]]) -> FakeChatCompletion:
+        tool_message = next(message for message in messages if message.get("role") == "tool")
+        summary = json.loads(tool_message["content"])["deterministic_evaluation_summary"]
+        return FakeChatCompletion(
+            choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=summary))]
+        )
 
-    client = FakeGroqClient([turn1_resp, turn2_resp])
+    client = FakeGroqClient([turn1_resp, echo_grounded_summary])
     agent = _build_test_agent(client)
 
     # Seed Scenario B: object intrinsic red, yellow ambient light, memory has painted blue by bot_02
@@ -326,17 +362,10 @@ def test_react_loop_safe_fallback_when_turn2_explanation_fails() -> None:
         )
     )
 
-    response = agent.ask("Is the front route clear?")
-
-    # Should not crash; safe deterministic explanation is returned
-    assert (
-        response.status == "grounded_conflict_resolved"
-        or response.status == "clear"
-        or response.status != ""
-    )
-    assert response.react_trace is not None
-    assert response.react_trace.explanation_source == "deterministic_fallback"
-    assert response.answer != ""
+    # A live provider outage on Turn 2 must be visible as an error, not a
+    # successful response that looks like a completed LLM cycle.
+    with pytest.raises(IntentProviderUnavailableError, match="grounded explanation call failed"):
+        agent.ask("Is the front route clear?")
 
 
 def test_unconfigured_live_mode_service_health_and_rejection() -> None:
@@ -421,6 +450,74 @@ def test_adversarial_completion_rejected_by_response_guard_in_scenario_a() -> No
     assert response.answer != adversarial_text
     assert "obstruction" in response.answer.lower() or "blocked" in response.answer.lower()
     assert "safe to proceed" not in response.answer.lower()
+
+
+def test_paraphrased_route_contradiction_is_rejected_even_when_it_mentions_lidar() -> None:
+    turn1_call = FakeToolCall(
+        name="current_route_status",
+        arguments='{"entity_mentions": ["front route"]}',
+        call_id="call_paraphrase_a",
+    )
+    turn1_resp = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[turn1_call]))]
+    )
+    turn2_resp = FakeChatCompletion(
+        choices=[
+            FakeChatChoice(
+                message=FakeChatCompletionMessage(
+                    content=(
+                        "The route is clear, although LiDAR detected an obstacle at 12 cm. "
+                        "You may proceed safely."
+                    )
+                )
+            )
+        ]
+    )
+    client = FakeGroqClient([turn1_resp, turn2_resp])
+    agent = _build_test_agent(client)
+    agent.environment.replace_world(
+        WorldState(
+            robot=RobotState(
+                robot_id="robot_1",
+                x_cm=0.0,
+                y_cm=0.0,
+                direction="north",
+                location="room_101",
+                frame_of_reference="robot_base",
+            ),
+            obstacles={
+                "obs_01": Obstacle(
+                    obstacle_id="obs_01",
+                    x_cm=0.0,
+                    y_cm=12.0,
+                    location="room_101",
+                    active=True,
+                )
+            },
+        )
+    )
+
+    response = agent.ask("Is the front route clear?")
+
+    assert response.react_trace is not None
+    assert response.react_trace.explanation_source == "deterministic_fallback"
+    assert "proceed safely" not in response.answer.lower()
+    assert "blocked" in response.answer.lower() or "obstruction" in response.answer.lower()
+
+
+def test_response_guard_rejects_arbitrary_unsupported_answer() -> None:
+    from src.agent import validate_grounded_response
+    from src.procedural.epistemic_evaluator import EpistemicEvaluation
+
+    outcome = EpistemicEvaluation(
+        status="unsupported",
+        explanation="I cannot answer this with the available robot evidence.",
+    )
+
+    assert not validate_grounded_response("The room temperature is 22 degrees.", outcome)
+    assert validate_grounded_response(
+        "I cannot answer this with the available robot evidence.", outcome
+    )
 
 
 def test_adversarial_completion_rejected_by_response_guard_in_scenario_b() -> None:

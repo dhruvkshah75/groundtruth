@@ -55,9 +55,9 @@ In the browser app, each session uses SQLite `:memory:`. This is real SQLite beh
 
 ### Tier 2 — Procedural layer: decide what evidence is needed and compare it
 
-Tier 2 connects the user request to memory and sensors. The current process is deterministic:
+Tier 2 connects the user request to memory and sensors. In live mode, a language model proposes a structured intent; deterministic Python controls the rest of the process:
 
-1. `RuleBasedIntentProvider` classifies the wording into an allowed intent.
+1. `GroqIntentProvider` (live mode) or `RuleBasedIntentProvider` (explicit offline mode) proposes an allowed intent.
 2. `IntentPlanner` validates the provider's raw response against the shared `IntentRequest` contract. It preserves the user's original question and has bounded repair/reconsideration behavior.
 3. Entity resolution maps user wording such as “front route” or “red box” to a canonical ID such as `route_A` or `box_01`. Ambiguous or missing entities stop safely; the agent does not choose a random match.
 4. `CapabilityValidator` checks that the requested sensor exists and is registered with the right kind.
@@ -66,7 +66,7 @@ Tier 2 connects the user request to memory and sensors. The current process is d
 7. `EpistemicEvaluator` compares the actual returned facts and observations. It creates the final status, answer, perspectives, and, where justified, a Tier 1 revision/audit event.
 8. `GroundedAgent` returns the result and current graph/facts to the web service.
 
-The rule-based provider is a small deterministic classifier. It checks phrases such as “route”, “clear”, “color”, “history”, and “why”. It is useful for repeatable tests and the current local demo, but it does not understand arbitrary wording like a language model and does not perform LLM reasoning.
+The rule-based provider is a small deterministic classifier. It checks phrases such as “route”, “clear”, “color”, “history”, and “why”. It is useful for repeatable offline demos and tests, but it does not understand arbitrary wording like a language model.
 
 ### Tier 3 — Sensorimotor environment: a deterministic mock world
 
@@ -85,9 +85,9 @@ The mock camera has a documented deterministic rule: a configured red object und
 
 | Term | Plain meaning | Example |
 | --- | --- | --- |
-| **Provider** | The component that interprets or structures a user's question. | Today: `RuleBasedIntentProvider`; planned in GT-07: a real LLM adapter. |
-| **LLM/model** | A language model that can interpret flexible wording. | No LLM is connected in the current app. |
-| **ReAct** | A bounded reason, act, observe cycle: request an allowed operation, receive its result, then respond. | Planned milestone: model selects a constrained intent; Python executes required operations and sends real results back. |
+| **Provider** | The component that interprets or structures a user's question. | Live mode uses `GroqIntentProvider`; explicit offline mode uses `RuleBasedIntentProvider`. |
+| **LLM/model** | A language model that can interpret flexible wording. | Live mode uses Groq's configured model for structured intent selection and a grounded response turn. |
+| **ReAct** | A bounded reason, act, observe cycle: request an allowed operation, receive its result, then respond. | The model selects a constrained intent; Python validates it, executes required operations, returns actual results to the model, and validates the final text. |
 | **Intent** | The category of the user's request; not the answer and not a Python function call. | `current_route_status` means “ask about a route now”. |
 | **Entity** | The thing being discussed. | `route_A` or `box_01`. |
 | **Alias / canonical ID** | A user-friendly phrase / the stable internal name it resolves to. | “front route” → `route_A`. |
@@ -115,15 +115,15 @@ User types a question or loads a preset
   -> IntentPlanner validates intent (enforcing bounded 1-attempt repair and coverage review)
   -> Deterministic PlanBuilder & PlanExecutor run approved operations (queries SQLite & samples MockEnvironment)
   -> EpistemicEvaluator applies deterministic evidence policy & records justified belief revisions in SQLite
-  -> Turn 2 (Grounded Explanation Synthesis):
+  -> Turn 2 (Grounded Explanation):
      - Python returns real typed observation & memory results to the LLM as verified tool output
-     - LLM synthesizes concise grounded explanation adhering strictly to evidence
-     - Safe fallback: if LLM fails, deterministic grounded evaluation text is preserved
+     - Python accepts final model text only if it matches the deterministic, evidence-backed explanation (ignoring case and punctuation)
+     - If the text differs, is malformed, or the model fails, Python uses the deterministic explanation
   -> API returns answer, ReAct trace, status, perspectives, revisions, telemetry, active facts & graph
   -> React renders chat turn with ReAct trace dropdown, provider badges, and live system inspector
 ```
 
-Python strictly owns facts, capability verification, plan construction, sensor execution, conflict resolution, and memory writes. The LLM acts as a bounded language interface for intent interpretation and grounded response synthesis.
+Python strictly owns facts, capability verification, plan construction, sensor execution, conflict resolution, memory writes, and final trusted wording. The LLM is a bounded language interface for intent interpretation and may propose final wording, but arbitrary free-form paraphrases are not trusted because every unsupported or contradictory claim cannot be checked reliably.
 
 ### Frontend/API routes
 
@@ -159,7 +159,7 @@ These are controlled backend fixtures. The LiDAR reading itself is computed from
 4. SQLite returns the static-map claim. Tier 3 calculates an obstacle directly ahead and returns `blocked` at `12.0 cm`, along with an observation ID and spatial context.
 5. `EpistemicEvaluator` verifies that the stored claim and observation apply to the same location and frame. Since the static-map claim says clear and the fresh sensor says blocked, the evaluator applies `lidar_overrides_map`.
 6. Tier 1 records the LiDAR-backed blocked claim, marks the old clear claim superseded, and writes an audit event. The graph projection refreshes from active facts and shows the active route as blocked.
-7. In live mode, these real tool execution results are returned to the LLM (Turn 2) to synthesize a grounded natural language response. In offline mode or if explanation synthesis fails, deterministic Python generates the outcome text. React displays the answer, status, ReAct execution trace, audit/revision details, sensor telemetry, ledger, graph, and environment values.
+7. In live mode, these real tool execution results are returned to the LLM (Turn 2). Python accepts the model's final text only when it matches the deterministic explanation, ignoring case and punctuation; otherwise it returns the deterministic explanation. React displays the answer, status, ReAct execution trace, audit/revision details, sensor telemetry, ledger, graph, and environment values.
 
 The expected answer is equivalent to:
 
@@ -195,11 +195,11 @@ The red object and yellow lighting are backend environment configuration. The ca
    - **User expectation:** red, because that is the target color stated in the question.
    - **Current egocentric camera view:** brown under yellow lighting.
    - **Historical/third-party record:** the latest stored color claim says blue, from `bot_02`.
-6. In live mode, the LLM receives these typed perspective results and explains the distinction clearly. In offline mode, deterministic Python generates the perspective breakdown text. React shows the distinct perspective cards, sensor telemetry, provenance/ledger facts, ReAct trace, and environment lighting/object state.
+6. In live mode, the LLM receives these typed perspective results. Python accepts only final text matching the deterministic explanation, which keeps the perspectives and attributions intact. Offline mode uses the deterministic explanation directly. React shows the distinct perspective cards, sensor telemetry, provenance/ledger facts, ReAct trace, and environment lighting/object state.
 
 The historical blue statement means **“the database contains a sourced record saying blue”**. It does not prove the object is physically blue now. If there is no historical color fact, the agent reports that no record was found; it must not invent blue or `bot_02`.
 
-In live mode, the LLM synthesizes natural language over the verified perspectives; in offline mode, deterministic Python provides the response text.
+In live mode, the LLM receives the verified perspectives, and Python returns only text matching the deterministic explanation. This keeps the three values and their attribution intact. Offline mode uses the deterministic explanation directly.
 
 ## 8. What the UI shows
 
