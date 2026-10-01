@@ -8,7 +8,7 @@ GroundTruth is a student project about answering questions using evidence from s
 
 ## Current project status
 
-The current project is a working local demo with a React/TypeScript interface connected to a Python API and agent. The backend runs a deterministic intent provider, retrieves facts from Tier 1, obtains observations from the Tier 3 mock environment, applies the evidence and conflict rules, and returns the result for the UI to display.
+The current project is a working local demo with a React/TypeScript interface connected to a Python API and agent. The backend runs a bounded ReAct cycle (using Groq function calling in live mode, or deterministic rule-based matching in explicit offline mode), retrieves facts from Tier 1, obtains observations from the Tier 3 mock environment, applies deterministic evidence and conflict rules, validates response consistency, and returns the result for the UI to display.
 
 The demo includes two end-to-end scenarios:
 
@@ -17,14 +17,14 @@ The demo includes two end-to-end scenarios:
 
 ![GroundTruth running Scenario A in the React interface](docs/assets/current-agent-demo.png)
 
-**LLM/ReAct status:** The current app does not call an LLM. Intent classification and response wording are deterministic. The next milestone is to add the bounded LLM function-calling/ReAct loop and connect its provider status and execution trace to this interface; that work is tracked in [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17). Until then, describe the current app as a deterministic end-to-end prototype of the layer integration and Scenario A/B evidence flow.
+**LLM/ReAct status:** The app implements a real bounded LLM function-calling ReAct loop via `GroqIntentProvider` (milestone [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17)), while retaining an explicit offline mode with `RuleBasedIntentProvider`. Python strictly owns fact validation, approved operations, belief revisions, and deterministic response guards. The React UI exposes live provider status, collapsible ReAct tool execution traces (with executed operations, measurements, and evidence IDs), and epistemic telemetry.
 
 The browser demo uses session-scoped in-memory SQLite and mock-world state. Restarting the Python server clears those demo sessions. The frontend displays backend results and API errors; it does not replace missing backend data with canned scenario answers.
 
 ## Three layers
 
 1. **Tier 1 — Declarative memory:** SQLite stores sourced facts, timestamps, confidence, revisions, and audit history. NetworkX is a rebuildable projection of active facts, not another source of truth.
-2. **Tier 2 — Procedural layer:** deterministic current code validates an intent, resolves entities, builds and executes a safe evidence plan, and applies the conflict/perspective rules. A real LLM provider is planned, not connected yet.
+2. **Tier 2 — Procedural layer:** validates model intent proposals, resolves entities, builds and executes mandatory evidence plans, and applies conflict/perspective rules. In live mode, a Groq adapter participates in a two-turn ReAct cycle; Python validates the final response against deterministic outcomes before returning.
 3. **Tier 3 — Sensorimotor layer:** the deterministic mock environment calculates LiDAR, camera, ambient-light, and robot-pose observations from its configured world.
 
 The Python layer owns the evidence and answer logic. The browser displays data returned by that backend; it does not substitute canned answers when requests fail. Scenario presets seed repeatable backend test worlds.
@@ -54,4 +54,4 @@ Open <http://127.0.0.1:5173>. See [Local Development Setup](docs/Local_Developme
 - [Current Agent and Scenario Guide](docs/Implemented_System_Overview.md) — what currently runs, key terms, complete Scenario A/B walkthroughs, and limitations.
 - [Documentation index](docs/README.md) — architecture, tier guides, and project context.
 - [Architecture decisions](docs/Architecture_Decisions.md) — the approved tier boundaries and evidence policy.
-- [GT-07 / Issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) — planned real LLM ReAct integration and frontend update.
+- [GT-07 / Issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) — real LLM ReAct integration and frontend connection.

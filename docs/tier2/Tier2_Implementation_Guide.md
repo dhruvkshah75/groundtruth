@@ -1,6 +1,6 @@
 # Tier 2 Implementation Guide
 
-> **Implementation status (October 2026):** This guide describes the intended Tier 2 design, including a future LLM-assisted flow. The current `main` branch uses a deterministic `RuleBasedIntentProvider`; it does not yet run an LLM or a ReAct loop. The current agent, frontend, and Scenario A/B behavior are documented in [Implemented System Overview](../Implemented_System_Overview.md). The LLM/ReAct integration is tracked by [GT-07](https://github.com/dhruvkshah75/groundtruth/issues/17).
+> **Implementation status (October 2026):** Tier 2 uses a configured Groq LLM for constrained intent/function selection and a bounded grounded-response turn. Deterministic Python still validates the intent, constructs and executes plans, evaluates evidence, and controls final trusted wording. Explicit offline mode uses `RuleBasedIntentProvider`. The complete runtime flow and Scenario A/B behavior are documented in [Implemented System Overview](../Implemented_System_Overview.md).
 
 ## What Tier 2 is responsible for
 
@@ -20,7 +20,7 @@ Natural language is flexible:
 “Is the route ahead clear?”
 ```
 
-All may mean the same thing. In the planned design, an LLM can help recognize this intent. The current implementation uses deterministic keyword rules for intent recognition.
+All may mean the same thing. In live mode, the LLM can recognize this intent through the approved structured intent tools. Explicit offline mode uses deterministic keyword rules.
 
 Regardless of the intent provider, an LLM should not decide whether a sensor, old map, or user claim is true. Evidence retrieval, validation, conflict resolution, and belief revision are handled by deterministic Python.
 
@@ -31,7 +31,7 @@ Python: validate requests, retrieve evidence, resolve conflict, record revisions
 
 ## Planned LLM boundary: IntentRequest is the only planning output
 
-When the LLM integration is implemented, the model should not freely generate an arbitrary list of database and sensor calls. It should return a limited intent request:
+The model does not freely generate an arbitrary list of database and sensor calls. It returns a limited intent request:
 
 ```python
 class IntentRequest(BaseModel):
@@ -85,7 +85,7 @@ query_history: read older facts and audit history
 
 The capability list comes from Tier 3's `CapabilityDescriptor` contracts at startup. It is only a list of what may be requested; it is not sensor data and does not let the LLM create new tools.
 
-In the planned LLM implementation, the model returns an `IntentRequest`, not an unrestricted sequence of tool calls. The deterministic `PlanBuilder` chooses the mandatory operations for that intent. For example, `current_route_status` includes an active-memory query and a fresh LiDAR request when LiDAR is available. Today, the rule-based provider supplies the intent and the same deterministic planning and evidence policies govern the request.
+The live model returns an `IntentRequest`, not an unrestricted sequence of tool calls. The deterministic `PlanBuilder` chooses mandatory operations for that intent. For example, `current_route_status` includes an active-memory query and a fresh LiDAR request when LiDAR is available. Explicit offline mode supplies intents through the rule-based provider; deterministic planning and evidence policies are the same in either mode.
 
 ### After evidence is collected
 

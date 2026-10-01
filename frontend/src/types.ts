@@ -47,6 +47,27 @@ export type Revision = {
   audit_event: AuditEvent;
 };
 
+export type OperationTrace = {
+  name: string;
+  purpose?: string;
+  ran: boolean;
+  status: string;
+  evidence_ids: string[];
+  returned_values: Record<string, unknown> | Array<unknown>;
+  summary: string;
+};
+
+export type ReActTrace = {
+  tool_name: string;
+  tool_call_id: string;
+  arguments: Record<string, unknown>;
+  approved_operations: string[];
+  execution_summary?: Record<string, unknown> | null;
+  explanation_source: "llm" | "deterministic_fallback" | "rule_based";
+  model?: string | null;
+  operations?: OperationTrace[];
+};
+
 export type AgentResponse = {
   question: string;
   answer: string;
@@ -63,6 +84,7 @@ export type AgentResponse = {
   sensor_telemetry: Array<Record<string, unknown>>;
   plan_verifiable: boolean | null;
   plan_reason: string | null;
+  react_trace?: ReActTrace | null;
 };
 
 export type WorldState = {
@@ -103,10 +125,13 @@ export type AppState = {
 };
 
 export type ApiHealth = {
-  status: "ok";
+  status: "ok" | "degraded" | "error";
   service: string;
   provider: string;
   provider_mode: string;
+  llm_ready?: boolean;
+  model?: string | null;
+  error?: string | null;
 };
 
 export type ApiErrorPayload = { error: string; code: string };

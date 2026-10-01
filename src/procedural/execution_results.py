@@ -44,3 +44,4 @@ class PlanExecutionResult(BaseModel):
     memory_results: list[MemoryExecutionResult] = Field(default_factory=list)
     observation_results: list[ObservationExecutionResult] = Field(default_factory=list)
     audit_results: list[AuditExecutionResult] = Field(default_factory=list)
+    approved_operations: list[str] = Field(default_factory=list)

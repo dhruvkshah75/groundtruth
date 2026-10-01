@@ -75,6 +75,14 @@ class PlanExecutor:
                 AuditExecutionResult(operation_index=idx, purpose=audit_op.purpose, trails=trails)
             )
 
+        approved_operations: list[str] = []
+        for mem_op in plan.memory_operations:
+            approved_operations.append(f"memory_query: {mem_op.purpose}")
+        for obs_op in plan.observation_operations:
+            approved_operations.append(f"observe: {obs_op.request.capability}")
+        for audit_op in plan.audit_operations:
+            approved_operations.append(f"audit_lookup: {audit_op.purpose}")
+
         # 4. ActionPlaceholder is ignored as per instructions.
         return PlanExecutionResult(
             plan_verifiable=plan.current_state_verifiable,
@@ -83,4 +91,5 @@ class PlanExecutor:
             memory_results=memory_results,
             observation_results=observation_results,
             audit_results=audit_results,
+            approved_operations=approved_operations,
         )

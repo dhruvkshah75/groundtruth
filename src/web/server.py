@@ -10,6 +10,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.web.service import AgentService
 
 LOGGER = logging.getLogger("groundtruth.web")
@@ -91,6 +92,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json(200, session.snapshot())
         except (ValueError, json.JSONDecodeError) as exc:
             self._send_error_json(400, "invalid_request", str(exc))
+        except IntentProviderUnavailableError as exc:
+            self._send_error_json(503, "provider_unavailable", str(exc))
         except RuntimeError as exc:
             self._send_error_json(503, "session_limit", str(exc))
         except Exception:
@@ -136,11 +139,14 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
 
 
 def create_server(
-    host: str = "127.0.0.1", port: int = 8765, web_root: Path = DEFAULT_WEB_ROOT
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    web_root: Path = DEFAULT_WEB_ROOT,
+    service: AgentService | None = None,
 ) -> ThreadingHTTPServer:
     """Create a server instance, also used by API integration tests."""
-    service = AgentService()
-    handler = partial(AgentRequestHandler, service=service, web_root=web_root)
+    svc = service or AgentService()
+    handler = partial(AgentRequestHandler, service=svc, web_root=web_root)
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server

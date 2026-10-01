@@ -10,6 +10,8 @@ from uuid import UUID
 from src.agent import AgentResponse, GroundedAgent
 from src.contracts import FactAssertion, FactQuery, SpatialContext
 from src.declarative.memory_repository import MemoryRepository
+from src.procedural.intent_provider import IntentProviderUnavailableError
+from src.providers import ProviderConfig, create_provider, get_provider_config
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import (
     AmbientLight,
@@ -26,7 +28,8 @@ SCENARIO_B_QUESTION = (
 )
 
 
-def _new_agent() -> GroundedAgent:
+def _new_agent(config: ProviderConfig | None = None) -> GroundedAgent:
+    provider, _ = create_provider(config)
     memory = MemoryRepository(":memory:")
     for mention, entity_id in (
         ("front route", "route_A"),
@@ -52,22 +55,30 @@ def _new_agent() -> GroundedAgent:
         ),
         light=AmbientLight(intensity=1.0, color_cast="white"),
     )
-    return GroundedAgent.create(memory=memory, environment=MockEnvironment(world=world))
+    return GroundedAgent.create(
+        memory=memory,
+        environment=MockEnvironment(world=world),
+        provider=provider,
+    )
 
 
 @dataclass
 class AgentSession:
     """One browser's agent, in-memory evidence ledger, and conversation history."""
 
-    agent: GroundedAgent = field(default_factory=_new_agent)
+    config: ProviderConfig = field(default_factory=get_provider_config)
+    agent: GroundedAgent = field(init=False)
     history: list[dict[str, object]] = field(default_factory=list)
     suggested_question: str = ""
     lock: threading.RLock = field(default_factory=threading.RLock)
 
+    def __post_init__(self) -> None:
+        self.agent = _new_agent(self.config)
+
     def reset(self) -> None:
         """Discard the current ephemeral ledger and create a fresh agent."""
         self.agent.close()
-        self.agent = _new_agent()
+        self.agent = _new_agent(self.config)
         self.history.clear()
         self.suggested_question = ""
 
@@ -158,6 +169,12 @@ class AgentSession:
         if len(cleaned) > 4000:
             raise ValueError("Question must be 4,000 characters or fewer.")
 
+        if self.config.mode == "live" and not self.config.has_valid_key:
+            raise IntentProviderUnavailableError(
+                "GROQ_API_KEY is not configured. Add GROQ_API_KEY to your .env file "
+                "or set GROUNDTRUTH_PROVIDER_MODE=offline to use offline rule-based mode."
+            )
+
         response = self.agent.ask(cleaned)
         item = _response_to_dict(response)
         self.history.append(item)
@@ -204,9 +221,10 @@ class AgentSession:
 class AgentService:
     """Thread-safe registry for browser sessions and app metadata."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: ProviderConfig | None = None) -> None:
         self._sessions: dict[str, AgentSession] = {}
         self._lock = threading.Lock()
+        self._config = config or get_provider_config()
 
     def get_session(self, session_id: str) -> AgentSession:
         """Return the session identified by a caller-provided UUID."""
@@ -219,18 +237,45 @@ class AgentService:
             if canonical_id not in self._sessions:
                 if len(self._sessions) >= 128:
                     raise RuntimeError("The local demo has reached its 128-session limit.")
-                self._sessions[canonical_id] = AgentSession()
+                self._sessions[canonical_id] = AgentSession(config=self._config)
             return self._sessions[canonical_id]
 
-    @staticmethod
-    def health() -> dict[str, object]:
+    def health(self) -> dict[str, object]:
         """Report this running API and the provider actually wired into the agent."""
-        return {
-            "status": "ok",
-            "service": "GroundTruth local agent API",
-            "provider": "RuleBasedIntentProvider",
-            "provider_mode": "deterministic local demo",
-        }
+        if self._config.mode == "live":
+            if self._config.has_valid_key:
+                return {
+                    "status": "ok",
+                    "service": "GroundTruth local agent API",
+                    "provider": "GroqIntentProvider",
+                    "provider_mode": f"Live LLM ({self._config.model})",
+                    "llm_ready": True,
+                    "model": self._config.model,
+                    "error": None,
+                }
+            else:
+                return {
+                    "status": "degraded",
+                    "service": "GroundTruth local agent API",
+                    "provider": "GroqIntentProvider",
+                    "provider_mode": "Live LLM (unconfigured)",
+                    "llm_ready": False,
+                    "model": self._config.model,
+                    "error": (
+                        "GROQ_API_KEY is not configured. Add GROQ_API_KEY to .env "
+                        "or switch to offline mode."
+                    ),
+                }
+        else:
+            return {
+                "status": "ok",
+                "service": "GroundTruth local agent API",
+                "provider": "RuleBasedIntentProvider",
+                "provider_mode": "Offline (deterministic rules)",
+                "llm_ready": False,
+                "model": None,
+                "error": None,
+            }
 
 
 def _model_to_dict(value: object) -> dict[str, object]:
@@ -259,6 +304,19 @@ def _iso(value: object) -> str | None:
 
 
 def _response_to_dict(response: AgentResponse) -> dict[str, object]:
+    react_trace_dict: dict[str, object] | None = None
+    if response.react_trace is not None:
+        react_trace_dict = {
+            "tool_name": response.react_trace.tool_name,
+            "tool_call_id": response.react_trace.tool_call_id,
+            "arguments": response.react_trace.arguments,
+            "approved_operations": response.react_trace.approved_operations,
+            "execution_summary": response.react_trace.execution_summary,
+            "explanation_source": response.react_trace.explanation_source,
+            "model": response.react_trace.model,
+            "operations": response.react_trace.operations,
+        }
+
     return {
         "question": response.question,
         "answer": response.answer,
@@ -277,4 +335,5 @@ def _response_to_dict(response: AgentResponse) -> dict[str, object]:
         "sensor_telemetry": response.sensor_telemetry,
         "plan_verifiable": response.plan_verifiable,
         "plan_reason": getattr(response, "plan_reason", None),
+        "react_trace": react_trace_dict,
     }
