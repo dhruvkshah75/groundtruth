@@ -4,6 +4,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import type { DisplayFact } from "./BeliefGraphPage";
 import { graphPositions } from "./beliefGraphLayout";
+import { factColor } from "./beliefGraphAppearance";
 
 export type CameraAction = {
   id: number;
@@ -316,12 +317,12 @@ export function BeliefGraphCanvas({
       const changed = highlightedFactIds.has(factId);
       const lineMaterial = rendered.line.material as THREE.LineBasicMaterial;
       const arrowMaterial = rendered.arrow.material as THREE.MeshBasicMaterial;
-      const color = selected ? 0xf0c77f : changed || relatedToNode ? 0x78e6d8 : rendered.active ? 0x4f8f83 : 0x666b69;
+      const color = factColor(rendered.active, selected, relatedToNode, changed);
       lineMaterial.color.setHex(color);
       lineMaterial.opacity = selected || changed || relatedToNode ? 1 : rendered.active ? 0.76 : 0.42;
       arrowMaterial.color.setHex(color);
-      rendered.label.classList.toggle("selected", selected);
-      rendered.label.classList.toggle("changed", changed || relatedToNode);
+      rendered.label.classList.toggle("selected", selected || relatedToNode);
+      rendered.label.classList.toggle("changed", changed);
     }
   }, [facts, highlightedFactIds, selectedFactId, selectedNodeId]);
 

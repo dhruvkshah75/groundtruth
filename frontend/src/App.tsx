@@ -221,7 +221,8 @@ function App() {
   };
 
   const busy = action !== null;
-  const backendReachable = health?.status === "ok";
+  const backendReachable = health?.status === "ok" || health?.status === "degraded";
+  const providerAvailable = backendReachable && health?.status !== "degraded";
   const controlsShown = window.innerWidth >= 1200 ? controlPanelVisible : controlsOpen;
 
   return (
@@ -363,10 +364,18 @@ function App() {
           </button>
         </header>
 
+        {health?.status === "degraded" && health.error && (
+          <div className="error-banner" role="status">
+            <CircleAlert size={17} aria-hidden="true" />
+            <span>{health.error}</span>
+          </div>
+        )}
+
         {error && (
           <div className="error-banner" role="alert">
             <CircleAlert size={17} />
             <span>{error}</span>
+            {!backendReachable && <button type="button" onClick={() => void refresh()}>Retry connection</button>}
             <button type="button" aria-label="Dismiss error" onClick={() => setError(null)}><X size={16} /></button>
           </div>
         )}
@@ -414,11 +423,11 @@ function App() {
                   }
                 }}
                 placeholder="Ask GroundTruth about the current world…"
-                disabled={!backendReachable || busy}
+                disabled={!providerAvailable || busy}
               />
               <div className="composer-footer">
                 <span className="composer-provider"><Activity size={13} />{health?.provider ?? "Agent API"}</span>
-                <button className="send-button" type="submit" aria-label="Run agent cycle" disabled={!backendReachable || busy || !question.trim()}>
+                <button className="send-button" type="submit" aria-label="Run agent cycle" disabled={!providerAvailable || busy || !question.trim()}>
                   {action === "ask" ? <LoaderCircle size={16} className="spin" /> : <ArrowUp size={17} />}
                   <span>Run cycle</span>
                 </button>

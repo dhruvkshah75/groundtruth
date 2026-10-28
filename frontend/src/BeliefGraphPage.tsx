@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { highlightedFacts } from "./beliefGraphAppearance";
 import {
   BrainCircuit,
   ChevronRight,
@@ -160,11 +161,12 @@ function Sidebar({
             ref={searchRef}
             id="belief-search"
             type="search"
+            aria-label="Search beliefs by node, predicate, or fact ID"
             placeholder="Find node, predicate, fact ID"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
           />
-          <kbd>/</kbd>
+          <kbd aria-hidden="true">/</kbd>
         </label>
       </section>
 
@@ -328,11 +330,42 @@ function AccessibleFactList({
   onSelect: (factId: string) => void;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    closeButtonRef.current?.focus();
+
+    return () => {
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
+  const keepFocusInDialog = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab") return;
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    );
+    if (!focusable?.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
   return (
     <div className="belief-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="belief-dialog" role="dialog" aria-modal="true" aria-labelledby="fact-list-title">
-        <header><div><h2 id="fact-list-title">Stored belief facts</h2><p>Keyboard-accessible view of the facts currently shown in the graph.</p></div><button type="button" onClick={onClose} aria-label="Close fact list"><X size={18} /></button></header>
+      <section ref={dialogRef} className="belief-dialog" role="dialog" aria-modal="true" aria-labelledby="fact-list-title" onKeyDown={keepFocusInDialog}>
+        <header><div><h2 id="fact-list-title">Stored belief facts</h2><p>Keyboard-accessible view of the facts currently shown in the graph.</p></div><button ref={closeButtonRef} type="button" onClick={onClose} aria-label="Close fact list"><X size={18} /></button></header>
         <div className="belief-fact-list">
           {facts.length ? facts.map((fact) => (
             <button
@@ -420,7 +453,7 @@ export default function BeliefGraphPage() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "/" && document.activeElement?.tagName !== "INPUT") {
+      if (event.key === "/" && !factListOpen && document.activeElement?.tagName !== "INPUT") {
         event.preventDefault();
         setSidebarOpen(true);
         window.setTimeout(() => searchRef.current?.focus(), 0);
@@ -433,7 +466,7 @@ export default function BeliefGraphPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [factListOpen]);
 
   const allFacts = useMemo(
     () => scope === "active"
@@ -442,6 +475,10 @@ export default function BeliefGraphPage() {
     [scope, state],
   );
   const facts = useMemo(() => allFacts.filter((fact) => factMatches(fact, query.trim())), [allFacts, query]);
+  const displayedHighlights = useMemo(
+    () => highlightedFacts(highlightedFactIds, state?.ledger ?? [], state?.audit_events ?? []),
+    [highlightedFactIds, state],
+  );
   const nodes = useMemo(() => {
     const values = new Set<string>();
     facts.forEach((fact) => { values.add(fact.source); values.add(fact.target); });
@@ -545,7 +582,7 @@ export default function BeliefGraphPage() {
               {demoAction === "prepare-a" ? <LoaderCircle size={15} className="spin" /> : <Database size={15} />}
               {demoAction === "prepare-a" ? "Loading baseline…" : "1 · Load Scenario A"}
             </button>
-            <button className="belief-demo-button primary" type="button" onClick={() => void runScenarioA()} disabled={demoAction !== null || !state?.suggested_question || !state.environment.scenario_name?.startsWith("Scenario A")}>
+            <button className="belief-demo-button primary" type="button" onClick={() => void runScenarioA()} disabled={health?.status !== "ok" || demoAction !== null || !state?.suggested_question || !state.environment.scenario_name?.startsWith("Scenario A")} title={health?.status === "degraded" ? "Configure the live LLM or switch to offline mode to run the check." : undefined}>
               {demoAction === "run-a" ? <LoaderCircle size={15} className="spin" /> : <Play size={15} />}
               {demoAction === "run-a" ? "Checking LiDAR…" : "2 · Run LiDAR check"}
             </button>
@@ -567,7 +604,7 @@ export default function BeliefGraphPage() {
               interactionMode={interactionMode}
               selectedFactId={selectedFactId}
               selectedNodeId={selectedNodeId}
-              highlightedFactIds={highlightedFactIds}
+              highlightedFactIds={displayedHighlights}
               cameraAction={cameraAction}
               onSelectFact={selectFact}
               onSelectNode={selectNode}
