@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { factColor, highlightedFacts } from "../src/beliefGraphAppearance.ts";
 
-assert.equal(factColor(true, false, false, true), 0xe0bd7d, "revised facts use the legend's amber color");
-assert.equal(factColor(true, true, false, false), 0x78e6d8, "selection must not look like a revision");
-assert.equal(factColor(true, true, false, true), 0xe0bd7d, "a selected revision remains amber");
-assert.equal(factColor(true, false, false, false), 0x4f8f83);
-assert.equal(factColor(false, false, false, false), 0x666b69);
+assert.equal(factColor(true, false, false, true), 0xa06a1c, "revised facts use the legend's amber color");
+assert.equal(factColor(true, true, false, false), 0x765184, "selection must not look like a revision");
+assert.equal(factColor(true, true, false, true), 0xa06a1c, "a selected revision remains amber");
+assert.equal(factColor(true, false, false, false), 0x8b7596);
+assert.equal(factColor(false, false, false, false), 0x817a85);
 
 const transient = new Set(["new"]);
 const ids = highlightedFacts(transient, [{ superseded_by: "successor" }, { superseded_by: null }], [

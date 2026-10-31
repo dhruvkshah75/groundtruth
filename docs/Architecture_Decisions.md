@@ -6,7 +6,7 @@
 
 This is the current implementation guide for GroundTruth. Read it before building Tier 1 or Tier 2.
 
-The original [I, Agent masterplan](I_Agent_Masterplan.md) explains the assignment vision. The [alternatives analysis](Potential%20Issues%20vs%20Alternatives.md) records risks and possible designs. This document records the design selected for implementation so teammates do not make conflicting decisions.
+The original [agent masterplan](I_Agent_Masterplan.md) explains the assignment vision. The [alternatives analysis](Potential%20Issues%20vs%20Alternatives.md) records risks and possible designs. This document records the design selected for implementation so teammates do not make conflicting decisions.
 
 ## The problem we are solving
 

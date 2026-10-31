@@ -13,7 +13,7 @@
 
 ## Supporting context
 
-- [I, Agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.
+- [agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.
 - [Potential Issues vs Alternatives](Potential%20Issues%20vs%20Alternatives.md) records risks and alternatives considered before selecting the current design.
 - [Local Development Setup](Local_Development_Setup.md) covers the `uv` workflow.
 - [GT-07 / Issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17) tracks the completed LLM function-calling/ReAct milestone and its implementation context.

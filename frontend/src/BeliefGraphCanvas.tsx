@@ -5,6 +5,7 @@ import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer
 import type { DisplayFact } from "./BeliefGraphPage";
 import { graphPositions } from "./beliefGraphLayout";
 import { factColor } from "./beliefGraphAppearance";
+import { placeGraphLabels, type GraphLabel } from "./beliefGraphLabels";
 
 export type CameraAction = {
   id: number;
@@ -61,9 +62,11 @@ export function BeliefGraphCanvas({
   onSelectNode,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const labelsDirtyRef = useRef(true);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
-  const cameraPositionRef = useRef(DEFAULT_CAMERA.clone());
+  const cameraPositionRef = useRef<THREE.Vector3 | null>(null);
+  const fittedCameraRef = useRef(DEFAULT_CAMERA.clone());
   const cameraTargetRef = useRef(new THREE.Vector3());
   const nodeMeshesRef = useRef(new Map<string, THREE.Mesh>());
   const factObjectsRef = useRef(new Map<string, RenderedFact>());
@@ -93,11 +96,19 @@ export function BeliefGraphCanvas({
     const width = Math.max(container.clientWidth, 1);
     const height = Math.max(container.clientHeight, 1);
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1e2220);
-    scene.fog = new THREE.FogExp2(0x1e2220, 0.035);
+    const theme = getComputedStyle(container);
+    scene.background = new THREE.Color(theme.getPropertyValue("--surface-raised").trim() || "#f8f6f9");
 
-    const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 100);
-    camera.position.copy(cameraPositionRef.current);
+    const positions = graphPositions(nodes, facts);
+    const radius = Math.max(1, ...[...positions.values()].map(({ x, y, z }) => Math.hypot(x, y, z))) + 0.5;
+    const fitDistance = (aspect: number) => {
+      const halfFov = Math.min(THREE.MathUtils.degToRad(24), Math.atan(Math.tan(THREE.MathUtils.degToRad(24)) * aspect));
+      return radius / Math.sin(halfFov) * 1.1;
+    };
+    let previousFit = fitDistance(width / height);
+    fittedCameraRef.current.copy(DEFAULT_CAMERA).normalize().multiplyScalar(previousFit);
+    const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 200);
+    camera.position.copy(cameraPositionRef.current ?? fittedCameraRef.current);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -106,6 +117,12 @@ export function BeliefGraphCanvas({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.className = "belief-webgl-canvas";
     container.appendChild(renderer.domElement);
+
+    const connectorLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    connectorLayer.classList.add("belief-label-connectors");
+    connectorLayer.setAttribute("aria-hidden", "true");
+    container.appendChild(connectorLayer);
+    const connectorLines = new Map<string, SVGLineElement>();
 
     const labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(width, height);
@@ -116,7 +133,7 @@ export function BeliefGraphCanvas({
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.minDistance = 4;
-    controls.maxDistance = 24;
+    controls.maxDistance = Math.max(40, previousFit * 2);
     controls.enablePan = true;
     controls.target.copy(cameraTargetRef.current);
     controls.mouseButtons.LEFT = interactionMode === "pan" ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
@@ -124,32 +141,12 @@ export function BeliefGraphCanvas({
     controls.touches.ONE = interactionMode === "pan" ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
     controlsRef.current = controls;
 
-    scene.add(new THREE.AmbientLight(0xa8d8cd, 1.25));
-    const keyLight = new THREE.PointLight(0x61d8ca, 22, 35);
+    scene.add(new THREE.AmbientLight(0xffffff, 2));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
     keyLight.position.set(3, 5, 7);
     scene.add(keyLight);
-    const fillLight = new THREE.PointLight(0x7d958f, 12, 30);
-    fillLight.position.set(-6, -3, -4);
-    scene.add(fillLight);
 
-    const dustGeometry = new THREE.BufferGeometry();
-    const dustPoints: number[] = [];
-    for (let index = 0; index < 180; index += 1) {
-      const angle = index * 2.39996;
-      const radius = 3 + (index % 29) * 0.31;
-      dustPoints.push(
-        Math.cos(angle) * radius,
-        ((index * 17) % 37) * 0.32 - 5.8,
-        Math.sin(angle) * radius,
-      );
-    }
-    dustGeometry.setAttribute("position", new THREE.Float32BufferAttribute(dustPoints, 3));
-    scene.add(new THREE.Points(
-      dustGeometry,
-      new THREE.PointsMaterial({ color: 0x76988f, size: 0.025, transparent: true, opacity: 0.34 }),
-    ));
-
-    const positions = graphPositions(nodes, facts);
+    const graphLabels: { id: string; object: CSS2DObject; kind: "node" | "edge"; anchor?: THREE.Object3D }[] = [];
     const degree = new Map(nodes.map((node) => [node, 0]));
     facts.forEach((fact) => {
       degree.set(fact.source, (degree.get(fact.source) ?? 0) + 1);
@@ -161,9 +158,9 @@ export function BeliefGraphCanvas({
       const nodeDegree = degree.get(node) ?? 0;
       const radius = 0.15 + Math.min(nodeDegree, 6) * 0.018;
       const material = new THREE.MeshStandardMaterial({
-        color: 0x315a50,
-        emissive: 0x17362f,
-        emissiveIntensity: 0.8,
+        color: 0x765184,
+        emissive: 0x000000,
+        emissiveIntensity: 0,
         roughness: 0.46,
         metalness: 0.05,
       });
@@ -173,12 +170,17 @@ export function BeliefGraphCanvas({
       mesh.userData = { nodeId: node };
       scene.add(mesh);
 
-      const halo = new THREE.Mesh(
-        new THREE.SphereGeometry(radius * 1.55, 24, 16),
-        new THREE.MeshBasicMaterial({ color: 0x61d8ca, transparent: true, opacity: 0.04, side: THREE.BackSide }),
-      );
-      mesh.add(halo);
-      const label = makeLabel(node, `belief-node-label${nodeDegree >= 3 ? " hub" : ""}`);
+      const label = makeLabel(node, "belief-node-label");
+      const name = document.createElement("strong");
+      name.textContent = node;
+      const detail = document.createElement("small");
+      detail.textContent = `${nodeDegree} connected ${nodeDegree === 1 ? "fact" : "facts"}`;
+      label.element.replaceChildren(name, detail);
+      label.element.title = `${node} · ${detail.textContent}`;
+      graphLabels.push({ id: `node:${node}`, object: label, kind: "node", anchor: mesh });
+      const connector = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      connectorLayer.appendChild(connector);
+      connectorLines.set(`node:${node}`, connector);
       label.position.set(0, radius + 0.16, 0);
       mesh.add(label);
       mesh.userData.labelElement = label.element;
@@ -202,9 +204,9 @@ export function BeliefGraphCanvas({
       const end = target.clone().addScaledVector(normalized, -0.3);
       const lineGeometry = new THREE.BufferGeometry().setFromPoints([start, end]);
       const lineMaterial = new THREE.LineBasicMaterial({
-        color: fact.active ? 0x4f8f83 : 0x666b69,
+        color: factColor(fact.active, false, false, false),
         transparent: true,
-        opacity: fact.active ? 0.76 : 0.42,
+        opacity: fact.active ? 0.95 : 0.7,
       });
       const line = new THREE.Line(lineGeometry, lineMaterial);
       line.userData = { factId: fact.factId };
@@ -212,16 +214,18 @@ export function BeliefGraphCanvas({
 
       const arrow = new THREE.Mesh(
         new THREE.ConeGeometry(0.055, 0.18, 10),
-        new THREE.MeshBasicMaterial({ color: fact.active ? 0x61a99b : 0x6b6f6d, transparent: true, opacity: 0.8 }),
+        new THREE.MeshBasicMaterial({ color: factColor(fact.active, false, false, false), transparent: true, opacity: 0.8 }),
       );
       arrow.position.copy(end);
       arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized);
       arrow.userData = { factId: fact.factId };
       scene.add(arrow);
 
-      const labelObject = makeLabel(fact.predicate, fact.active ? "belief-edge-label" : "belief-edge-label superseded");
+      const labelObject = makeLabel(fact.predicate.replaceAll("_", " "), fact.active ? "belief-edge-label" : "belief-edge-label superseded");
       labelObject.position.copy(start).lerp(end, 0.5);
       scene.add(labelObject);
+      labelObject.element.title = `${fact.source} ${fact.predicate} ${fact.target} · ${Math.round(fact.confidence * 100)}% confidence · ${fact.sourceAgent}`;
+      graphLabels.push({ id: `fact:${fact.factId}`, object: labelObject, kind: "edge" });
       factObjects.set(fact.factId, { line, arrow, label: labelObject.element, active: fact.active });
     }
     factObjectsRef.current = factObjects;
@@ -234,7 +238,14 @@ export function BeliefGraphCanvas({
       ...[...factObjects.values()].flatMap(({ line, arrow }) => [line, arrow]),
     ];
 
+    let pointerDown: { x: number; y: number } | null = null;
+    const handlePointerDown = (event: PointerEvent) => {
+      pointerDown = { x: event.clientX, y: event.clientY };
+    };
     const handlePointer = (event: MouseEvent) => {
+      // Orbit and pan gestures must not also select the node under the pointer.
+      if (event.type === "click" && pointerDown
+        && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 5) return;
       const bounds = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
       pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
@@ -247,6 +258,10 @@ export function BeliefGraphCanvas({
       if (hit?.userData.nodeId) {
         (hit.userData.labelElement as HTMLElement).classList.add("hovered");
       }
+      for (const [factId, rendered] of factObjects) {
+        rendered.label.classList.toggle("hovered", hit?.userData.factId === factId);
+      }
+      labelsDirtyRef.current = true;
       if (event.type !== "click" || !hit) return;
       const factId = hit.userData.factId as string | undefined;
       if (factId) {
@@ -256,6 +271,7 @@ export function BeliefGraphCanvas({
       const nodeId = hit.userData.nodeId as string | undefined;
       if (nodeId) onSelectNodeRef.current(nodeId);
     };
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
     renderer.domElement.addEventListener("pointermove", handlePointer);
     renderer.domElement.addEventListener("click", handlePointer);
 
@@ -263,26 +279,70 @@ export function BeliefGraphCanvas({
       const nextWidth = Math.max(container.clientWidth, 1);
       const nextHeight = Math.max(container.clientHeight, 1);
       camera.aspect = nextWidth / nextHeight;
+      const nextFit = fitDistance(camera.aspect);
+      camera.position.sub(controls.target).multiplyScalar(nextFit / previousFit).add(controls.target);
+      fittedCameraRef.current.copy(DEFAULT_CAMERA).normalize().multiplyScalar(nextFit);
+      controls.maxDistance = Math.max(40, nextFit * 2);
+      previousFit = nextFit;
       camera.updateProjectionMatrix();
       renderer.setSize(nextWidth, nextHeight);
       labelRenderer.setSize(nextWidth, nextHeight);
+      labelsDirtyRef.current = true;
     });
     resizeObserver.observe(container);
 
+    const projected = new THREE.Vector3();
+    const layoutLabels = () => {
+      const screenLabels: GraphLabel[] = [];
+      for (const { id, object, kind } of graphLabels) {
+        object.getWorldPosition(projected).project(camera);
+        const element = object.element;
+        if (projected.z < -1 || projected.z > 1) { element.style.visibility = "hidden"; continue; }
+        const focused = element.classList.contains("hovered") || element.classList.contains("selected");
+        screenLabels.push({ id, kind, x: (projected.x + 1) * container.clientWidth / 2,
+          y: (1 - projected.y) * container.clientHeight / 2,
+          width: element.offsetWidth, height: element.offsetHeight,
+          priority: focused ? 4 : kind === "node" ? 3 : element.classList.contains("changed") ? 2 : 1 });
+      }
+      const placements = placeGraphLabels(screenLabels, container.clientWidth, container.clientHeight);
+      for (const { id, object, anchor } of graphLabels) {
+        const placement = placements.get(id);
+        object.element.style.visibility = placement?.visible ? "visible" : "hidden";
+        object.element.style.marginLeft = `${placement?.x ?? 0}px`;
+        object.element.style.marginTop = `${placement?.y ?? 0}px`;
+        const connector = connectorLines.get(id);
+        if (connector && anchor) {
+          const displaced = placement?.visible && Math.hypot(placement.x, placement.y) > 8;
+          connector.style.display = displaced ? "" : "none";
+          if (displaced) {
+            anchor.getWorldPosition(projected).project(camera);
+            connector.setAttribute("x1", String((projected.x + 1) * container.clientWidth / 2));
+            connector.setAttribute("y1", String((1 - projected.y) * container.clientHeight / 2));
+            object.getWorldPosition(projected).project(camera);
+            connector.setAttribute("x2", String((projected.x + 1) * container.clientWidth / 2 + placement.x));
+            connector.setAttribute("y2", String((1 - projected.y) * container.clientHeight / 2 + placement.y));
+          }
+        }
+      }
+      labelsDirtyRef.current = false;
+    };
+    labelsDirtyRef.current = true;
     let animationFrame = 0;
     const render = () => {
       animationFrame = window.requestAnimationFrame(render);
-      controls.update();
-      cameraPositionRef.current.copy(camera.position);
+      const cameraMoved = controls.update();
+      (cameraPositionRef.current ??= new THREE.Vector3()).copy(camera.position);
       cameraTargetRef.current.copy(controls.target);
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
+      if (cameraMoved || labelsDirtyRef.current) layoutLabels();
     };
     render();
 
     return () => {
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointer);
       renderer.domElement.removeEventListener("click", handlePointer);
       controls.dispose();
@@ -290,6 +350,7 @@ export function BeliefGraphCanvas({
       renderer.dispose();
       renderer.domElement.remove();
       labelRenderer.domElement.remove();
+      connectorLayer.remove();
       cameraRef.current = null;
       controlsRef.current = null;
       nodeMeshesRef.current = new Map();
@@ -303,8 +364,8 @@ export function BeliefGraphCanvas({
         (fact) => fact.factId === selectedFactId && (fact.source === nodeId || fact.target === nodeId),
       );
       const material = mesh.material as THREE.MeshStandardMaterial;
-      material.color.setHex(related ? 0x4c8175 : 0x315a50);
-      material.emissiveIntensity = related ? 1.45 : 0.8;
+      material.color.setHex(related ? 0x563064 : 0x765184);
+      material.emissiveIntensity = 0;
       mesh.scale.setScalar(related ? 1.12 : 1);
       (mesh.userData.labelElement as HTMLElement).classList.toggle("selected", related);
     }
@@ -319,11 +380,12 @@ export function BeliefGraphCanvas({
       const arrowMaterial = rendered.arrow.material as THREE.MeshBasicMaterial;
       const color = factColor(rendered.active, selected, relatedToNode, changed);
       lineMaterial.color.setHex(color);
-      lineMaterial.opacity = selected || changed || relatedToNode ? 1 : rendered.active ? 0.76 : 0.42;
+      lineMaterial.opacity = selected || changed || relatedToNode ? 1 : rendered.active ? 0.95 : 0.7;
       arrowMaterial.color.setHex(color);
       rendered.label.classList.toggle("selected", selected || relatedToNode);
       rendered.label.classList.toggle("changed", changed);
     }
+    labelsDirtyRef.current = true;
   }, [facts, highlightedFactIds, selectedFactId, selectedNodeId]);
 
   useEffect(() => {
@@ -339,13 +401,13 @@ export function BeliefGraphCanvas({
     const controls = controlsRef.current;
     if (!camera || !controls || cameraAction.id === 0) return;
     if (cameraAction.type === "reset") {
-      camera.position.copy(DEFAULT_CAMERA);
+      camera.position.copy(fittedCameraRef.current);
       controls.target.set(0, 0, 0);
     } else {
       const multiplier = cameraAction.type === "zoom-in" ? 0.82 : 1.22;
       camera.position.sub(controls.target).multiplyScalar(multiplier).add(controls.target);
     }
-    cameraPositionRef.current.copy(camera.position);
+    (cameraPositionRef.current ??= new THREE.Vector3()).copy(camera.position);
     cameraTargetRef.current.copy(controls.target);
     controls.update();
   }, [cameraAction]);

@@ -53,6 +53,8 @@ npm install
 npm run dev
 ```
 
+If the frontend reports that New chat needs an updated backend, restart the Python API process. Its sessions are in memory, so restarting clears the current session.
+
 Open <http://127.0.0.1:5173>. See [Local Development Setup](docs/Local_Development_Setup.md) for production build instructions and verification commands.
 
 ## Documentation

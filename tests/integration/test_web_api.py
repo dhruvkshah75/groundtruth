@@ -80,6 +80,19 @@ def test_frontend_api_health_state_scenario_ask_and_reset(tmp_path) -> None:
             for edge in answered["graph"]["edges"]
         )
 
+        status, fresh_chat = _request(base_url, "/api/new-chat", session_id, {})
+        assert status == 200
+        assert fresh_chat["history"] == []
+        assert fresh_chat["suggested_question"] == ""
+        assert fresh_chat["graph"] == answered["graph"]
+        assert fresh_chat["ledger"] == answered["ledger"]
+        assert fresh_chat["environment"] == answered["environment"]
+        assert fresh_chat["audit_events"] == answered["audit_events"]
+        status, persisted = _request(base_url, "/api/state", session_id)
+        assert status == 200
+        assert persisted["history"] == []
+        assert persisted["graph"] == answered["graph"]
+
         status, scenario_b = _request(base_url, "/api/scenarios/scenario-b", session_id, {})
         assert status == 200
         assert scenario_b["environment"]["light"]["color_cast"] == "yellow"

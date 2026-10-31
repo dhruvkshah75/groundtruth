@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { highlightedFacts } from "./beliefGraphAppearance";
 import {
   BrainCircuit,
   ChevronRight,
   CircleAlert,
   Database,
-  Filter,
   GitCommitHorizontal,
   History,
   ListTree,
@@ -19,7 +19,6 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
-  Search,
   X,
 } from "lucide-react";
 import { api } from "./api";
@@ -90,12 +89,6 @@ function relevantAuditEvent(factId: string, events: AuditEvent[]): AuditEvent | 
   return events.find((event) => event.input_fact_ids.includes(factId) || event.output_fact_ids.includes(factId)) ?? null;
 }
 
-function factMatches(fact: DisplayFact, query: string): boolean {
-  if (!query) return true;
-  const searchable = [fact.source, fact.predicate, fact.target, fact.factId, fact.sourceAgent].join(" ").toLowerCase();
-  return searchable.includes(query.toLowerCase());
-}
-
 function GraphRail() {
   return (
     <nav className="belief-rail" aria-label="Workspace navigation">
@@ -110,105 +103,28 @@ function GraphRail() {
   );
 }
 
-function Sidebar({
-  state,
-  health,
-  scope,
-  query,
-  open,
-  searchRef,
-  onScopeChange,
-  onQueryChange,
-  onClose,
-}: {
+function GraphControls({ state, scope, onScopeChange }: {
   state: AppState | null;
-  health: ApiHealth | null;
   scope: GraphScope;
-  query: string;
-  open: boolean;
-  searchRef: React.RefObject<HTMLInputElement>;
   onScopeChange: (scope: GraphScope) => void;
-  onQueryChange: (value: string) => void;
-  onClose: () => void;
 }) {
-  const recentEvents = [...(state?.audit_events ?? [])]
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))
-    .slice(0, 3);
-  const connected = health?.status === "ok" || health?.status === "degraded";
-
-  return (
-    <aside className={`belief-sidebar ${open ? "mobile-open" : ""}`} aria-label="Belief graph controls">
-      <button className="belief-mobile-close" type="button" onClick={onClose} aria-label="Close graph controls"><X size={17} /></button>
-      <header className="belief-brand">
-        <p>GroundTruth</p>
-        <h1>I, Agent</h1>
-        <div className={`belief-connection ${connected ? "connected" : "disconnected"}`}>
-          <span aria-hidden="true" />
-          {connected ? "Agent API connected" : "Backend not connected"}
-        </div>
-        <small>{health ? `Intent provider: ${health.provider_mode}.` : "Checking provider status…"}</small>
-      </header>
-
-      <section className="belief-sidebar-section" aria-labelledby="graph-view-title">
-        <h2 id="graph-view-title">Graph view</h2>
-        <div className="belief-scope" role="group" aria-label="Belief scope">
-          <button className={scope === "active" ? "active" : ""} type="button" onClick={() => onScopeChange("active")}>Active beliefs</button>
-          <button className={scope === "history" ? "active" : ""} type="button" onClick={() => onScopeChange("history")}>Belief history</button>
-        </div>
-        <label className="belief-search" htmlFor="belief-search">
-          <Search size={14} aria-hidden="true" />
-          <input
-            ref={searchRef}
-            id="belief-search"
-            type="search"
-            aria-label="Search beliefs by node, predicate, or fact ID"
-            placeholder="Find node, predicate, fact ID"
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-          />
-          <kbd aria-hidden="true">/</kbd>
-        </label>
-      </section>
-
-      <section className="belief-sidebar-section" aria-labelledby="graph-summary-title">
-        <div className="belief-section-heading">
-          <h2 id="graph-summary-title">Current graph</h2>
-          <span>world v{state?.environment.world_version ?? "–"}</span>
-        </div>
-        <div className="belief-counts">
-          <div><strong>{state?.graph.node_count ?? 0}</strong><span>Active nodes</span></div>
-          <div><strong>{state?.graph.edge_count ?? 0}</strong><span>Active facts</span></div>
-        </div>
-      </section>
-
-      <section className="belief-sidebar-section" aria-labelledby="graph-changes-title">
-        <div className="belief-section-heading">
-          <h2 id="graph-changes-title">Recent changes</h2>
-          <span className="belief-live"><i aria-hidden="true" />Live</span>
-        </div>
-        {recentEvents.length ? (
-          <ol className="belief-change-list">
-            {recentEvents.map((event) => (
-              <li key={event.event_id}>
-                <i aria-hidden="true" />
-                <div><p>{event.reason}</p><small>{event.policy_rule} · {formatTime(event.created_at)}</small></div>
-              </li>
-            ))}
-          </ol>
-        ) : <p className="belief-sidebar-empty">No belief revisions have been recorded.</p>}
-      </section>
-
-      <section className="belief-sidebar-section belief-legend" aria-labelledby="graph-legend-title">
-        <h2 id="graph-legend-title">Legend</h2>
-        <ul>
-          <li><i className="node" />Entity or value node</li>
-          <li><i className="edge" />Active stored fact</li>
-          <li><i className="edge superseded" />Superseded fact in history</li>
-          <li><i className="changed" />New or revised fact</li>
-        </ul>
-      </section>
-    </aside>
-  );
+  return <div className="graph-workspace-controls" aria-label="Belief graph controls">
+    <section className="belief-sidebar-section" aria-labelledby="graph-view-title">
+      <h2 id="graph-view-title">Graph view</h2>
+      <div className="belief-scope" role="group" aria-label="Belief scope">
+        <button className={scope === "active" ? "active" : ""} aria-pressed={scope === "active"} type="button" onClick={() => onScopeChange("active")}>Active beliefs</button>
+        <button className={scope === "history" ? "active" : ""} aria-pressed={scope === "history"} type="button" onClick={() => onScopeChange("history")}>Belief history</button>
+      </div>
+    </section>
+    <section className="belief-sidebar-section" aria-labelledby="graph-summary-title">
+      <div className="belief-section-heading"><h2 id="graph-summary-title">Current graph</h2><span>world v{state?.environment.world_version ?? "–"}</span></div>
+      <div className="belief-counts"><div><strong>{state?.graph.node_count ?? 0}</strong><span>Active nodes</span></div><div><strong>{state?.graph.edge_count ?? 0}</strong><span>Active facts</span></div></div>
+    </section>
+    <section className="belief-sidebar-section belief-legend" aria-labelledby="graph-legend-title">
+      <h2 id="graph-legend-title">Legend</h2>
+      <ul><li><i className="node" />Entity or value node</li><li><i className="edge" />Active stored fact</li><li><i className="edge superseded" />Superseded fact in history</li><li><i className="changed" />New or revised fact</li></ul>
+    </section>
+  </div>;
 }
 
 function FactDetails({
@@ -254,7 +170,7 @@ function FactDetails({
             <h3>Provenance</h3>
             <dl className="belief-provenance">
               <div><dt>Fact ID</dt><dd title={fact.factId}>{shortId(fact.factId)}</dd></div>
-              <div><dt>Source agent</dt><dd>{fact.sourceAgent}</dd></div>
+              <div><dt>Source Agent</dt><dd>{fact.sourceAgent}</dd></div>
               <div><dt>Confidence</dt><dd><span className="belief-confidence"><i style={{ width: `${Math.round(fact.confidence * 100)}%` }} /></span>{Math.round(fact.confidence * 100)}%</dd></div>
               <div><dt>Observed</dt><dd>{formatTime(fact.observedAt)}</dd></div>
             </dl>
@@ -379,26 +295,45 @@ function AccessibleFactList({
               <small>{fact.sourceAgent} · {Math.round(fact.confidence * 100)}% · {formatTime(fact.observedAt)}</small>
               <ChevronRight size={16} aria-hidden="true" />
             </button>
-          )) : <p className="belief-dialog-empty">No facts match the current view and search.</p>}
+          )) : <p className="belief-dialog-empty">No facts in the current view.</p>}
         </div>
       </section>
     </div>
   );
 }
 
-export default function BeliefGraphPage() {
+function RecentChanges({ events, open, onClose }: { events: AuditEvent[]; open: boolean; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+  const recent = [...events].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return <dialog ref={dialogRef} className="belief-dialog belief-recent-dialog" aria-labelledby="recent-changes-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <header><div><h2 id="recent-changes-title">Recent changes</h2><p>Recorded belief revisions and audit events.</p></div><button type="button" onClick={onClose} aria-label="Close recent changes"><X size={18} /></button></header>
+    <div className="belief-recent-body">{recent.length ? <ol className="belief-change-list">{recent.map((event) => <li key={event.event_id}><i aria-hidden="true" /><div><p>{event.reason}</p><small>{event.policy_rule} · {formatTime(event.created_at)}</small></div></li>)}</ol> : <p className="belief-dialog-empty">No belief revisions have been recorded.</p>}</div>
+  </dialog>;
+}
+
+export default function BeliefGraphPage({ embedded = false, workspaceState, workspaceHealth, sidebarTarget }: {
+  embedded?: boolean;
+  workspaceState?: AppState | null;
+  workspaceHealth?: ApiHealth | null;
+  sidebarTarget?: HTMLElement | null;
+}) {
   const [state, setState] = useState<AppState | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<GraphScope>("active");
-  const [query, setQuery] = useState("");
+  const [recentOpen, setRecentOpen] = useState(false);
   const [selectedFactId, setSelectedFactId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [highlightedFactIds, setHighlightedFactIds] = useState<Set<string>>(new Set());
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [factListOpen, setFactListOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [interactionMode, setInteractionMode] = useState<"orbit" | "pan">("orbit");
   const [demoAction, setDemoAction] = useState<DemoAction>(null);
@@ -406,7 +341,6 @@ export default function BeliefGraphPage() {
   const knownActiveIds = useRef<Set<string> | null>(null);
   const knownAuditIds = useRef<Set<string> | null>(null);
   const highlightTimer = useRef<number | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (initial = false) => {
     try {
@@ -443,6 +377,11 @@ export default function BeliefGraphPage() {
   }, []);
 
   useEffect(() => {
+    if (workspaceState) { setState(workspaceState); setLoading(false); }
+    if (workspaceHealth) setHealth(workspaceHealth);
+  }, [workspaceState, workspaceHealth]);
+
+  useEffect(() => {
     void refresh(true);
     const interval = window.setInterval(() => void refresh(), 4000);
     return () => {
@@ -453,20 +392,15 @@ export default function BeliefGraphPage() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "/" && !factListOpen && document.activeElement?.tagName !== "INPUT") {
-        event.preventDefault();
-        setSidebarOpen(true);
-        window.setTimeout(() => searchRef.current?.focus(), 0);
-      }
       if (event.key === "Escape") {
         setFactListOpen(false);
-        setSidebarOpen(false);
+        setRecentOpen(false);
         setDetailsOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [factListOpen]);
+  }, []);
 
   const allFacts = useMemo(
     () => scope === "active"
@@ -474,7 +408,7 @@ export default function BeliefGraphPage() {
       : (state?.ledger ?? []).map(ledgerFact),
     [scope, state],
   );
-  const facts = useMemo(() => allFacts.filter((fact) => factMatches(fact, query.trim())), [allFacts, query]);
+  const facts = allFacts;
   const displayedHighlights = useMemo(
     () => highlightedFacts(highlightedFactIds, state?.ledger ?? [], state?.audit_events ?? []),
     [highlightedFactIds, state],
@@ -482,9 +416,9 @@ export default function BeliefGraphPage() {
   const nodes = useMemo(() => {
     const values = new Set<string>();
     facts.forEach((fact) => { values.add(fact.source); values.add(fact.target); });
-    if (!query.trim() && scope === "active") state?.graph.nodes.forEach((node) => values.add(node));
+    if (scope === "active") state?.graph.nodes.forEach((node) => values.add(node));
     return [...values].sort();
-  }, [facts, query, scope, state]);
+  }, [facts, scope, state]);
   const selectedFact = facts.find((fact) => fact.factId === selectedFactId)
     ?? allFacts.find((fact) => fact.factId === selectedFactId)
     ?? null;
@@ -559,26 +493,17 @@ export default function BeliefGraphPage() {
   };
 
   return (
-    <div className="belief-shell">
-      <GraphRail />
-      <Sidebar
-        state={state}
-        health={health}
-        scope={scope}
-        query={query}
-        open={sidebarOpen}
-        searchRef={searchRef}
-        onScopeChange={setScope}
-        onQueryChange={setQuery}
-        onClose={() => setSidebarOpen(false)}
-      />
+    <div className={`belief-shell ${embedded ? "belief-embedded" : ""} ${detailsOpen ? "details-visible" : ""}`}>
+      {!embedded && <GraphRail />}
+      {embedded && sidebarTarget && createPortal(<GraphControls state={state} scope={scope} onScopeChange={setScope} />, sidebarTarget)}
+      {!embedded && <aside className="belief-sidebar"><GraphControls state={state} scope={scope} onScopeChange={setScope} /></aside>}
 
-      <main className="belief-main">
+      <section className="belief-main" aria-label="Belief network">
         <header className="belief-topbar">
-          <div><div className="belief-title-row"><h1>Network / Belief Graph</h1><span>Observability</span></div><p>Stored beliefs and provenance from the active NetworkX graph. No hidden model reasoning.</p></div>
+          <div><div className="belief-title-row"><h1>Stored beliefs</h1><span>Live graph</span></div><p>Select a node or relationship to inspect its evidence.</p></div>
           <div className="belief-top-actions">
             <span><RefreshCw size={13} className={loading ? "spin" : ""} />{lastUpdated ? `Refreshed ${lastUpdated.toLocaleTimeString()}` : "Waiting for graph"}</span>
-            <button className="belief-demo-button" type="button" onClick={() => void prepareScenarioA()} disabled={demoAction !== null}>
+            {!embedded && <><button className="belief-demo-button" type="button" onClick={() => void prepareScenarioA()} disabled={demoAction !== null}>
               {demoAction === "prepare-a" ? <LoaderCircle size={15} className="spin" /> : <Database size={15} />}
               {demoAction === "prepare-a" ? "Loading baseline…" : "1 · Load Scenario A"}
             </button>
@@ -586,7 +511,8 @@ export default function BeliefGraphPage() {
               {demoAction === "run-a" ? <LoaderCircle size={15} className="spin" /> : <Play size={15} />}
               {demoAction === "run-a" ? "Checking LiDAR…" : "2 · Run LiDAR check"}
             </button>
-            <button className="belief-filter-button" type="button" onClick={() => setSidebarOpen(true)}><Filter size={15} />Filters</button>
+            </>}
+            <button type="button" onClick={() => setRecentOpen(true)}><History size={15} /><span>Recent changes</span></button>
             <button type="button" onClick={() => setFactListOpen(true)}><ListTree size={15} />Fact list</button>
           </div>
         </header>
@@ -594,9 +520,8 @@ export default function BeliefGraphPage() {
         {error && <div className="belief-error" role="alert"><CircleAlert size={17} /><span>{error}</span><button type="button" onClick={() => void refresh()}><RefreshCw size={14} />Retry</button></div>}
 
         <section className="belief-stage" aria-label="Interactive three-dimensional belief graph">
-          <div className="belief-grid" aria-hidden="true" />
           {loading ? (
-            <div className="belief-stage-state" role="status"><LoaderCircle size={24} className="spin" /><strong>Loading the current belief graph</strong><span>Reading active facts from the agent API.</span></div>
+            <div className="belief-stage-state" role="status"><LoaderCircle size={24} className="spin" /><strong>Loading the current belief graph</strong><span>Reading active facts from the Agent API.</span></div>
           ) : nodes.length && facts.length ? (
             <BeliefGraphCanvas
               facts={facts}
@@ -610,7 +535,7 @@ export default function BeliefGraphPage() {
               onSelectNode={selectNode}
             />
           ) : (
-            <div className="belief-stage-state"><BrainCircuit size={27} /><strong>{query ? "No beliefs match this search" : "No stored beliefs yet"}</strong><span>{query ? "Try another entity, predicate, source, or fact ID." : "Load a scenario to seed stored beliefs. A question changes this graph only when it creates or revises a persisted fact."}</span>{query && <button type="button" onClick={() => setQuery("")}>Clear search</button>}</div>
+            <div className="belief-stage-state"><BrainCircuit size={27} /><strong>No stored beliefs yet</strong><span>Load a scenario to seed stored beliefs. A question changes this graph only when it creates or revises a persisted fact.</span></div>
           )}
 
           <div className="belief-orbit-hint">
@@ -641,9 +566,8 @@ export default function BeliefGraphPage() {
             <span aria-hidden="true" />
             <button type="button" aria-label="Reset graph view" title="Reset view" onClick={() => moveCamera("reset")}><RotateCcw size={15} /></button>
           </div>
-          <div className="belief-webgl-note">Three.js view · keyboard fact list available</div>
         </section>
-      </main>
+      </section>
 
       <FactDetails
         fact={selectedFact}
@@ -656,7 +580,8 @@ export default function BeliefGraphPage() {
         onSelectFact={selectFact}
       />
 
-      {(sidebarOpen || detailsOpen) && <button className="belief-mobile-backdrop" type="button" aria-label="Close open panel" onClick={() => { setSidebarOpen(false); setDetailsOpen(false); }} />}
+      {!embedded && detailsOpen && <button className="belief-mobile-backdrop" type="button" aria-label="Close open panel" onClick={() => setDetailsOpen(false)} />}
+      <RecentChanges events={state?.audit_events ?? []} open={recentOpen} onClose={() => setRecentOpen(false)} />
       <AccessibleFactList facts={facts} selectedFactId={selectedFactId} open={factListOpen} onSelect={selectFact} onClose={() => setFactListOpen(false)} />
     </div>
   );

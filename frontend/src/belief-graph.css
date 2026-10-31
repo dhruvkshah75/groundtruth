@@ -28,7 +28,7 @@
   height: 40px;
   place-items: center;
   border-radius: 10px;
-  color: #777;
+  color: var(--muted);
   text-decoration: none;
   transition: color .16s ease, background .16s ease;
 }
@@ -53,7 +53,7 @@
 .belief-brand > p { margin: 0; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; }
 .belief-brand h1 { margin: 4px 0 12px; font-size: 18px; font-weight: 600; letter-spacing: -.035em; }
 .belief-brand small { display: block; margin-top: 8px; color: var(--quiet); font-size: 12px; line-height: 1.5; }
-.belief-connection { display: flex; align-items: center; gap: 8px; color: #aaa; font-size: 12px; }
+.belief-connection { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .belief-connection > span { width: 7px; height: 7px; border-radius: 50%; background: #858585; }
 .belief-connection.connected > span { background: #69d9b0; box-shadow: 0 0 8px rgb(105 217 176 / 34%); }
 .belief-connection.disconnected > span { background: #d9ad6b; }
@@ -65,9 +65,9 @@
 .belief-scope { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-top: 12px; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-rail); }
 .belief-scope button { min-height: 31px; padding: 0 5px; border: 0; border-radius: 6px; color: var(--quiet); background: transparent; font-size: 12px; cursor: pointer; }
 .belief-scope button.active { color: var(--accent); background: var(--surface-raised); }
-.belief-search { display: flex; height: 36px; align-items: center; gap: 8px; margin-top: 12px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: #777; background: var(--surface); }
-.belief-search:focus-within { border-color: rgb(97 216 202 / 48%); }
-.belief-search input { min-width: 0; flex: 1; border: 0; outline: 0; color: #ddd; background: transparent; font-size: 12px; }
+.belief-search { display: flex; height: 36px; align-items: center; gap: 8px; margin-top: 12px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); }
+.belief-search:focus-within { border-color: rgb(118 81 132 / 48%); }
+.belief-search input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 12px; }
 .belief-search input::placeholder { color: var(--quiet); opacity: 1; }
 .belief-search kbd { color: var(--quiet); font-size: 12px; }
 .belief-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -77,72 +77,84 @@
 .belief-counts strong { display: block; font-size: 18px; font-weight: 500; }
 .belief-counts span { display: block; margin-top: 3px; color: var(--quiet); font-size: 12px; }
 .belief-live { display: inline-flex; align-items: center; gap: 5px; color: var(--accent) !important; }
-.belief-live i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px rgb(97 216 202 / 30%); }
+.belief-live i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px rgb(118 81 132 / 30%); }
 .belief-change-list { display: grid; gap: 14px; margin: 15px 0 0; padding: 0; list-style: none; }
 .belief-change-list li { position: relative; display: flex; gap: 10px; }
 .belief-change-list li > i { width: 9px; height: 9px; flex: 0 0 auto; margin-top: 4px; border: 2px solid var(--accent); border-radius: 50%; background: var(--surface-sidebar); }
 .belief-change-list li:not(:last-child)::after { position: absolute; top: 13px; left: 4px; width: 1px; height: calc(100% + 6px); background: var(--line-strong); content: ""; }
-.belief-change-list p { margin: 0; color: #c2c2c2; font-size: 12px; line-height: 1.5; }
+.belief-change-list p { margin: 0; color: var(--text); font-size: 12px; line-height: 1.5; }
 .belief-change-list small { display: block; margin-top: 3px; color: var(--quiet); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .belief-sidebar-empty { margin: 13px 0 0; color: var(--quiet); font-size: 12px; line-height: 1.6; }
-.belief-legend ul { display: grid; gap: 11px; margin: 13px 0 0; padding: 0; color: #999; font-size: 12px; list-style: none; }
+.belief-legend ul { display: grid; gap: 11px; margin: 13px 0 0; padding: 0; color: var(--muted); font-size: 12px; list-style: none; }
 .belief-legend li { display: flex; align-items: center; gap: 10px; }
 .belief-legend i { display: block; width: 19px; flex: 0 0 auto; }
-.belief-legend i.node { width: 10px; height: 10px; border: 1px solid var(--accent); border-radius: 50%; background: rgb(97 216 202 / 15%); }
-.belief-legend i.edge { height: 1px; background: #579187; }
+.belief-legend i.node { width: 10px; height: 10px; border: 1px solid var(--accent); border-radius: 50%; background: rgb(118 81 132 / 15%); }
+.belief-legend i.edge { height: 1px; background: #8b7596; }
 .belief-legend i.superseded { border-top: 1px dashed #6f7271; background: transparent; }
-.belief-legend i.changed { width: 19px; height: 2px; border: 0; border-radius: 0; background: #e0bd7d; }
+.belief-legend i.changed { width: 19px; height: 2px; border: 0; border-radius: 0; background: #a06a1c; }
 
-.belief-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: #1e2220; }
-.belief-topbar { position: relative; z-index: 10; display: flex; min-height: 62px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 18px; padding: 9px 22px; border-bottom: 1px solid var(--line); background: #202220; }
+.belief-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--surface-raised); }
+.belief-topbar { position: relative; z-index: 10; display: flex; min-height: 62px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 18px; padding: 9px 22px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .belief-title-row { display: flex; align-items: center; gap: 8px; }
-.belief-title-row h1 { margin: 0; color: #dedede; font-size: 13px; font-weight: 500; }
-.belief-title-row > span { padding: 3px 7px; border: 1px solid rgb(97 216 202 / 20%); border-radius: 999px; color: var(--accent); background: rgb(97 216 202 / 6%); font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+.belief-title-row h1 { margin: 0; color: var(--text); font-size: 13px; font-weight: 500; }
+.belief-title-row > span { padding: 3px 7px; border: 1px solid rgb(118 81 132 / 20%); border-radius: 999px; color: var(--accent); background: rgb(118 81 132 / 6%); font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
 .belief-topbar p { margin: 4px 0 0; color: var(--quiet); font-size: 12px; }
 .belief-top-actions { display: flex; align-items: center; gap: 8px; }
 .belief-top-actions > span { display: inline-flex; align-items: center; gap: 6px; color: var(--quiet); font-size: 12px; white-space: nowrap; }
 .belief-top-actions > span svg { color: var(--accent); }
 .belief-top-actions button,
-.belief-list-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: #aaa; background: transparent; font-size: 12px; cursor: pointer; }
+.belief-list-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: transparent; font-size: 12px; cursor: pointer; }
 .belief-top-actions button:hover,
 .belief-list-button:hover { color: var(--text); background: var(--surface-raised); }
 .belief-top-actions button:disabled { cursor: not-allowed; opacity: .42; }
-.belief-top-actions .belief-demo-button { border-color: rgb(97 216 202 / 16%); }
-.belief-top-actions .belief-demo-button.primary { color: var(--accent); background: rgb(97 216 202 / 7%); }
-.belief-top-actions .belief-demo-button.primary:not(:disabled):hover { background: rgb(97 216 202 / 13%); }
+.belief-top-actions .belief-demo-button { border-color: rgb(118 81 132 / 16%); }
+.belief-top-actions .belief-demo-button.primary { color: var(--accent); background: rgb(118 81 132 / 7%); }
+.belief-top-actions .belief-demo-button.primary:not(:disabled):hover { background: rgb(118 81 132 / 13%); }
 .belief-top-actions .belief-filter-button { display: none; }
-.belief-error { position: absolute; z-index: 20; top: 72px; left: 50%; display: flex; width: min(520px, calc(100% - 40px)); align-items: center; gap: 9px; padding: 10px 12px; transform: translateX(-50%); border: 1px solid rgb(241 155 148 / 28%); border-radius: 9px; color: #e4aaa5; background: #2b2222; font-size: 12px; box-shadow: 0 10px 30px rgb(0 0 0 / 25%); }
+.belief-error { position: absolute; z-index: 20; top: 72px; left: 50%; display: flex; width: min(520px, calc(100% - 40px)); align-items: center; gap: 9px; padding: 10px 12px; transform: translateX(-50%); border: 1px solid rgb(241 155 148 / 28%); border-radius: 9px; color: var(--danger); background: #fff5f5; font-size: 12px;  }
 .belief-error span { flex: 1; }
 .belief-error button { display: inline-flex; align-items: center; gap: 5px; border: 0; color: inherit; background: transparent; cursor: pointer; }
 
 .belief-stage { position: relative; min-height: 0; flex: 1; overflow: hidden; }
-.belief-grid { position: absolute; inset: 0; z-index: 0; background-image: linear-gradient(rgb(255 255 255 / 1.8%) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / 1.8%) 1px, transparent 1px), radial-gradient(circle at 50% 45%, rgb(69 112 91 / 16%), transparent 55%); background-size: 48px 48px, 48px 48px, auto; }
 .belief-canvas { position: absolute; z-index: 1; inset: 0; }
 .belief-webgl-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; cursor: grab; }
 .belief-webgl-canvas:active { cursor: grabbing; }
-.belief-label-layer { position: absolute; inset: 0; pointer-events: none; }
-.belief-node-label { padding: 3px 6px; transform: translate(-50%, -100%); border: 1px solid rgb(97 216 202 / 16%); border-radius: 999px; opacity: 0; color: #d4e6e1; background: rgb(25 34 31 / 78%); font-size: 12px; white-space: nowrap; backdrop-filter: blur(5px); transition: opacity .14s ease, color .14s ease, border-color .14s ease; }
-.belief-node-label.hub,
-.belief-node-label.hovered,
-.belief-node-label.selected { opacity: 1; }
-.belief-node-label.hovered,
-.belief-node-label.selected { border-color: rgb(120 230 216 / 58%); color: #a5efe6; }
-.belief-edge-label { padding: 2px 5px; transform: translate(-50%, -50%); border: 1px solid #37534c; border-radius: 999px; opacity: 1; color: #b5c9c2; background: #1d2824; font-size: 12px; white-space: nowrap; transition: opacity .16s ease, color .16s ease, border-color .16s ease; }
-.belief-edge-label.superseded { border-style: dashed; border-color: #777e7b; color: #b3b9b6; }
-.belief-edge-label.selected { border-color: var(--accent); opacity: 1; color: #a5efe6; }
-.belief-edge-label.changed { border-color: #e0bd7d; opacity: 1; color: #f0c77f; box-shadow: 0 0 12px rgb(224 189 125 / 18%); }
+.belief-label-layer { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
+.belief-label-connectors { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+.belief-label-connectors line { stroke: #9f8ba9; stroke-width: 1; stroke-dasharray: 2 3; }
+.belief-node-label, .belief-edge-label {
+  padding: 4px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: .8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.belief-node-label strong { display: block; max-width: 24ch; overflow: hidden; font-weight: 500; text-overflow: ellipsis; }
+.belief-node-label small { display: none; color: var(--muted); font-size: .75rem; font-weight: 400; }
+.belief-node-label.hovered small, .belief-node-label.selected small { display: block; }
+.belief-node-label.hovered, .belief-node-label.selected { border-color: var(--accent); background: #f3eff5; }
+.belief-edge-label { color: var(--muted); font-weight: 400; }
+.belief-edge-label.superseded { border-style: dashed; }
+.belief-edge-label.hovered, .belief-edge-label.selected { border-color: var(--accent); color: var(--accent); background: #f3eff5; }
+.belief-edge-label.changed { border-color: #bd914c; color: #875a15; background: #fff8ed; }
 .belief-edge-label.changed.selected { outline: 1px solid var(--accent); outline-offset: 2px; }
-.belief-orbit-hint { position: absolute; z-index: 4; top: 18px; left: 50%; padding: 6px 11px; transform: translateX(-50%); border: 1px solid var(--line); border-radius: 999px; color: #a5b7b0; background: rgb(27 30 28 / 86%); font-size: 12px; white-space: nowrap; pointer-events: none; }
-.belief-camera-controls { position: absolute; z-index: 4; bottom: 18px; left: 18px; display: flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: #191c1a; box-shadow: 0 12px 30px rgb(0 0 0 / 20%); }
-.belief-camera-controls button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 6px; color: #777; background: transparent; cursor: pointer; }
+.belief-orbit-hint { position: absolute; z-index: 4; top: 18px; left: 50%; padding: 7px 12px; transform: translateX(-50%); border: 1px solid var(--line-strong); border-radius: 8px; color: var(--muted); background: var(--surface); font-size: .75rem; line-height: 1.5; white-space: nowrap; pointer-events: none; }
+.belief-camera-controls { position: absolute; z-index: 4; bottom: 18px; left: 18px; display: flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.belief-camera-controls button { display: grid; width: 36px; height: 36px; place-items: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .belief-camera-controls button:hover { color: var(--text); background: var(--surface-raised); }
-.belief-camera-controls button.active { color: var(--accent); background: rgb(97 216 202 / 10%); box-shadow: inset 0 0 0 1px rgb(97 216 202 / 16%); }
-.belief-camera-controls > span { width: 1px; height: 20px; margin: 0 3px; background: var(--line); }
-.belief-webgl-note { position: absolute; z-index: 4; right: 18px; bottom: 23px; color: #a5b7b0; font-size: 12px; pointer-events: none; }
-.belief-stage-state { position: absolute; z-index: 3; top: 50%; left: 50%; display: flex; width: min(400px, calc(100% - 40px)); flex-direction: column; align-items: center; gap: 9px; padding: 22px; transform: translate(-50%, -50%); border: 1px solid var(--line); border-radius: 12px; color: #84938e; background: rgb(31 35 33 / 88%); text-align: center; }
-.belief-stage-state strong { color: #d3dbd8; font-size: 13px; font-weight: 500; }
-.belief-stage-state span { color: #a5b7b0; font-size: 12px; line-height: 1.6; }
-.belief-stage-state button { padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: transparent; font-size: 12px; cursor: pointer; }
+.belief-camera-controls button.active { color: var(--accent); background: #f3eff5; }
+.belief-camera-controls > span { width: 1px; height: 20px; margin: 0 3px; background: var(--line-strong); }
+.belief-webgl-note { position: absolute; z-index: 4; right: 18px; bottom: 23px; color: var(--muted); font-size: .75rem; line-height: 1.5; pointer-events: none; }
+.belief-stage-state { position: absolute; z-index: 3; top: 50%; left: 50%; display: flex; width: min(400px, calc(100% - 40px)); flex-direction: column; align-items: center; gap: 9px; padding: 22px; transform: translate(-50%, -50%); border: 1px solid var(--line); border-radius: 12px; color: var(--muted); background: var(--surface); text-align: center; }
+.belief-stage-state strong { color: var(--text); font-size: .9375rem; font-weight: 500; }
+.belief-stage-state span { color: var(--muted); font-size: .8125rem; line-height: 1.6; }
+.belief-stage-state button { padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: transparent; font-size: .8125rem; cursor: pointer; }
 
 .belief-details { border-left: 1px solid var(--line); }
 .belief-details > header { position: sticky; z-index: 3; top: 0; display: flex; min-height: 62px; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--surface-sidebar); }
@@ -150,7 +162,7 @@
 .belief-details > header small { display: block; margin-top: 4px; color: var(--quiet); font-size: 12px; }
 .belief-details > header button,
 .belief-dialog header button,
-.belief-mobile-close { display: grid; width: 31px; height: 31px; place-items: center; border: 0; border-radius: 7px; color: #888; background: transparent; cursor: pointer; }
+.belief-mobile-close { display: grid; width: 31px; height: 31px; place-items: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .belief-details > header button:hover,
 .belief-dialog header button:hover { color: var(--text); background: var(--surface-raised); }
 .belief-mobile-close { display: none; }
@@ -158,38 +170,38 @@
 .belief-detail-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .belief-detail-title svg { color: var(--accent); }
 .belief-state { display: inline-flex; padding: 4px 7px; border: 1px solid; border-radius: 999px; font-size: 12px; font-style: normal; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
-.belief-state.active { border-color: rgb(97 216 202 / 20%); color: var(--accent); background: rgb(97 216 202 / 7%); }
-.belief-state.superseded { border-color: rgb(224 189 125 / 20%); color: #d8b778; background: rgb(224 189 125 / 6%); }
-.belief-detail-title h2 { margin: 10px 0 0; color: #e3e3e3; font-size: 15px; font-weight: 500; text-transform: capitalize; }
+.belief-state.active { border-color: rgb(118 81 132 / 20%); color: var(--accent); background: rgb(118 81 132 / 7%); }
+.belief-state.superseded { border-color: rgb(224 189 125 / 20%); color: #875a15; background: rgb(224 189 125 / 6%); }
+.belief-detail-title h2 { margin: 10px 0 0; color: var(--text); font-size: 15px; font-weight: 500; text-transform: capitalize; }
 .belief-detail-note { margin: 12px 0 0; color: var(--quiet); font-size: 12px; line-height: 1.7; }
 .belief-claim { margin: 18px 0 0; padding: 0 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
 .belief-claim > div { padding: 11px 0; border-bottom: 1px solid var(--line); }
 .belief-claim > div:last-child { border-bottom: 0; }
 .belief-claim dt,
 .belief-context-grid span { color: var(--quiet); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
-.belief-claim dd { margin: 5px 0 0; color: #d4d4d4; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.belief-claim dd { margin: 5px 0 0; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .belief-claim > div:nth-child(2) dd { color: var(--accent); }
 .belief-detail-section { margin-top: 21px; }
 .belief-node-facts { display: grid; gap: 6px; margin-top: 12px; }
-.belief-node-facts button { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 30px 10px 11px; border: 1px solid var(--line); border-radius: 8px; color: #aaa; background: var(--surface); text-align: left; cursor: pointer; }
-.belief-node-facts button:hover { border-color: rgb(97 216 202 / 30%); background: #252c29; }
+.belief-node-facts button { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 30px 10px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); text-align: left; cursor: pointer; }
+.belief-node-facts button:hover { border-color: rgb(118 81 132 / 30%); background: #f3eff5; }
 .belief-node-facts strong { color: var(--accent); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
-.belief-node-facts span { color: #d0d0d0; font-size: 12px; overflow-wrap: anywhere; }
+.belief-node-facts span { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
 .belief-node-facts small { grid-column: 1 / -1; color: var(--quiet); font-size: 12px; }
-.belief-node-facts svg { position: absolute; top: 50%; right: 9px; transform: translateY(-50%); color: #666; }
+.belief-node-facts svg { position: absolute; top: 50%; right: 9px; transform: translateY(-50%); color: var(--muted); }
 .belief-provenance { display: grid; gap: 11px; margin: 12px 0 0; }
 .belief-provenance > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 12px; }
 .belief-provenance dt { color: var(--quiet); }
-.belief-provenance dd { display: flex; align-items: center; gap: 7px; margin: 0; color: #bbb; text-align: right; overflow-wrap: anywhere; }
-.belief-confidence { width: 55px; height: 4px; overflow: hidden; border-radius: 999px; background: #3a3a3a; }
+.belief-provenance dd { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+.belief-confidence { width: 55px; height: 4px; overflow: hidden; border-radius: 999px; background: #e4dee7; }
 .belief-confidence i { display: block; height: 100%; background: var(--accent); }
 .belief-context-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 12px; }
 .belief-context-grid > div { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-.belief-context-grid strong { display: block; margin-top: 6px; color: #bbb; font-size: 12px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.belief-context-grid strong { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
 .belief-revision { padding-top: 18px; border-top: 1px solid var(--line); }
-.belief-revision > div { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; margin-top: 11px; padding: 11px; border: 1px solid rgb(224 189 125 / 12%); border-radius: 8px; color: #d0ad6c; background: rgb(224 189 125 / 3%); }
-.belief-revision p { margin: 0; color: #bdb4a2; font-size: 12px; line-height: 1.5; }
-.belief-revision small { grid-column: 2; color: #756f64; font-size: 12px; overflow-wrap: anywhere; }
+.belief-revision > div { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; margin-top: 11px; padding: 11px; border: 1px solid rgb(224 189 125 / 12%); border-radius: 8px; color: #875a15; background: rgb(224 189 125 / 3%); }
+.belief-revision p { margin: 0; color: #755d38; font-size: 12px; line-height: 1.5; }
+.belief-revision small { grid-column: 2; color: #755d38; font-size: 12px; overflow-wrap: anywhere; }
 .belief-list-button { width: 100%; margin-top: 20px; }
 .belief-no-selection { display: grid; place-items: center; gap: 12px; padding: 70px 25px; color: #52635e; text-align: center; }
 .belief-no-selection p { margin: 0; color: var(--quiet); font-size: 12px; line-height: 1.7; }
@@ -197,16 +209,16 @@
 .belief-dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 65%); backdrop-filter: blur(3px); }
 .belief-dialog { display: flex; width: min(760px, 100%); max-height: min(720px, calc(100dvh - 48px)); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-sidebar); box-shadow: 0 24px 70px rgb(0 0 0 / 45%); }
 .belief-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
-.belief-dialog h2 { margin: 0; color: #ddd; font-size: 13px; font-weight: 500; }
+.belief-dialog h2 { margin: 0; color: var(--text); font-size: 13px; font-weight: 500; }
 .belief-dialog header p { margin: 4px 0 0; color: var(--quiet); font-size: 12px; }
 .belief-fact-list { display: grid; gap: 6px; overflow-y: auto; padding: 12px; }
 .belief-fact-list > button { position: relative; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px 12px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; color: inherit; background: var(--surface); text-align: left; cursor: pointer; }
 .belief-fact-list > button:hover,
-.belief-fact-list > button.selected { border-color: rgb(97 216 202 / 32%); background: #252c29; }
-.belief-fact-list strong { min-width: 0; color: #cfcfcf; font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.belief-fact-list > button.selected { border-color: rgb(118 81 132 / 32%); background: #f3eff5; }
+.belief-fact-list strong { min-width: 0; color: var(--text); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
 .belief-fact-list em { color: var(--accent); font-style: normal; }
 .belief-fact-list small { grid-column: 2; color: var(--quiet); font-size: 12px; }
-.belief-fact-list svg { grid-column: 3; grid-row: 1 / span 2; color: #666; }
+.belief-fact-list svg { grid-column: 3; grid-row: 1 / span 2; color: var(--muted); }
 .belief-dialog-empty { margin: 0; padding: 28px; color: var(--quiet); font-size: 12px; text-align: center; }
 .belief-mobile-backdrop { display: none; }
 
@@ -269,10 +281,69 @@
 .belief-node-facts small, .belief-revision small, .belief-dialog header p,
 .belief-fact-list small { font-size: .75rem; line-height: 1.5; }
 .belief-title-row h1, .belief-dialog h2, .belief-stage-state strong { font-size: .9375rem; }
-.belief-node-label { font-size: .75rem; }
-.belief-edge-label { font-size: .75rem; }
+.belief-node-label { font-size: .8125rem; }
+.belief-edge-label { font-size: .8125rem; }
 .belief-provenance, .belief-claim, .belief-fact-list { font-variant-numeric: tabular-nums; }
 .belief-scope button { font-size: .75rem; white-space: nowrap; }
 @media (min-width: 701px) {
   .belief-top-actions button, .belief-list-button { font-size: .8125rem; white-space: nowrap; }
+}
+
+/* The graph shares workspace navigation; its controls open only when needed. */
+.belief-shell.belief-embedded { position: relative; grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0; flex: 1; }
+.belief-embedded .belief-main { grid-column: 1; min-width: 0; }
+.belief-embedded .belief-topbar { min-height: 70px; padding: 12px 24px; border-top: 1px solid var(--line); background: var(--surface); }
+.belief-embedded .belief-topbar p { max-width: 48ch; color: var(--muted); }
+.belief-embedded .belief-top-actions { flex-shrink: 0; }
+.belief-embedded .belief-top-actions > span { display: none; }
+.belief-embedded .belief-filter-button { display: inline-flex; }
+.belief-embedded .belief-sidebar { position: absolute; z-index: 32; inset: 0 auto 0 0; width: min(280px, calc(100% - 24px)); transform: translateX(-105%); visibility: hidden; border-right: 1px solid var(--line); box-shadow: 12px 0 35px rgb(42 34 45 / 12%); background: var(--surface); }
+.belief-embedded .belief-sidebar.mobile-open { transform: translateX(0); visibility: visible; }
+.belief-embedded .belief-brand { display: none; }
+.belief-embedded .belief-sidebar-section:first-of-type { padding-top: 38px; }
+.belief-embedded .belief-mobile-close { display: grid; }
+.belief-embedded .belief-details { position: absolute; z-index: 32; inset: 0 0 0 auto; width: min(360px, calc(100% - 24px)); transform: translateX(105%); visibility: hidden; box-shadow: -12px 0 35px rgb(42 34 45 / 12%); background: var(--surface); }
+.belief-embedded .belief-details.open { transform: translateX(0); visibility: visible; }
+.belief-embedded .belief-mobile-backdrop { position: absolute; z-index: 30; inset: 0; display: block; border: 0; background: rgb(42 34 45 / 20%); }
+.belief-search input { color: var(--text); }
+.belief-title-row h1 { color: var(--text); }
+.belief-title-row > span { color: var(--accent); background: #f3eff5; border-color: var(--line-strong); }
+.belief-detail-title h2, .belief-fact-list strong { color: var(--text); }
+.belief-state.active { color: #346a59; background: #eef8f3; border-color: #c7dfd2; }
+.belief-state.superseded { color: #875a15; background: #fff8ed; border-color: #e4d3b5; }
+.belief-provenance dd, .belief-context-grid strong { color: var(--text); }
+.belief-revision p, .belief-revision small { color: #755d38; }
+.belief-dialog { background: var(--surface); box-shadow: 0 24px 70px rgb(42 34 45 / 20%); }
+.belief-dialog h2 { color: var(--text); }
+@media (max-width: 760px) {
+  .belief-embedded .belief-topbar { min-height: 74px; gap: 8px; padding: 12px 16px; }
+  .belief-embedded .belief-topbar p { display: none; }
+  .belief-embedded .belief-top-actions button { width: auto; min-height: 34px; padding: 0 8px; font-size: .75rem; }
+  .belief-embedded .belief-top-actions button:last-child { font-size: .75rem; }
+  .belief-embedded .belief-orbit-hint { width: calc(100% - 24px); font-size: .6875rem; text-align: center; }
+}
+
+.belief-recent-dialog { padding: 0; margin: auto; }
+.belief-recent-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.belief-recent-body { overflow-y: auto; padding: 0 18px 18px; }
+.belief-recent-body .belief-change-list { margin-top: 16px; }
+@media (max-width: 700px) {
+  .belief-embedded .belief-top-actions button:first-of-type { width: auto; padding: 0 8px; }
+  .belief-embedded .belief-top-actions button:first-of-type span { display: inline; }
+}
+
+.belief-recent-dialog:not([open]) { display: none; }
+
+/* Keep the graph and inspector visible in separate panes. */
+.belief-shell.belief-embedded.details-visible { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
+.belief-embedded .belief-details { display: none; }
+.belief-embedded.details-visible .belief-details { position: static; grid-column: 2; grid-row: 1; display: block; width: auto; max-height: 100%; transform: none; visibility: visible; box-shadow: none; border-left: 1px solid var(--line); }
+.belief-legend li { display: grid; grid-template-columns: 19px minmax(0, 1fr); align-items: center; }
+.belief-legend i.node { margin-left: 4px; }
+.belief-scope { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.belief-scope button { min-width: 0; padding: 6px 4px; white-space: normal; line-height: 1.35; }
+.belief-scope button.active { color: #4f315a; background: #e9ddec; box-shadow: inset 0 0 0 1px #d6c6dd; font-weight: 600; }
+@media (max-width: 760px) {
+  .belief-shell.belief-embedded.details-visible { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(240px, 1fr) minmax(0, 42%); }
+  .belief-embedded.details-visible .belief-details { grid-column: 1; grid-row: 2; border-top: 1px solid var(--line); border-left: 0; }
 }

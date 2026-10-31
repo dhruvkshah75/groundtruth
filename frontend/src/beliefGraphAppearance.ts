@@ -1,7 +1,7 @@
 import type { AuditEvent, Fact } from "./types";
 
 export function factColor(active: boolean, selected: boolean, related: boolean, changed: boolean): number {
-  return changed ? 0xe0bd7d : selected || related ? 0x78e6d8 : active ? 0x4f8f83 : 0x666b69;
+  return changed ? 0xa06a1c : selected || related ? 0x765184 : active ? 0x8b7596 : 0x817a85;
 }
 
 export function highlightedFacts(

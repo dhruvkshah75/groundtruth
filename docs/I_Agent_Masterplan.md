@@ -1,8 +1,8 @@
-# I, Agent: The Complete Beginner-to-Master Execution Guide
+# agent: The Complete Beginner-to-Master Execution Guide
 
 > **How to read this document:** This is the project vision and learning roadmap. Some longer-term ideas remain planned. The current system includes a live Groq LLM/ReAct integration, with deterministic Python controlling evidence operations and conclusions. For the implemented request flow and detailed Scenario A/B walkthroughs, see [Implemented System Overview](Implemented_System_Overview.md).
 
-Welcome to the **I, Agent** project! Since you and your team are still learning the concepts of AI, this document is written to explain everything from the ground up. It will serve as your ultimate textbook, roadmap, and task manager for the entire semester.
+Welcome to the **agent** project! Since you and your team are still learning the concepts of AI, this document is written to explain everything from the ground up. It will serve as your ultimate textbook, roadmap, and task manager for the entire semester.
 
 ---
 

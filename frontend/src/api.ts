@@ -24,13 +24,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       cache: "no-store",
     });
   } catch {
-    throw new Error("Cannot reach the Python agent API. Start the GroundTruth backend and retry.");
+    throw new Error("Cannot reach the Python Agent API. Start the GroundTruth backend and retry.");
   }
 
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const detail = payload as Partial<ApiErrorPayload> | null;
-    throw new Error(detail?.error || `The agent API returned HTTP ${response.status}.`);
+    if (path === "/api/new-chat" && response.status === 404 && detail?.code === "not_found") {
+      throw new Error("New chat requires the updated backend. Restart the Python Agent server to enable it; restarting clears the current in-memory session.");
+    }
+    throw new Error(detail?.error || `The Agent API returned HTTP ${response.status}.`);
   }
   return payload as T;
 }
@@ -48,5 +51,6 @@ export const api = {
       method: "POST",
       body: "{}",
     }),
+  newChat: () => request<AppState>("/api/new-chat", { method: "POST", body: "{}" }),
   reset: () => request<AppState>("/api/reset", { method: "POST", body: "{}" }),
 };

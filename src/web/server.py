@@ -68,6 +68,7 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         if path not in {
             "/api/ask",
             "/api/reset",
+            "/api/new-chat",
             "/api/scenarios/scenario-a",
             "/api/scenarios/scenario-b",
         }:
@@ -83,6 +84,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     if not isinstance(question, str):
                         raise ValueError("'question' must be a string.")
                     session.ask(question)
+                elif path == "/api/new-chat":
+                    session.new_chat()
                 elif path == "/api/reset":
                     session.reset()
                 elif path in ("/api/scenarios/scenario-a", "/api/scenarios/scenario-b"):

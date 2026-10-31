@@ -140,6 +140,7 @@ class AgentSession:
     config: ProviderConfig = field(default_factory=get_provider_config)
     agent: GroundedAgent = field(init=False)
     history: list[dict[str, object]] = field(default_factory=list)
+    audit_history: dict[str, dict[str, object]] = field(default_factory=dict)
     suggested_question: str = ""
     lock: threading.RLock = field(default_factory=threading.RLock)
 
@@ -150,6 +151,12 @@ class AgentSession:
         """Clear session activity and restore the neutral facility belief baseline."""
         self.agent.close()
         self.agent = _new_agent(self.config)
+        self.audit_history.clear()
+        self.history.clear()
+        self.suggested_question = ""
+
+    def new_chat(self) -> None:
+        """Clear the current conversation while preserving the agent and its world."""
         self.history.clear()
         self.suggested_question = ""
 
@@ -157,6 +164,7 @@ class AgentSession:
         """Clear all session data before loading a controlled scenario preset."""
         self.agent.close()
         self.agent = _new_agent(self.config, seed_default_beliefs=False)
+        self.audit_history.clear()
         self.history.clear()
         self.suggested_question = ""
 
@@ -549,6 +557,9 @@ class AgentSession:
         response = self.agent.ask(cleaned)
         item = _response_to_dict(response)
         self.history.append(item)
+        for event in item.get("audit_events", []):
+            if isinstance(event, dict):
+                self.audit_history[str(event["event_id"])] = event
         self.suggested_question = ""
         return item
 
@@ -563,12 +574,6 @@ class AgentSession:
         all_facts = self.agent.memory.query_facts(FactQuery(active_only=False))
         world = self.agent.environment.get_world_state()
 
-        audit_events: dict[str, dict[str, object]] = {}
-        for item in self.history:
-            for event in item.get("audit_events", []):
-                if isinstance(event, dict):
-                    audit_events[str(event["event_id"])] = event
-
         return {
             "history": list(self.history),
             "suggested_question": self.suggested_question,
@@ -580,7 +585,7 @@ class AgentSession:
             },
             "active_facts": [_model_to_dict(fact) for fact in active_facts],
             "ledger": [_model_to_dict(fact) for fact in all_facts],
-            "audit_events": list(audit_events.values()),
+            "audit_events": list(self.audit_history.values()),
             "environment": world.model_dump(mode="json"),
             "capabilities": [
                 capability.model_dump(mode="json")
