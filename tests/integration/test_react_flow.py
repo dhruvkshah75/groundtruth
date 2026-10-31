@@ -252,7 +252,7 @@ def test_malformed_entity_argument_uses_exactly_one_planner_repair() -> None:
 
     response = agent.ask("Is the front route clear?")
 
-    assert len(client.calls) == 3
+    assert len(client.calls) == 4  # proposal, repair, explanation, evidence review
     assert client.calls[0]["tools"] == client.calls[1]["tools"]
     assert response.react_trace is not None
     assert response.react_trace.tool_call_id == "call_repaired"
@@ -765,3 +765,64 @@ def test_adversarial_completion_rejected_by_response_guard_in_scenario_b() -> No
     assert response.react_trace is not None
     assert response.react_trace.explanation_source == "deterministic_fallback"
     assert response.answer != adversarial_text
+
+
+def test_live_answer_accepts_reviewed_natural_explanation() -> None:
+    call = FakeToolCall(
+        name="current_robot_pose", arguments='{"entity_mentions": ["robot_1"]}',
+        call_id="call_pose_natural",
+    )
+    proposal = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[call]))]
+    )
+    natural = (
+        "The robot is in **room_101**.\n\n"
+        "- Position: x=0.0 cm, y=0.0 cm.\n"
+        "- Facing: north."
+    )
+    answer = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=natural))]
+    )
+    review = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(content='{"supported": true}'))]
+    )
+    client = FakeGroqClient([proposal, answer, review])
+    agent = _build_test_agent(client)
+
+    response = agent.ask("Where is robot_1 and which way is it facing?")
+
+    assert response.answer == natural
+    assert response.react_trace is not None
+    assert response.react_trace.explanation_source == "llm"
+    assert len(client.calls) == 3
+    assert "Markdown" in client.calls[1]["messages"][0]["content"]
+    review_input = json.loads(client.calls[2]["messages"][1]["content"])
+    assert review_input["answer"] == natural
+    assert review_input["verified_result"]["sensor_observations"]
+    agent.close()
+
+
+@pytest.mark.parametrize("verdict", ['{"supported": false}', 'not json', '{"supported": "true"}'])
+def test_live_answer_falls_back_when_review_rejects_or_is_invalid(verdict: str) -> None:
+    call = FakeToolCall(
+        name="current_robot_pose", arguments='{"entity_mentions": ["robot_1"]}',
+        call_id="call_pose_rejected",
+    )
+    proposal = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[call]))]
+    )
+    candidate = "The robot is on Mars."
+    answer = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=candidate))]
+    )
+    review = FakeChatCompletion(
+        choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=verdict))]
+    )
+    agent = _build_test_agent(FakeGroqClient([proposal, answer, review]))
+
+    response = agent.ask("Where is robot_1 and which way is it facing?")
+
+    assert response.answer != candidate
+    assert response.react_trace is not None
+    assert response.react_trace.explanation_source == "deterministic_fallback"
+    agent.close()

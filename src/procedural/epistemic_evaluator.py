@@ -484,7 +484,7 @@ class EpistemicEvaluator:
             "historical_perspective": (
                 f"{latest_color_fact.object.capitalize()} (latest logged color claim from "
                 f"'{latest_color_fact.source_agent}', recorded "
-                f"{latest_color_fact.created_at.isoformat()}."
+                f"{latest_color_fact.created_at.isoformat()})."
                 if latest_color_fact
                 else (
                     f"No historical color record was found for {observed_object_id}."
@@ -494,11 +494,13 @@ class EpistemicEvaluator:
             ),
         }
 
-        explanation = "Perspective breakdown:\n"
-        explanation += f"1. User Perspective: {perspectives['user_perspective']}\n"
-        explanation += f"2. Egocentric Perspective: {perspectives['egocentric_perspective']}\n"
-        explanation += (
-            f"3. Historical/Third-Party Perspective: {perspectives['historical_perspective']}"
+        explanation = (
+            "The available evidence gives three distinct perspectives:\n\n"
+            f"- **Your expectation:** {perspectives['user_perspective']}\n"
+            f"- **Current camera view:** {perspectives['egocentric_perspective']}\n"
+            f"- **Historical record:** {perspectives['historical_perspective']}\n\n"
+            "The historical record is a past claim; it does not by itself establish "
+            "the object's current color."
         )
 
         return EpistemicEvaluation(

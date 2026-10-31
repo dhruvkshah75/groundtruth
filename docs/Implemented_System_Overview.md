@@ -161,13 +161,13 @@ These are controlled backend fixtures. The LiDAR reading itself is computed from
 4. SQLite returns the static-map claim. Tier 3 calculates an obstacle directly ahead and returns `blocked` at `12.0 cm`, along with an observation ID and spatial context.
 5. `EpistemicEvaluator` verifies that the stored claim and observation apply to the same location and frame. Since the static-map claim says clear and the fresh sensor says blocked, the evaluator applies `lidar_overrides_map`.
 6. Tier 1 records the LiDAR-backed blocked claim, marks the old clear claim superseded, and writes an audit event. The graph projection refreshes from active facts and shows the active route as blocked.
-7. In live mode, these real tool execution results are returned to the LLM (Turn 2). Python accepts the model's final text only when it matches the deterministic explanation, ignoring case and punctuation; otherwise it returns the deterministic explanation. React displays the answer, status, ReAct execution trace, audit/revision details, sensor telemetry, ledger, graph, and environment values.
+7. In live mode, the verified result and evidence are returned to the LLM for a natural-language answer. A separate model review checks non-verbatim answers against the result; if it rejects the answer or fails, Python returns the deterministic explanation. Model review is probabilistic and cannot guarantee correctness. The chat displays the answer and expandable execution details; the System inspector retains detailed evidence.
 
 The expected answer is equivalent to:
 
 > No, my static mapping says it is clear, but my live LiDAR readings indicate a physical obstruction at 12.0 cm right now. I have downgraded my map confidence and updated my belief graph.
 
-In live mode, the LLM generates this explanation grounded in the verified tool results without altering deterministic facts, status, or belief revisions. If the LLM call fails or is unavailable, deterministic Python generates the safe fallback wording. The “updated my belief graph” claim is supported by the repository revision and derived graph state; it should not be reported if the write did not happen.
+In live mode, the LLM generates an explanation from the verified tool results without changing deterministic facts, status, or belief revisions. Failed reviews fall back to deterministic wording; provider failures are reported to the user. The “updated my belief graph” claim is supported by the repository revision and derived graph state; it should not be reported if the write did not happen.
 
 ### What the 12 cm means
 
@@ -197,17 +197,17 @@ The red object and yellow lighting are backend environment configuration. The ca
    - **User expectation:** red, because that is the target color stated in the question.
    - **Current egocentric camera view:** brown under yellow lighting.
    - **Historical/third-party record:** the latest stored color claim says blue, from `bot_02`.
-6. In live mode, the LLM receives these typed perspective results. Python accepts only final text matching the deterministic explanation, which keeps the perspectives and attributions intact. Offline mode uses the deterministic explanation directly. React shows the distinct perspective cards, sensor telemetry, provenance/ledger facts, ReAct trace, and environment lighting/object state.
+6. In live mode, the LLM receives these typed perspective results and a separate model review checks its paraphrase. Offline mode uses the deterministic explanation directly. The System inspector shows the distinct perspectives, sensor telemetry, provenance, and ReAct trace.
 
 The historical blue statement means **“the database contains a sourced record saying blue”**. It does not prove the object is physically blue now. If there is no historical color fact, the agent reports that no record was found; it must not invent blue or `bot_02`.
 
-In live mode, the LLM receives the verified perspectives, and Python returns only text matching the deterministic explanation. This keeps the three values and their attribution intact. Offline mode uses the deterministic explanation directly.
+In live mode, the LLM receives the verified perspectives and the review checks their values and attributions. Offline mode uses the deterministic explanation directly.
 
 ## 8. What the UI shows
 
 - **Left panel:** API connection/provider details, provider mode indicator, Scenario A and B presets, reset, and the three layer names.
-- **Center:** conversation, returned answer/status, collapsible ReAct tool trace, perspective cards, revision summary, and question composer.
-- **Right system inspector:** ReAct execution trace card, Tier 2 result/plan reason/verification, audit events and sensor telemetry; perspectives; Tier 1 active graph and full SQLite ledger; Tier 3 world version, pose, light, obstacles, objects, and advertised sensors.
+- **Center:** conversation, formatted answer, status, expandable execution details, and question composer.
+- **System inspector:** ReAct execution trace, Tier 2 result/plan reason/verification, audit events and sensor telemetry; perspectives; Tier 1 active graph and full SQLite ledger; Tier 3 world version, pose, light, obstacles, objects, and advertised sensors.
 - **Layout controls:** the left panel can be hidden/shown; the right inspector can be hidden/shown and resized on wide screens. The UI is responsive on smaller screens.
 
 The inspector reports facts returned by the backend. “No observation”, “no history”, and “no executable plan” are explicit empty states rather than substitutes filled with example values.
@@ -223,7 +223,7 @@ The inspector reports facts returned by the backend. “No observation”, “no
 - Deterministic mock LiDAR, camera, ambient light, and pose behavior.
 - `GroundedAgent` composition, deterministic evidence evaluation, Scenario A revision, and Scenario B perspective separation.
 - Real LLM ReAct integration via `GroqIntentProvider`, structured function calling, Turn 2 grounded explanation synthesis with safe deterministic fallback.
-- Inspectable ReAct execution traces in both React conversation history and System Inspector.
+- Inspectable ReAct execution traces in the chat and System inspector.
 - Explicit provider modes (live LLM vs. offline rule-based) with clear health reporting, UI warnings, and 503 error handling.
 - React/TypeScript UI connected to a local session-scoped Python API; API and frontend integration tests.
 - No Streamlit UI or Streamlit runtime dependency.

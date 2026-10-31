@@ -9,6 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.providers.tools import (
     ALLOWED_INTENTS,
+    GROUNDED_EXPLANATION_REVIEW_PROMPT,
     GROUNDED_EXPLANATION_SYSTEM_PROMPT,
     INTENT_PROPOSAL_SYSTEM_PROMPT,
     INTENT_TOOLS,
@@ -219,6 +220,28 @@ class GroqIntentProvider:
             raise IntentProviderUnavailableError(
                 f"Groq grounded explanation call failed: {exc}"
             ) from exc
+
+    def verify_grounded_explanation(
+        self, user_question: str, tool_result: dict[str, Any], candidate: str
+    ) -> bool:
+        """Independently review a paraphrase; malformed or unavailable reviews fail closed."""
+        messages = [
+            {"role": "system", "content": GROUNDED_EXPLANATION_REVIEW_PROMPT},
+            {"role": "user", "content": json.dumps(
+                {"question": user_question, "verified_result": tool_result, "answer": candidate},
+                ensure_ascii=False,
+            )},
+        ]
+        try:
+            response = self._client.create_chat_completion(
+                model=self._model, messages=messages, temperature=0.0
+            )
+            content = self._extract_message_content(response)
+            verdict = json.loads(content or "")
+            return isinstance(verdict, dict) and verdict.get("supported") is True
+        except Exception as exc:
+            LOGGER.warning("Grounded explanation review failed: %s", exc)
+            return False
 
     def _extract_tool_call_payload(self, response: Any, user_question: str) -> dict[str, Any]:
         """Parse function-calling response into IntentRequest dictionary format.

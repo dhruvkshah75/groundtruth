@@ -244,11 +244,16 @@ class GroundedAgent:
                         tool_call_id=tool_call_id,
                         tool_result=tool_result,
                     )
-                    if (
-                        grounded_text
-                        and grounded_text.strip()
-                        and validate_grounded_response(grounded_text, eval_outcome)
-                    ):
+                    exact = validate_grounded_response(grounded_text, eval_outcome)
+                    reviewed = (
+                        bool(grounded_text and grounded_text.strip())
+                        and not exact
+                        and hasattr(self._provider, "verify_grounded_explanation")
+                        and self._provider.verify_grounded_explanation(
+                            question, tool_result, grounded_text
+                        )
+                    )
+                    if exact or reviewed:
                         final_answer = grounded_text.strip()
                         explanation_source = "llm"
                     else:

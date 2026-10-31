@@ -237,10 +237,10 @@ def test_scenario_b_multi_perspective_tracking() -> None:
         assert "bot_02" in response.perspectives["historical_perspective"]
 
         # Explanation contains all three perspectives clearly broken down
-        assert "User Perspective: Red" in response.answer
-        assert "Egocentric Perspective: Brown" in response.answer
+        assert "**Your expectation:** Red" in response.answer
+        assert "**Current camera view:** Brown" in response.answer
         assert (
-            "Historical/Third-Party Perspective: Blue (latest logged color claim from 'bot_02'"
+            "**Historical record:** Blue (latest logged color claim from 'bot_02'"
             in response.answer
         )
 

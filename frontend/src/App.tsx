@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database,
   FlaskConical, LoaderCircle, MessageSquareText, MoreHorizontal, Network, PanelLeftClose,
@@ -39,49 +40,6 @@ const tabs = [
 ] as const;
 const tabFromPath = (): WorkspaceTab => window.location.pathname === "/graph"
   ? "graph" : window.location.pathname === "/inspector" ? "inspector" : "chat";
-
-type RobotPoseSummary = {
-  robotId: string;
-  xCm: number;
-  yCm: number;
-  direction: string;
-  location: string | null;
-  frameOfReference: string | null;
-};
-
-function getRobotPoseSummary(response: AgentResponse): RobotPoseSummary | null {
-  if (response.react_trace?.tool_name !== "current_robot_pose") return null;
-
-  const observation = response.sensor_telemetry.find((item) => item.capability === "robot_pose");
-  if (!observation || typeof observation.measurements !== "object" || observation.measurements === null) {
-    return null;
-  }
-
-  const measurements = observation.measurements as Record<string, unknown>;
-  if (
-    typeof measurements.robot_id !== "string"
-    || typeof measurements.x_cm !== "number"
-    || typeof measurements.y_cm !== "number"
-    || typeof measurements.direction !== "string"
-  ) {
-    return null;
-  }
-
-  const context = typeof observation.context === "object" && observation.context !== null
-    ? observation.context as Record<string, unknown>
-    : {};
-
-  return {
-    robotId: measurements.robot_id,
-    xCm: measurements.x_cm,
-    yCm: measurements.y_cm,
-    direction: measurements.direction,
-    location: typeof context.location === "string" ? context.location : null,
-    frameOfReference: typeof context.frame_of_reference === "string"
-      ? context.frame_of_reference
-      : null,
-  };
-}
 
 const PERSPECTIVE_LABELS: Record<string, string> = {
   user_perspective: "User expectation",
@@ -476,7 +434,6 @@ function ChatActionDialog({ dialog, onClose, onDelete }: { dialog: ChatDialog; o
 function ConversationTurn({ response }: { response: AgentResponse }) {
   const [showTrace, setShowTrace] = useState(false);
   const trace = response.react_trace;
-  const pose = getRobotPoseSummary(response);
 
   return (
     <article className="conversation-turn">
@@ -486,35 +443,16 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
           <div className="agent-icon"><BrainCircuit size={16} /></div>
           <div><strong>Agent</strong><span>Grounded reasoning assistant</span></div>
           <div className="status-badges-group">
-            {trace && (
+            {trace && trace.explanation_source !== "llm" && (
               <span className={`trace-source-badge source-${trace.explanation_source}`}>
-                {trace.explanation_source === "llm"
-                  ? "ReAct LLM"
-                  : trace.explanation_source === "rule_based"
-                  ? "Rule-based"
-                  : "Deterministic Fallback"}
+                {trace.explanation_source === "rule_based" ? "Rule-based" : "Deterministic Fallback"}
               </span>
             )}
             <span className={`status-badge status-${response.status}`}>{response.status.replaceAll("_", " ")}</span>
           </div>
         </div>
 
-        {pose ? (
-          <div className="pose-summary" aria-label="Current robot pose">
-            <div className="pose-summary-heading">
-              <strong>Current robot pose</strong>
-              <span>{pose.robotId}</span>
-            </div>
-            <div className="pose-summary-grid">
-              <PoseValue label="Position">x={pose.xCm.toFixed(1)} cm · y={pose.yCm.toFixed(1)} cm</PoseValue>
-              <PoseValue label="Facing">{pose.direction}</PoseValue>
-              <PoseValue label="Location">{pose.location ?? "Not recorded"}</PoseValue>
-              <PoseValue label="Frame of reference">{pose.frameOfReference ?? "Not recorded"}</PoseValue>
-            </div>
-          </div>
-        ) : (
-          <p className="answer-text">{response.answer}</p>
-        )}
+        <div className="answer-text"><ReactMarkdown skipHtml>{response.answer}</ReactMarkdown></div>
         {response.perspectives && (
           <div className="perspective-cards">
             {Object.entries(response.perspectives).map(([key, value]) => (
@@ -661,15 +599,6 @@ function AuditTrailInline({ response }: { response: AgentResponse }) {
         </div>
       ))}
     </section>
-  );
-}
-
-function PoseValue({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="pose-value">
-      <span>{label}</span>
-      <strong>{children}</strong>
-    </div>
   );
 }
 

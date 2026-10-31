@@ -23,14 +23,14 @@ The demo includes two end-to-end scenarios:
 
 *The interactive belief graph showing active facts, relationships, provenance, and spatial context.*
 
-**LLM/ReAct status:** The app implements a real bounded LLM function-calling ReAct loop via `GroqIntentProvider` (milestone [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17)), while retaining an explicit offline mode with `RuleBasedIntentProvider`. Python strictly owns fact validation, approved operations, belief revisions, and deterministic response guards. The React UI exposes live provider status, collapsible ReAct tool execution traces (with executed operations, measurements, and evidence IDs), and epistemic telemetry.
+**LLM/ReAct status:** The app implements a bounded LLM function-calling ReAct loop via `GroqIntentProvider` (milestone [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17)), while retaining an explicit offline mode with `RuleBasedIntentProvider`. Python owns fact validation, approved operations, and belief revisions. In live mode the model can explain the verified result in natural language; a separate model review checks non-verbatim answers against the evidence, falling back to the deterministic explanation when review fails. This model review reduces errors but cannot guarantee correctness. Execution traces are expandable in chat, and evidence and telemetry remain available in the System inspector.
 
 The browser demo supports up to five chats, each with its own messages, SQLite fact ledger, and mock-world state. The server saves those sessions locally in `data/chat-sessions.sqlite`, while the chat list is kept in the browser's local storage. Titles are derived from the first question, with the scenario name used until then. Deleting a chat frees a slot; resetting the Agent clears only the selected chat. The frontend displays backend results and API errors; it does not replace missing backend data with canned scenario answers.
 
 ## Three layers
 
 1. **Tier 1 — Declarative memory:** SQLite stores sourced facts, timestamps, confidence, revisions, and audit history. NetworkX is a rebuildable projection of active facts, not another source of truth.
-2. **Tier 2 — Procedural layer:** validates model intent proposals, resolves entities, builds and executes mandatory evidence plans, and applies conflict/perspective rules. In live mode, a Groq adapter participates in a two-turn ReAct cycle; Python validates the final response against deterministic outcomes before returning.
+2. **Tier 2 — Procedural layer:** validates model intent proposals, resolves entities, builds and executes mandatory evidence plans, and applies conflict/perspective rules. In live mode, a Groq adapter proposes intent and generates an explanation; non-verbatim answers receive a separate model review before display.
 3. **Tier 3 — Sensorimotor layer:** the deterministic mock environment calculates LiDAR, camera, ambient-light, and robot-pose observations from its configured world.
 
 The Python layer owns the evidence and answer logic. The browser displays data returned by that backend; it does not substitute canned answers when requests fail. Scenario presets seed repeatable backend test worlds.

@@ -57,16 +57,16 @@ textarea { caret-color: var(--accent); }
 .workspace-agent-name { padding-left: 12px; border-left: 1px solid var(--line-strong); color: var(--quiet); font-size: .75rem; }
 .chat-workspace { container-type: inline-size; display: flex; min-height: 0; flex: 1; flex-direction: column; }
 .conversation { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
-.conversation-inner { width: min(100%, clamp(680px, 55%, 1120px)); margin: 0 auto; padding: 24px 40px 12px; }
+.conversation-inner { width: min(100%, 1200px); margin: 0 auto; padding: 24px 40px 12px; }
 .conversation-inner.is-empty { display: grid; min-height: 100%; align-content: center; padding-bottom: 70px; }
 .empty-conversation { text-align: center; }
 .welcome-mark { margin-bottom: 24px; color: var(--accent); }
 .empty-conversation h2 { margin: 0; font-size: 1.5rem; font-weight: 500; letter-spacing: -.03em; }
 .empty-conversation p { margin: 12px 0 0; color: var(--muted); font-size: .875rem; line-height: 1.6; }
 .conversation-turn { display: flex; flex-direction: column; gap: 36px; margin-bottom: 40px; }
-.user-message { max-width: 86%; align-self: flex-end; padding: 12px 16px; border-radius: 20px; color: var(--text); background: #f3eff5; font-size: .875rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.user-message { max-width: min(85%, 680px); align-self: flex-end; padding: 12px 16px; border-radius: 12px; color: var(--text); background: #f3eff5; font-size: .875rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-message { min-width: 0; }
-.composer-wrap { width: min(100%, clamp(680px, 55%, 1120px)); flex-shrink: 0; align-self: center; padding: 12px 40px 18px; }
+.composer-wrap { width: min(100%, 1200px); flex-shrink: 0; align-self: center; padding: 12px 40px 18px; }
 .composer { padding: 8px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface); transition: border-color 160ms ease; }
 .composer:focus-within { border-color: var(--accent); }
 .composer textarea { display: block; width: 100%; min-height: 48px; max-height: 160px; resize: vertical; padding: 4px 8px; border: 0; outline: none; color: var(--text); background: transparent; font-size: .875rem; line-height: 1.5; }
@@ -99,7 +99,15 @@ textarea { caret-color: var(--accent); }
 .status-badge { margin-left: auto; padding: 5px 8px; border: 1px solid rgb(118 81 132 / 20%); border-radius: 999px; color: #276b5b; background: rgb(118 81 132 / 8%); font-size: 9px !important; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 .status-grounded_conflict_resolved { color: #875a15; border-color: rgb(156 108 31 / 22%); background: rgb(156 108 31 / 8%); }
 .status-unverifiable, .status-unsupported, .status-no_data { color: var(--danger); border-color: rgb(166 52 57 / 20%); background: rgb(166 52 57 / 8%); }
-.answer-text { margin: 15px 0 0 38px; color: var(--text); font-size: 13px; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
+.answer-text { margin: 15px 0 0 38px; color: var(--text); font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
+.answer-text > :first-child { margin-top: 0; }
+.answer-text > :last-child { margin-bottom: 0; }
+.answer-text p, .answer-text ul, .answer-text ol { margin: 0 0 .8em; }
+.answer-text ul, .answer-text ol { padding-left: 1.5em; }
+.answer-text li + li { margin-top: .3em; }
+.answer-text strong { font-weight: 650; }
+.answer-text a { color: var(--accent); text-underline-offset: 3px; }
+.answer-text pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: var(--surface-raised); }
 .pose-summary { margin: 17px 0 0 38px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .pose-summary-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .pose-summary-heading strong { color: var(--text); font-size: 13px; font-weight: 600; }
@@ -193,7 +201,7 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 
 /* Shared reading scale for the conversation and system inspector. */
 .user-message, .answer-text, .composer textarea { font-size: .875rem; line-height: 1.65; }
-.answer-text { max-width: 72ch; text-wrap: pretty; }
+.answer-text { max-width: none; text-wrap: pretty; }
 .empty-card p, .top-title, .agent-heading strong, .inspector-header h2 { font-size: .9375rem; }
 .connection-line, .provider-note, .scenario-title, .scenario-description,
 .reset-button, .architecture-section li, .architecture-section strong,
