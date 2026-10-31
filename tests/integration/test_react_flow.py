@@ -769,17 +769,14 @@ def test_adversarial_completion_rejected_by_response_guard_in_scenario_b() -> No
 
 def test_live_answer_accepts_reviewed_natural_explanation() -> None:
     call = FakeToolCall(
-        name="current_robot_pose", arguments='{"entity_mentions": ["robot_1"]}',
+        name="current_robot_pose",
+        arguments='{"entity_mentions": ["robot_1"]}',
         call_id="call_pose_natural",
     )
     proposal = FakeChatCompletion(
         choices=[FakeChatChoice(message=FakeChatCompletionMessage(tool_calls=[call]))]
     )
-    natural = (
-        "The robot is in **room_101**.\n\n"
-        "- Position: x=0.0 cm, y=0.0 cm.\n"
-        "- Facing: north."
-    )
+    natural = "The robot is in **room_101**.\n\n- Position: x=0.0 cm, y=0.0 cm.\n- Facing: north."
     answer = FakeChatCompletion(
         choices=[FakeChatChoice(message=FakeChatCompletionMessage(content=natural))]
     )
@@ -802,10 +799,11 @@ def test_live_answer_accepts_reviewed_natural_explanation() -> None:
     agent.close()
 
 
-@pytest.mark.parametrize("verdict", ['{"supported": false}', 'not json', '{"supported": "true"}'])
+@pytest.mark.parametrize("verdict", ['{"supported": false}', "not json", '{"supported": "true"}'])
 def test_live_answer_falls_back_when_review_rejects_or_is_invalid(verdict: str) -> None:
     call = FakeToolCall(
-        name="current_robot_pose", arguments='{"entity_mentions": ["robot_1"]}',
+        name="current_robot_pose",
+        arguments='{"entity_mentions": ["robot_1"]}',
         call_id="call_pose_rejected",
     )
     proposal = FakeChatCompletion(

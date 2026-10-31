@@ -227,10 +227,17 @@ class GroqIntentProvider:
         """Independently review a paraphrase; malformed or unavailable reviews fail closed."""
         messages = [
             {"role": "system", "content": GROUNDED_EXPLANATION_REVIEW_PROMPT},
-            {"role": "user", "content": json.dumps(
-                {"question": user_question, "verified_result": tool_result, "answer": candidate},
-                ensure_ascii=False,
-            )},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "question": user_question,
+                        "verified_result": tool_result,
+                        "answer": candidate,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
         ]
         try:
             response = self._client.create_chat_completion(
