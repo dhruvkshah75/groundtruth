@@ -22,7 +22,7 @@ For example, a static map may say a route is clear while a fresh LiDAR observati
 | Local API | Python standard-library HTTP server in `src/web/server.py`. It serves the built UI and JSON endpoints. |
 | Agent | `GroundedAgent` in `src/agent.py` composes Tier 1 memory/graph, Tier 2 planning/execution/evaluation, and Tier 3 mock sensors. |
 | Intent provider | `GroqIntentProvider` (live LLM function calling via Groq) or `RuleBasedIntentProvider` (offline/test mode). |
-| Memory | SQLite `MemoryRepository`; the web demo creates an in-memory database for each browser session. |
+| Memory | SQLite `MemoryRepository`; each chat has its own in-memory ledger, with a durable local snapshot. |
 | Active graph | NetworkX graph derived from active SQLite facts; it can be rebuilt from the repository. |
 | Environment | Deterministic `MockEnvironment` with LiDAR, camera, ambient-light, and pose capabilities. |
 | Evidence decision | Deterministic Python in `EpistemicEvaluator`; it selects supported conclusions and records justified revisions. |
@@ -136,7 +136,7 @@ Python strictly owns facts, capability verification, plan construction, sensor e
 | `POST /api/scenarios/scenario-b` | Resets and seeds Scenario B in the backend session. |
 | `POST /api/reset` | Clears conversation and scenario state, then restores the neutral 17-node facility belief baseline. |
 
-The browser keeps a session UUID in `sessionStorage` and sends it using `X-Session-ID`. The server maintains separate in-memory agent/SQLite/environment state for each session, with a local demo limit of 128 sessions. Restarting the Python server loses these ephemeral sessions. Scenario buttons call backend endpoints; the scenarios are seeded server-side, not painted into the UI as fake answers.
+The browser keeps the selected chat's UUID in `sessionStorage` and sends it using `X-Session-ID`; the list of up to five chats is stored in browser local storage. The server maintains separate Agent, SQLite, and environment state for each session and saves snapshots to `data/chat-sessions.sqlite`, with a local demo limit of 128 loaded sessions. Scenario buttons call backend endpoints; the scenarios are seeded server-side, not painted into the UI as fake answers.
 
 A fresh or reset browser session contains a small neutral facility graph. It records stable relationships between the robot, room, sensors, map, and supporting systems. Asking a question can read this graph without automatically turning the answer into a new belief. Scenario presets replace the neutral graph with their controlled facts so their before-and-after behavior remains repeatable.
 

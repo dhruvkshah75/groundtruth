@@ -269,3 +269,43 @@ def test_api_returns_503_when_grounded_response_provider_call_fails(tmp_path: Pa
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_saved_sessions_survive_restart_and_remain_isolated(tmp_path) -> None:
+    from src.web.session_store import SessionStore
+
+    path = tmp_path / "chats.sqlite"
+    first_id, second_id = str(uuid4()), str(uuid4())
+    store = SessionStore(path)
+    service = AgentService(config=ProviderConfig(mode="rule-based", api_key=None), store=store)
+    first = service.get_session(first_id)
+    assert store.load(first_id) is not None
+    first.load_scenario("scenario-a")
+    first.ask(first.suggested_question)
+    service.save_session(first_id, first)
+    before = first.snapshot()
+    second = service.get_session(second_id)
+    second.load_scenario("scenario-b")
+    second.ask(second.suggested_question)
+    service.save_session(second_id, second)
+    second_before = second.snapshot()
+    first.agent.close()
+    second.agent.close()
+    store.close()
+
+    restored_store = SessionStore(path)
+    restored = AgentService(
+        config=ProviderConfig(mode="rule-based", api_key=None), store=restored_store
+    )
+    restored_first = restored.get_session(first_id)
+    restored_second = restored.get_session(second_id)
+    assert restored_first.snapshot() == before
+    assert restored_second.snapshot() == second_before
+    restored_first.reset()
+    restored.save_session(first_id, restored_first)
+    assert restored_second.snapshot() == second_before
+    restored.delete_session(first_id)
+    assert restored_store.load(first_id) is None
+    assert restored.get_session(second_id).snapshot() == second_before
+    restored_second.agent.close()
+    restored_store.close()

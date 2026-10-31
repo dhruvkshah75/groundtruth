@@ -20,6 +20,7 @@ from src.sensorimotor.world_models import (
     SimulatedObject,
     WorldState,
 )
+from src.web.session_store import SessionStore
 
 SCENARIO_A_QUESTION = "Is the front route clear to move forward?"
 SCENARIO_B_QUESTION = (
@@ -146,6 +147,25 @@ class AgentSession:
 
     def __post_init__(self) -> None:
         self.agent = _new_agent(self.config)
+
+    def persisted_state(self) -> dict:
+        """Capture conversation and world alongside the separately stored ledger."""
+        return {
+            "history": self.history,
+            "audit_history": self.audit_history,
+            "suggested_question": self.suggested_question,
+            "world": self.agent.environment.get_world_state().model_dump(mode="json"),
+        }
+
+    def restore(self, state: dict, memory: bytes) -> None:
+        """Restore the exact world version, conversation, and SQLite ledger."""
+        self.agent.close()
+        self.agent = _new_agent(self.config, seed_default_beliefs=False)
+        self.agent.memory.restore_snapshot(memory)
+        self.agent.environment.restore_world(WorldState.model_validate(state["world"]))
+        self.history = state.get("history", [])
+        self.audit_history = state.get("audit_history", {})
+        self.suggested_question = state.get("suggested_question", "")
 
     def reset(self) -> None:
         """Clear session activity and restore the neutral facility belief baseline."""
@@ -597,7 +617,10 @@ class AgentSession:
 class AgentService:
     """Thread-safe registry for browser sessions and app metadata."""
 
-    def __init__(self, config: ProviderConfig | None = None) -> None:
+    def __init__(
+        self, config: ProviderConfig | None = None, store: SessionStore | None = None
+    ) -> None:
+        self._store = store
         self._sessions: dict[str, AgentSession] = {}
         self._lock = threading.Lock()
         self._config = config or get_provider_config()
@@ -613,8 +636,37 @@ class AgentService:
             if canonical_id not in self._sessions:
                 if len(self._sessions) >= 128:
                     raise RuntimeError("The local demo has reached its 128-session limit.")
-                self._sessions[canonical_id] = AgentSession(config=self._config)
+                session = AgentSession(config=self._config)
+                stored = self._store.load(canonical_id) if self._store else None
+                if stored:
+                    session.restore(*stored)
+                elif self._store:
+                    self.save_session(canonical_id, session)
+                self._sessions[canonical_id] = session
             return self._sessions[canonical_id]
+
+    def save_session(self, session_id: str, session: AgentSession) -> None:
+        """Persist a session after an operation while its lock is held."""
+        if self._store:
+            self._store.save(
+                str(UUID(session_id)),
+                session.persisted_state(),
+                session.agent.memory.export_snapshot(),
+            )
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session and its durable snapshot."""
+        try:
+            canonical_id = str(UUID(session_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("X-Session-ID must be a valid UUID.") from exc
+        with self._lock:
+            session = self._sessions.pop(canonical_id, None)
+            if session:
+                with session.lock:
+                    session.agent.close()
+            if self._store:
+                self._store.delete(canonical_id)
 
     def health(self) -> dict[str, object]:
         """Report this running API and the provider actually wired into the agent."""

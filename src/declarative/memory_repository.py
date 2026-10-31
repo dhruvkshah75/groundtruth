@@ -91,6 +91,16 @@ class MemoryRepository:
         self._conn.execute("PRAGMA journal_mode = WAL")
         initialize_schema(self._conn)
 
+    def export_snapshot(self) -> bytes:
+        """Return a complete SQLite image, including facts, revisions, and aliases."""
+        return self._conn.serialize()
+
+    def restore_snapshot(self, image: bytes) -> None:
+        """Restore a previously exported SQLite image into this repository."""
+        self._conn.deserialize(image)
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        self._notify_write_listeners()
+
     def add_write_listener(self, listener: Callable[[], None]) -> None:
         """Register a callback invoked after any successful fact or revision commit."""
         if listener not in self._write_listeners:

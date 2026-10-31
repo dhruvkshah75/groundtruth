@@ -1,15 +1,37 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database,
-  FlaskConical, LoaderCircle, MessageSquareText, Network, PanelLeftClose,
-  PanelLeftOpen, Plus, RotateCcw, ScanLine, Sparkles, X,
+  FlaskConical, LoaderCircle, MessageSquareText, MoreHorizontal, Network, PanelLeftClose,
+  PanelLeftOpen, Pencil, Plus, RotateCcw, ScanLine, Sparkles, Trash2, X,
 } from "lucide-react";
-import { api } from "./api";
+import { api, getSessionId, setSessionId } from "./api";
 import type { AgentResponse, ApiHealth, AppState, Fact } from "./types";
 
 const BeliefGraphPage = lazy(() => import("./BeliefGraphPage"));
 type WorkspaceTab = "chat" | "inspector" | "graph";
-type Action = "ask" | "scenario-a" | "scenario-b" | "reset" | "new-chat" | null;
+type Action = "ask" | "scenario-a" | "scenario-b" | "reset" | "new-chat" | "switch-chat" | "delete-chat" | null;
+type Chat = { id: string; title: string | null; scenario: "scenario-a" | "scenario-b" | null; customTitle?: boolean; hasMessages?: boolean };
+type ChatDialog = { kind: "limit" } | { kind: "delete"; chat: Chat };
+const CHAT_LIST_KEY = "groundtruth-chats-v1";
+const MAX_CHATS = 5;
+function initialChats(): Chat[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(CHAT_LIST_KEY) ?? "[]");
+    if (Array.isArray(parsed)) {
+      const chats = parsed.filter((chat): chat is Chat => chat && typeof chat.id === "string" && (chat.title === null || typeof chat.title === "string") && (chat.scenario === null || chat.scenario === "scenario-a" || chat.scenario === "scenario-b")).slice(0, MAX_CHATS);
+      if (chats.length) return chats;
+    }
+  } catch { /* Ignore invalid browser data and retain the current session. */ }
+  return [{ id: getSessionId(), title: null, scenario: null }];
+}
+function chatTitle(question: string): string {
+  const clean = question.trim().replace(/\s+/g, " ");
+  if (clean.length <= 56) return clean;
+  return `${clean.slice(0, 53).replace(/\s+\S*$/, "")}…`;
+}
+function chatLabel(chat: Chat): string {
+  return chat.title || (chat.scenario ? `Scenario ${chat.scenario === "scenario-a" ? "A" : "B"}` : "New conversation");
+}
 const tabs = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "inspector", label: "System inspector", icon: ScanLine },
@@ -78,11 +100,24 @@ function shortId(value: string): string {
 }
 
 function App() {
+  const [chats, setChats] = useState<Chat[]>(initialChats);
+  const [activeChatId, setActiveChatId] = useState(() => {
+    const current = getSessionId();
+    const saved = initialChats();
+    const id = saved.some((chat) => chat.id === current) ? current : saved[0].id;
+    setSessionId(id);
+    return id;
+  });
   const [state, setState] = useState<AppState | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [question, setQuestion] = useState("");
   const [action, setAction] = useState<Action>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openChatMenu, setOpenChatMenu] = useState<string | null>(null);
+  const [renamingChat, setRenamingChat] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [chatDialog, setChatDialog] = useState<ChatDialog | null>(null);
+  const chatMenuTrigger = useRef<HTMLButtonElement | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(tabFromPath);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -107,12 +142,35 @@ function App() {
       setHealth(apiHealth);
       const currentState = await api.state();
       setState(currentState);
+      const firstQuestion = currentState.history[0]?.question;
+      setChats((items) => items.map((chat) => chat.id === getSessionId() ? { ...chat, hasMessages: !!firstQuestion, title: firstQuestion && !chat.title ? chatTitle(firstQuestion) : chat.title } : chat));
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not connect to the Python Agent API.");
     }
   }, []);
 
+  useEffect(() => { localStorage.setItem(CHAT_LIST_KEY, JSON.stringify(chats)); }, [chats]);
+  useEffect(() => {
+    if (!openChatMenu) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest("[data-chat-menu]")) setOpenChatMenu(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpenChatMenu(null);
+        chatMenuTrigger.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openChatMenu]);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
     const onPopState = () => setActiveTab(tabFromPath());
@@ -148,7 +206,9 @@ function App() {
     setAction("ask");
     setError(null);
     try {
-      setState(await api.ask(question.trim()));
+      const submitted = question.trim();
+      setState(await api.ask(submitted));
+      setChats((items) => items.map((chat) => chat.id === activeChatId ? { ...chat, hasMessages: true, title: chat.title || chatTitle(submitted) } : chat));
       setQuestion("");
       requestAnimationFrame(() => questionInput.current?.focus());
     } catch (cause) {
@@ -157,6 +217,7 @@ function App() {
   };
   const loadScenario = async (scenario: "scenario-a" | "scenario-b") => {
     if (!health || action) return;
+    if (state?.history.length && !window.confirm("Loading a scenario will replace this chat's messages and Agent state. Continue?")) return;
     setAction(scenario);
     setError(null);
     try {
@@ -164,32 +225,116 @@ function App() {
       setState(updatedState);
       setQuestion(updatedState.suggested_question);
       setLoadedScenario(scenario);
+      setChats((items) => items.map((chat) => chat.id === activeChatId ? { ...chat, hasMessages: false, title: chat.customTitle ? chat.title : null, scenario } : chat));
       if (window.innerWidth <= 760) setSidebarOpen(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The scenario could not be loaded.");
     } finally { setAction(null); }
   };
+  const switchChat = async (id: string) => {
+    if (action || id === activeChatId) return;
+    const previous = activeChatId;
+    setAction("switch-chat");
+    setError(null);
+    setSessionId(id);
+    try {
+      const next = await api.state();
+      setChats((items) => items.map((chat) => chat.id === id ? { ...chat, hasMessages: next.history.length > 0 } : chat));
+      setActiveChatId(id);
+      setState(next);
+      setQuestion("");
+      setLoadedScenario(chats.find((chat) => chat.id === id)?.scenario ?? null);
+      selectTab("chat");
+    } catch (cause) {
+      setSessionId(previous);
+      setError(cause instanceof Error ? cause.message : "Could not open this chat.");
+    } finally { setAction(null); }
+  };
   const newChat = async () => {
     if (!health || action) return;
+    if (chats.some((chat) => chat.hasMessages === false)) return;
+    setAction("new-chat");
+    try {
+      const unchecked = chats.filter((chat) => chat.hasMessages === undefined);
+      const checked = await Promise.all(unchecked.map(async (chat) => ({ id: chat.id, hasMessages: (await api.state(chat.id)).history.length > 0 })));
+      if (checked.length) setChats((items) => items.map((chat) => ({ ...chat, hasMessages: checked.find((item) => item.id === chat.id)?.hasMessages ?? chat.hasMessages })));
+      if (chats.some((chat) => (checked.find((item) => item.id === chat.id)?.hasMessages ?? chat.hasMessages) === false)) {
+        return;
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not check your chats.");
+      return;
+    } finally { setAction(null); }
+    if (chats.length >= MAX_CHATS) {
+      setChatDialog({ kind: "limit" });
+      return;
+    }
+    const previous = activeChatId;
+    const id = crypto.randomUUID();
     setAction("new-chat");
     setError(null);
+    setSessionId(id);
     try {
-      setState(await api.newChat());
+      const next = await api.state();
+      setChats((items) => [...items, { id, title: null, scenario: null, hasMessages: false }]);
+      setActiveChatId(id);
+      setState(next);
       setQuestion("");
+      setLoadedScenario(null);
       selectTab("chat");
       requestAnimationFrame(() => questionInput.current?.focus());
     } catch (cause) {
+      setSessionId(previous);
       setError(cause instanceof Error ? cause.message : "Could not start a new chat.");
+    } finally { setAction(null); }
+  };
+  const saveChatName = (id: string) => {
+    const title = renameValue.trim().replace(/\s+/g, " ");
+    if (!title) return;
+    setChats((items) => items.map((chat) => chat.id === id ? { ...chat, title, customTitle: true } : chat));
+    setRenamingChat(null);
+  };
+  const deleteChat = async (chat: Chat) => {
+    if (!health || action) return;
+    setChatDialog(null);
+    const previous = activeChatId;
+    const remaining = chats.filter((item) => item.id !== chat.id);
+    setAction("delete-chat");
+    setError(null);
+    setSessionId(chat.id);
+    try {
+      await api.deleteSession();
+      if (chat.id === previous) {
+        const nextChat = remaining[0] ?? { id: crypto.randomUUID(), title: null, scenario: null, hasMessages: false };
+        if (!remaining.length) remaining.push(nextChat);
+        setSessionId(nextChat.id);
+        setActiveChatId(nextChat.id);
+        setState(null);
+        setQuestion("");
+        setLoadedScenario(nextChat.scenario);
+        setChats(remaining);
+        try { setState(await api.state()); }
+        catch (cause) { setError(cause instanceof Error ? cause.message : "Could not open the remaining chat."); }
+        selectTab("chat");
+      } else {
+        setSessionId(previous);
+        setChats(remaining);
+      }
+    } catch (cause) {
+      setSessionId(previous);
+      setError(cause instanceof Error ? cause.message : "Could not delete this chat.");
     } finally { setAction(null); }
   };
   const resetAgent = async () => {
     if (!health || action) return;
+    if (!window.confirm("Reset this chat's Agent and clear its messages? Other chats will not be affected.")) return;
     setAction("reset");
     setError(null);
     try {
       setState(await api.reset());
       setQuestion("");
       setLoadedScenario(null);
+      setChats((items) => items.map((chat) => chat.id === activeChatId ? { ...chat, hasMessages: false, title: chat.customTitle ? chat.title : null, scenario: null } : chat));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Agent state could not be reset.");
     } finally { setAction(null); }
@@ -197,6 +342,7 @@ function App() {
   const busy = action !== null;
   const backendReachable = health?.status === "ok" || health?.status === "degraded";
   const providerAvailable = health?.status === "ok";
+  const activeChat = chats.find((chat) => chat.id === activeChatId);
 
   return (
     <div className={`workspace ${sidebarOpen ? "sidebar-visible" : "sidebar-hidden"}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}>
@@ -228,10 +374,36 @@ function App() {
             </button>
           ))}
         </div>}
+        {activeTab === "chat" && <section className="chat-list" aria-label="Saved chats">
+          <div className="chat-list-heading"><h2>Chats</h2></div>
+          {chats.map((chat) => <div className={`chat-list-item ${chat.id === activeChatId ? "active" : ""}`} key={chat.id}>
+            {renamingChat === chat.id ? <form className="chat-rename" onSubmit={(event) => { event.preventDefault(); saveChatName(chat.id); }} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setRenamingChat(null); } }}>
+              <input autoFocus aria-label="Chat name" maxLength={80} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
+              <button type="submit" aria-label="Save chat name" disabled={!renameValue.trim()}><Check size={15} /></button>
+              <button type="button" aria-label="Cancel rename" onClick={() => setRenamingChat(null)}><X size={15} /></button>
+            </form> : <>
+              <button type="button" className="chat-list-select" title={chatLabel(chat)} aria-current={chat.id === activeChatId ? "page" : undefined} disabled={busy} onClick={() => void switchChat(chat.id)}><MessageSquareText size={16} /><span>{chatLabel(chat)}</span></button>
+              <div className="chat-menu-wrap" data-chat-menu>
+                <button type="button" className="chat-menu-trigger" aria-label={`Options for ${chatLabel(chat)}`} aria-expanded={openChatMenu === chat.id} aria-haspopup="menu" disabled={busy} onClick={(event) => { chatMenuTrigger.current = event.currentTarget; setOpenChatMenu((current) => current === chat.id ? null : chat.id); }}><MoreHorizontal size={18} /></button>
+                {openChatMenu === chat.id && <div className="chat-menu" role="menu" aria-label={`Options for ${chatLabel(chat)}`} ref={(menu) => menu?.querySelector<HTMLButtonElement>("button")?.focus()} onKeyDown={(event) => {
+                  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
+                  const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+                  buttons[next]?.focus();
+                }}>
+                  <button type="button" role="menuitem" tabIndex={-1} onClick={() => { setRenameValue(chatLabel(chat)); setRenamingChat(chat.id); setOpenChatMenu(null); }}><Pencil size={15} />Rename</button>
+                  <button type="button" role="menuitem" tabIndex={-1} className="chat-menu-delete" onClick={() => { setOpenChatMenu(null); setChatDialog({ kind: "delete", chat }); }}><Trash2 size={15} />Delete</button>
+                </div>}
+              </div>
+            </>}
+          </div>)}
+        </section>}
         {activeTab === "graph" && <div ref={setGraphSidebarTarget} className="workspace-graph-controls" />}
         <div className="workspace-sidebar-footer">
           <button type="button" className="workspace-nav-item" onClick={() => void resetAgent()} disabled={!backendReachable || busy}>
-            {action === "reset" ? <LoaderCircle size={18} className="spin" /> : <RotateCcw size={18} strokeWidth={1.6} />}<span>Reset Agent state</span>
+            {action === "reset" ? <LoaderCircle size={18} className="spin" /> : <RotateCcw size={18} strokeWidth={1.6} />}<span>Reset current Agent</span>
           </button>
 
         </div>
@@ -245,8 +417,7 @@ function App() {
         <header className="workspace-header">
           <div className="workspace-heading">
             <button ref={sidebarToggle} type="button" className="icon-button" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}><PanelLeftOpen size={19} /></button>
-            <h1>{tabs.find((tab) => tab.id === activeTab)?.label}</h1>
-            {activeTab === "chat" && <span className="workspace-agent-name">Agent</span>}
+            <h1 title={activeTab === "chat" && activeChat ? chatLabel(activeChat) : undefined}>{activeTab === "chat" && activeChat ? chatLabel(activeChat) : tabs.find((tab) => tab.id === activeTab)?.label}</h1>
           </div>
 
         </header>
@@ -282,8 +453,24 @@ function App() {
         {activeTab === "inspector" && <Inspector state={state} />}
         {activeTab === "graph" && <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}><BeliefGraphPage embedded workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} /></Suspense>}
       </main>
+      {chatDialog && <ChatActionDialog dialog={chatDialog} onClose={() => setChatDialog(null)} onDelete={(chat) => void deleteChat(chat)} />}
     </div>
   );
+}
+
+function ChatActionDialog({ dialog, onClose, onDelete }: { dialog: ChatDialog; onClose: () => void; onDelete: (chat: Chat) => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+  useEffect(() => { dialogRef.current?.showModal(); }, []);
+  const deleting = dialog.kind === "delete";
+  return <dialog ref={dialogRef} className="chat-dialog" aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={(event) => { event.preventDefault(); onClose(); }}>
+    <h2 id={titleId}>{deleting ? "Delete chat?" : "Chat limit reached"}</h2>
+    <p id={descriptionId}>{deleting ? <>Delete <strong>{chatLabel(dialog.chat)}</strong> and its Agent state? This cannot be undone.</> : "You can have up to five chats. Delete one to create another."}</p>
+    <div className="chat-dialog-actions">
+      {deleting ? <><button type="button" className="chat-dialog-secondary" autoFocus onClick={onClose}>Cancel</button><button type="button" className="chat-dialog-danger" onClick={() => onDelete(dialog.chat)}>Delete chat</button></> : <button type="button" className="chat-dialog-primary" autoFocus onClick={onClose}>Got it</button>}
+    </div>
+  </dialog>;
 }
 
 function ConversationTurn({ response }: { response: AgentResponse }) {

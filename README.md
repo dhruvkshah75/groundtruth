@@ -25,7 +25,7 @@ The demo includes two end-to-end scenarios:
 
 **LLM/ReAct status:** The app implements a real bounded LLM function-calling ReAct loop via `GroqIntentProvider` (milestone [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17)), while retaining an explicit offline mode with `RuleBasedIntentProvider`. Python strictly owns fact validation, approved operations, belief revisions, and deterministic response guards. The React UI exposes live provider status, collapsible ReAct tool execution traces (with executed operations, measurements, and evidence IDs), and epistemic telemetry.
 
-The browser demo uses session-scoped in-memory SQLite and mock-world state. Restarting the Python server clears those demo sessions. The frontend displays backend results and API errors; it does not replace missing backend data with canned scenario answers.
+The browser demo supports up to five chats, each with its own messages, SQLite fact ledger, and mock-world state. The server saves those sessions locally in `data/chat-sessions.sqlite`, while the chat list is kept in the browser's local storage. Titles are derived from the first question, with the scenario name used until then. Deleting a chat frees a slot; resetting the Agent clears only the selected chat. The frontend displays backend results and API errors; it does not replace missing backend data with canned scenario answers.
 
 ## Three layers
 
@@ -53,7 +53,7 @@ npm install
 npm run dev
 ```
 
-If the frontend reports that New chat needs an updated backend, restart the Python API process. Its sessions are in memory, so restarting clears the current session.
+Restart the Python API process after updating to this version. A previous version's in-memory sessions are lost on restart; sessions saved by this version persist across subsequent restarts.
 
 Open <http://127.0.0.1:5173>. See [Local Development Setup](docs/Local_Development_Setup.md) for production build instructions and verification commands.
 

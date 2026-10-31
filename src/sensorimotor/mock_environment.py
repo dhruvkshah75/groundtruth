@@ -64,6 +64,10 @@ class MockEnvironment:
         """Return a detached snapshot of the current simulated world."""
         return self._world.model_copy(deep=True)
 
+    def restore_world(self, world: WorldState) -> None:
+        """Restore a saved world without advancing its version."""
+        self._world = world.model_copy(deep=True)
+
     def replace_world(self, new_world: WorldState) -> None:
         """Replace the world and advance this environment's version once."""
         replacement = new_world.model_copy(deep=True)

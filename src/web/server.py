@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.web.service import AgentService
+from src.web.session_store import SessionStore
 
 LOGGER = logging.getLogger("groundtruth.web")
 MAX_REQUEST_BYTES = 16_384
@@ -94,6 +95,7 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 else:
                     self._send_error_json(404, "not_found", "API endpoint not found.")
                     return
+                self.service.save_session(self.headers.get("X-Session-ID", ""), session)
                 self._send_json(200, session.snapshot())
         except (ValueError, json.JSONDecodeError) as exc:
             self._send_error_json(400, "invalid_request", str(exc))
@@ -106,6 +108,16 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             self._send_error_json(
                 500, "agent_request_failed", "Agent request failed. Check backend logs."
             )
+
+    def do_DELETE(self) -> None:
+        if urlsplit(self.path).path != "/api/session":
+            self._send_error_json(404, "not_found", "API endpoint not found.")
+            return
+        try:
+            self.service.delete_session(self.headers.get("X-Session-ID", ""))
+            self._send_json(200, {"deleted": True})
+        except ValueError as exc:
+            self._send_error_json(400, "invalid_session", str(exc))
 
     def _read_json_body(self) -> dict[str, object]:
         content_length = self.headers.get("Content-Length")
@@ -164,7 +176,8 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    server = create_server(args.host, args.port)
+    store = SessionStore(Path("data/chat-sessions.sqlite"))
+    server = create_server(args.host, args.port, service=AgentService(store=store))
     print(f"GroundTruth app server listening at http://{args.host}:{args.port}")
     try:
         server.serve_forever()
@@ -172,6 +185,7 @@ def main() -> None:
         print("\nStopping GroundTruth app server.")
     finally:
         server.server_close()
+        store.close()
 
 
 if __name__ == "__main__":

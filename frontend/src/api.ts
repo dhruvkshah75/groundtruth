@@ -2,13 +2,17 @@ import type { ApiErrorPayload, ApiHealth, AppState } from "./types";
 
 const SESSION_KEY = "groundtruth-session-id";
 
-function getSessionId(): string {
+export function getSessionId(): string {
   let id = sessionStorage.getItem(SESSION_KEY);
   if (!id) {
     id = crypto.randomUUID();
     sessionStorage.setItem(SESSION_KEY, id);
   }
   return id;
+}
+
+export function setSessionId(id: string): void {
+  sessionStorage.setItem(SESSION_KEY, id);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -40,7 +44,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   health: () => request<ApiHealth>("/api/health"),
-  state: () => request<AppState>("/api/state"),
+  state: (sessionId?: string) => request<AppState>("/api/state", sessionId ? { headers: { "X-Session-ID": sessionId } } : {}),
   ask: (question: string) =>
     request<AppState>("/api/ask", {
       method: "POST",
@@ -52,5 +56,18 @@ export const api = {
       body: "{}",
     }),
   newChat: () => request<AppState>("/api/new-chat", { method: "POST", body: "{}" }),
+  deleteSession: async () => {
+    // Older running servers do not implement DELETE. Resetting that session removes
+    // its in-memory data; newer servers delete the durable snapshot instead.
+    const response = await fetch("/api/session", { method: "DELETE", headers: { "X-Session-ID": getSessionId() }, cache: "no-store" });
+    if (response.status === 501) {
+      await request<AppState>("/api/reset", { method: "POST", body: "{}" });
+      return;
+    }
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null) as Partial<ApiErrorPayload> | null;
+      throw new Error(detail?.error || `The Agent API returned HTTP ${response.status}.`);
+    }
+  },
   reset: () => request<AppState>("/api/reset", { method: "POST", body: "{}" }),
 };
