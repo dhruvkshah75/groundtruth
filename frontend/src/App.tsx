@@ -517,7 +517,7 @@ function Inspector({ state }: { state: AppState | null }) {
           </div>
         </details>
 
-        <details className="inspector-section" open>
+        <details className="inspector-section">
           <summary><span>Tier 2 · reasoning &amp; outcome</span><ChevronDown size={16} /></summary>
           <div className="inspector-section-body">
             <ValueCard label="Response status">{latest?.status ?? "No Agent response yet."}</ValueCard>
