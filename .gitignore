@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 venv/
 .agents/
+.impeccable/
 
 *.log
 .DS_Store
