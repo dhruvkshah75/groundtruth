@@ -15,12 +15,13 @@ The demo includes two end-to-end scenarios:
 - **Scenario A — map and LiDAR conflict:** stored map memory says the front route is clear, while the simulated LiDAR detects an obstacle 12 cm ahead. The agent records a belief revision and shows its evidence and audit details.
 - **Scenario B — distinct color perspectives:** the user expects a red object, the simulated camera can perceive it as brown under yellow lighting, and Tier 1 history can contain a third-party record that it was painted blue. The agent reports these as separate perspectives.
 
-![GroundTruth running Scenario A in the React interface](docs/assets/current-agent-demo.png)
-
+![GroundTruth running Scenario A](docs/assets/current_agent_demo.png)
 *Scenario A showing the agent comparing stored map knowledge with a live LiDAR observation.*
 
-![GroundTruth interactive belief graph showing active facts and provenance](docs/assets/graph-demo.png)
+![GroundTruth running Scenario B](docs/assets/current_agent_demo1.png)
+*Scenario B demonstrating different color perspectives.*
 
+![GroundTruth interactive belief graph showing active facts and provenance](docs/assets/graph-demo.png)
 *The interactive belief graph showing active facts, relationships, provenance, and spatial context.*
 
 **LLM/ReAct status:** The app implements a bounded LLM function-calling ReAct loop via `GroqIntentProvider` (milestone [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17)), while retaining an explicit offline mode with `RuleBasedIntentProvider`. Python owns fact validation, approved operations, and belief revisions. In live mode the model can explain the verified result in natural language; a separate model review checks non-verbatim answers against the evidence, falling back to the deterministic explanation when review fails. This model review reduces errors but cannot guarantee correctness. Execution traces are expandable in chat, and evidence and telemetry remain available in the System inspector.
