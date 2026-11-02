@@ -21,7 +21,7 @@ The demo includes two end-to-end scenarios:
 ![GroundTruth running Scenario B](docs/assets/current_agent_demo1.png)
 *Scenario B demonstrating different color perspectives.*
 
-![GroundTruth interactive belief graph showing active facts and provenance](docs/assets/graph-demo.png)
+![GroundTruth interactive belief graph showing active facts and provenance](docs/assets/graph_demo.png)
 *The interactive belief graph showing active facts, relationships, provenance, and spatial context.*
 
 **LLM/ReAct status:** The app implements a bounded LLM function-calling ReAct loop via `GroqIntentProvider` (milestone [GT-07 / issue #17](https://github.com/dhruvkshah75/groundtruth/issues/17)), while retaining an explicit offline mode with `RuleBasedIntentProvider`. Python owns fact validation, approved operations, and belief revisions. In live mode the model can explain the verified result in natural language; a separate model review checks non-verbatim answers against the evidence, falling back to the deterministic explanation when review fails. This model review reduces errors but cannot guarantee correctness. Execution traces are expandable in chat, and evidence and telemetry remain available in the System inspector.
