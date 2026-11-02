@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import {
   ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database,
   FlaskConical, LoaderCircle, MessageSquareText, MoreHorizontal, Network, PanelLeftClose,
-  PanelLeftOpen, Pencil, Plus, RotateCcw, ScanLine, Sparkles, Trash2, X,
+  PanelLeftOpen, Pencil, Plus, RotateCcw, ScanLine, Sparkles, Sun, Moon, Trash2, X,
 } from "lucide-react";
 import { api, getSessionId, setSessionId } from "./api";
 import type { AgentResponse, ApiHealth, AppState, Fact } from "./types";
@@ -12,7 +12,7 @@ const BeliefGraphPage = lazy(() => import("./BeliefGraphPage"));
 type WorkspaceTab = "chat" | "inspector" | "graph";
 type Action = "ask" | "scenario-a" | "scenario-b" | "reset" | "new-chat" | "switch-chat" | "delete-chat" | null;
 type Chat = { id: string; title: string | null; scenario: "scenario-a" | "scenario-b" | null; customTitle?: boolean; hasMessages?: boolean };
-type ChatDialog = { kind: "limit" } | { kind: "delete"; chat: Chat };
+type ChatDialog = { kind: "limit" } | { kind: "delete"; chat: Chat } | { kind: "scenario"; scenario: "scenario-a" | "scenario-b" };
 const CHAT_LIST_KEY = "groundtruth-chats-v1";
 const MAX_CHATS = 5;
 function initialChats(): Chat[] {
@@ -58,6 +58,12 @@ function shortId(value: string): string {
 }
 
 function App() {
+  const [theme, setTheme] = useState<"dark" | "light">(() => document.documentElement.dataset.theme === "light" ? "light" : "dark");
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem("groundtruth-theme", theme); } catch { /* Theme still applies without storage. */ }
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#191919" : "#ffffff");
+  }, [theme]);
   const [chats, setChats] = useState<Chat[]>(initialChats);
   const [activeChatId, setActiveChatId] = useState(() => {
     const current = getSessionId();
@@ -173,9 +179,13 @@ function App() {
       setError(cause instanceof Error ? cause.message : "The Agent request failed.");
     } finally { setAction(null); }
   };
-  const loadScenario = async (scenario: "scenario-a" | "scenario-b") => {
+  const loadScenario = async (scenario: "scenario-a" | "scenario-b", confirmed = false) => {
     if (!health || action) return;
-    if (state?.history.length && !window.confirm("Loading a scenario will replace this chat's messages and Agent state. Continue?")) return;
+    if (state?.history.length && !confirmed) {
+      setChatDialog({ kind: "scenario", scenario });
+      return;
+    }
+    setChatDialog(null);
     setAction(scenario);
     setError(null);
     try {
@@ -378,6 +388,7 @@ function App() {
             <h1 title={activeTab === "chat" && activeChat ? chatLabel(activeChat) : undefined}>{activeTab === "chat" && activeChat ? chatLabel(activeChat) : tabs.find((tab) => tab.id === activeTab)?.label}</h1>
           </div>
 
+          <button type="button" className="icon-button theme-toggle" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</button>
         </header>
         {health?.status === "degraded" && health.error && <div className="error-banner" role="status"><CircleAlert size={17} /><span>{health.error}</span></div>}
         {error && <div className="error-banner" role="alert"><CircleAlert size={17} /><span>{error}</span><button type="button" onClick={() => void refresh()}>Retry connection</button><button type="button" aria-label="Dismiss error" onClick={() => setError(null)}><X size={16} /></button></div>}
@@ -411,22 +422,22 @@ function App() {
         {activeTab === "inspector" && <Inspector state={state} />}
         {activeTab === "graph" && <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}><BeliefGraphPage embedded workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} /></Suspense>}
       </main>
-      {chatDialog && <ChatActionDialog dialog={chatDialog} onClose={() => setChatDialog(null)} onDelete={(chat) => void deleteChat(chat)} />}
+      {chatDialog && <ChatActionDialog dialog={chatDialog} onClose={() => setChatDialog(null)} onDelete={(chat) => void deleteChat(chat)} onLoadScenario={(scenario) => void loadScenario(scenario, true)} />}
     </div>
   );
 }
 
-function ChatActionDialog({ dialog, onClose, onDelete }: { dialog: ChatDialog; onClose: () => void; onDelete: (chat: Chat) => void }) {
+function ChatActionDialog({ dialog, onClose, onDelete, onLoadScenario }: { dialog: ChatDialog; onClose: () => void; onDelete: (chat: Chat) => void; onLoadScenario: (scenario: "scenario-a" | "scenario-b") => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descriptionId = useId();
   useEffect(() => { dialogRef.current?.showModal(); }, []);
   const deleting = dialog.kind === "delete";
   return <dialog ref={dialogRef} className="chat-dialog" aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={(event) => { event.preventDefault(); onClose(); }}>
-    <h2 id={titleId}>{deleting ? "Delete chat?" : "Chat limit reached"}</h2>
-    <p id={descriptionId}>{deleting ? <>Delete <strong>{chatLabel(dialog.chat)}</strong> and its Agent state? This cannot be undone.</> : "You can have up to five chats. Delete one to create another."}</p>
+    <h2 id={titleId}>{deleting ? "Delete chat?" : dialog.kind === "scenario" ? `Load Scenario ${dialog.scenario === "scenario-a" ? "A" : "B"}?` : "Chat limit reached"}</h2>
+    <p id={descriptionId}>{deleting ? <>Delete <strong>{chatLabel(dialog.chat)}</strong> and its Agent state? This cannot be undone.</> : dialog.kind === "scenario" ? "Loading this scenario will replace the messages and Agent state in this chat. Other chats will not be affected." : "You can have up to five chats. Delete one to create another."}</p>
     <div className="chat-dialog-actions">
-      {deleting ? <><button type="button" className="chat-dialog-secondary" autoFocus onClick={onClose}>Cancel</button><button type="button" className="chat-dialog-danger" onClick={() => onDelete(dialog.chat)}>Delete chat</button></> : <button type="button" className="chat-dialog-primary" autoFocus onClick={onClose}>Got it</button>}
+      {deleting ? <><button type="button" className="chat-dialog-secondary" autoFocus onClick={onClose}>Cancel</button><button type="button" className="chat-dialog-danger" onClick={() => onDelete(dialog.chat)}>Delete chat</button></> : dialog.kind === "scenario" ? <><button type="button" className="chat-dialog-secondary" autoFocus onClick={onClose}>Cancel</button><button type="button" className="chat-dialog-primary" onClick={() => onLoadScenario(dialog.scenario)}>Load scenario</button></> : <button type="button" className="chat-dialog-primary" autoFocus onClick={onClose}>Got it</button>}
     </div>
   </dialog>;
 }

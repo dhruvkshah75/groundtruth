@@ -158,7 +158,7 @@ export function BeliefGraphCanvas({
       const nodeDegree = degree.get(node) ?? 0;
       const radius = 0.15 + Math.min(nodeDegree, 6) * 0.018;
       const material = new THREE.MeshStandardMaterial({
-        color: 0x765184,
+        color: document.documentElement.dataset.theme === "dark" ? 0x70afa6 : 0x765184,
         emissive: 0x000000,
         emissiveIntensity: 0,
         roughness: 0.46,
@@ -204,7 +204,7 @@ export function BeliefGraphCanvas({
       const end = target.clone().addScaledVector(normalized, -0.3);
       const lineGeometry = new THREE.BufferGeometry().setFromPoints([start, end]);
       const lineMaterial = new THREE.LineBasicMaterial({
-        color: factColor(fact.active, false, false, false),
+        color: factColor(fact.active, false, false, false, document.documentElement.dataset.theme === "dark"),
         transparent: true,
         opacity: fact.active ? 0.95 : 0.7,
       });
@@ -214,7 +214,7 @@ export function BeliefGraphCanvas({
 
       const arrow = new THREE.Mesh(
         new THREE.ConeGeometry(0.055, 0.18, 10),
-        new THREE.MeshBasicMaterial({ color: factColor(fact.active, false, false, false), transparent: true, opacity: 0.8 }),
+        new THREE.MeshBasicMaterial({ color: factColor(fact.active, false, false, false, document.documentElement.dataset.theme === "dark"), transparent: true, opacity: 0.8 }),
       );
       arrow.position.copy(end);
       arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized);
@@ -339,7 +339,24 @@ export function BeliefGraphCanvas({
     };
     render();
 
+    // Update materials in place so a theme switch preserves the camera and selection.
+    const themeObserver = new MutationObserver(() => {
+      const dark = document.documentElement.dataset.theme === "dark";
+      scene.background = new THREE.Color(getComputedStyle(container).getPropertyValue("--surface-raised").trim());
+      for (const mesh of nodeMeshesRef.current.values()) {
+        const selected = (mesh.userData.labelElement as HTMLElement).classList.contains("selected");
+        (mesh.material as THREE.MeshStandardMaterial).color.setHex(dark ? (selected ? 0x91bdb3 : 0x70afa6) : (selected ? 0x563064 : 0x765184));
+      }
+      for (const rendered of factObjectsRef.current.values()) {
+        const color = factColor(rendered.active, rendered.label.classList.contains("selected"), false, rendered.label.classList.contains("changed"), dark);
+        (rendered.line.material as THREE.LineBasicMaterial).color.setHex(color);
+        (rendered.arrow.material as THREE.MeshBasicMaterial).color.setHex(color);
+      }
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
     return () => {
+      themeObserver.disconnect();
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
@@ -364,7 +381,7 @@ export function BeliefGraphCanvas({
         (fact) => fact.factId === selectedFactId && (fact.source === nodeId || fact.target === nodeId),
       );
       const material = mesh.material as THREE.MeshStandardMaterial;
-      material.color.setHex(related ? 0x563064 : 0x765184);
+      material.color.setHex(document.documentElement.dataset.theme === "dark" ? (related ? 0x91bdb3 : 0x70afa6) : (related ? 0x563064 : 0x765184));
       material.emissiveIntensity = 0;
       mesh.scale.setScalar(related ? 1.12 : 1);
       (mesh.userData.labelElement as HTMLElement).classList.toggle("selected", related);
@@ -378,7 +395,7 @@ export function BeliefGraphCanvas({
       const changed = highlightedFactIds.has(factId);
       const lineMaterial = rendered.line.material as THREE.LineBasicMaterial;
       const arrowMaterial = rendered.arrow.material as THREE.MeshBasicMaterial;
-      const color = factColor(rendered.active, selected, relatedToNode, changed);
+      const color = factColor(rendered.active, selected, relatedToNode, changed, document.documentElement.dataset.theme === "dark");
       lineMaterial.color.setHex(color);
       lineMaterial.opacity = selected || changed || relatedToNode ? 1 : rendered.active ? 0.95 : 0.7;
       arrowMaterial.color.setHex(color);

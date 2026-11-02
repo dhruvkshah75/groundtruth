@@ -111,7 +111,7 @@ function GraphControls({ state, scope, onScopeChange }: {
   return <div className="graph-workspace-controls" aria-label="Belief graph controls">
     <section className="belief-sidebar-section" aria-labelledby="graph-view-title">
       <h2 id="graph-view-title">Graph view</h2>
-      <div className="belief-scope" role="group" aria-label="Belief scope">
+      <div className="belief-scope" data-scope={scope} role="group" aria-label="Belief scope">
         <button className={scope === "active" ? "active" : ""} aria-pressed={scope === "active"} type="button" onClick={() => onScopeChange("active")}>Active beliefs</button>
         <button className={scope === "history" ? "active" : ""} aria-pressed={scope === "history"} type="button" onClick={() => onScopeChange("history")}>Belief history</button>
       </div>
