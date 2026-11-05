@@ -13,7 +13,7 @@ This develops the direction discussed in [Dynamic Simulation Plan](Dynamic_Simul
 ### Proposed presentation release
 
 - A warehouse with shelves, inspection/packing stations, several identifiable parcels, a moving cart, and a robot patrol.
-- A repeatable 30-second scenario plus selected presenter-triggered disruptions.
+- A repeatable 30-simulation-second scenario, approximately one presentation minute at default 0.5× playback, plus selected presenter-triggered disruptions.
 - Camera visibility, range and occlusion; front LiDAR; pose and lighting observations.
 - Continuous sensing, temporal memory, belief revisions, and readable temporal answers.
 - A live UI showing the actual world, sensor observations, beliefs, and questions.
@@ -28,7 +28,8 @@ These defaults would be finalized through discussion and Issue P2-01 so members 
 | Area | Proposed decision |
 | --- | --- |
 | World ownership | Python owns simulation state. Frontend animation interpolates backend snapshots; it cannot advance the authoritative world. |
-| Time | Fixed **100 ms simulation steps**, nominally running at real-time speed. Use integer simulation milliseconds and a run ID. |
+| Time | Fixed **100 ms simulation steps**, scheduled at **0.5× playback by default** (0.25× and 1× available). Use integer simulation milliseconds and a run ID. |
+| Playback | Shared `playback_rate` setting: 0.25, 0.5 (default), or 1.0; 30 simulation seconds take approximately 120, 60, or 30 wall-clock seconds, excluding pauses. |
 | Sensor cadence | Camera, front LiDAR, pose and lighting sampled every **500 ms of simulation time**. No LLM calls in this loop. |
 | First state | Loading a scenario creates a paused run at t=0 and takes an initial sensor sample. |
 | Robot | Scripted cardinal-direction waypoint patrol, with turns at waypoints and a sensor-based stop/resume controller. |
@@ -40,6 +41,8 @@ These defaults would be finalized through discussion and Issue P2-01 so members 
 | Questions | World keeps running. Capture evidence at a defined simulation time and label the answer with that time. |
 | Replay | Fixed scenario configuration and inputs reproduce logical observations and belief transitions; random UUID equality is unnecessary. |
 | Existing behavior | Preserve original Scenario A/B and existing chat workflows. Visibility simulation is enabled for Phase 2 worlds rather than silently changing legacy presets. |
+
+Playback scales wall-clock scheduling, not physical robot speed or simulation semantics. Keep physics steps at 100 simulation ms, sensors at 500 simulation ms, and freshness at 1,000 simulation ms. At 0.5×, steps are nominally every 200 wall-clock ms and sensor samples every 1 wall-clock second. Pausing freezes simulation-based freshness; manual step advances 100 simulation ms at any rate. Rate changes do not reset/jump time or skip/duplicate events or samples. Render smoothly between received snapshots; keep UI polling in wall time. Space major events apart and include stable inspection periods. Test equivalent logical outcomes across rates using an injected monotonic clock, not sleeps. LLM latency remains wall time and answers retain capture-time labels.
 
 Maintain the existing tier boundaries: Tier 3 produces observations; Tier 2 interprets them and requests belief updates; Tier 1 stores evidence and history. The audience’s world view and scripted future events are never supplied to the LLM as evidence.
 
@@ -80,14 +83,14 @@ Use `P2-01` through `P2-14` as planning identifiers; replace dependency referenc
 
 - Publish typed Python contracts and matching TypeScript fixtures for simulation status, sampled observations, temporal belief summaries, controls and disruption requests.
 - Define a common warehouse layout: shelves, packing and inspection stations, two named route segments, several parcels and a cart.
-- Define the default 30-second event sequence: visible parcel relocation, cart blocking/clearing a route, lighting change and temporary object occlusion.
+- Define the default 30-simulation-second event sequence (approximately 60 presentation seconds at 0.5×), with stable viewing periods between major changes: visible parcel relocation, cart blocking/clearing a route, lighting change and temporary object occlusion.
 - Define a `SensorSource` interface using the existing observation request/result contracts. Keep simulator-only world snapshots outside this interface.
-- Document simulation-time semantics and distinguish them from observation UTC timestamps and database storage time.
+- Document simulation time, wall-clock playback, acquisition UTC and database storage time separately; include validated playback_rate in config/status and shared fixtures.
 
 **Acceptance criteria**
 
 - [ ] All four members can build against the same validated example payloads.
-- [ ] Fixture events occur at integer simulation times with stable ordering.
+- [ ] Fixture events occur at integer simulation times with stable ordering; playback_rate defaults to 0.5 and accepts only 0.25, 0.5 or 1.0.
 - [ ] The initial layout supports visible movement, occlusion and a safe patrol.
 - [ ] Contracts document which data is audience-only and which the agent may consume.
 
@@ -98,9 +101,9 @@ Use `P2-01` through `P2-14` as planning identifiers; replace dependency referenc
 
 **Work**
 
-- Add fixed-step advancement, scripted object/cart motion and deterministic event application.
+- Add fixed-step advancement, scripted object/cart motion and deterministic event application. Carry playback_rate in engine config/status; rate changes affect future runtime scheduling only, preserving tick size, event ordering and current run/time.
 - Support paused/running/completed states, step, reset and detached world snapshots.
-- Implement static geometry and collision boundaries. Stop the default scenario at 30 seconds without looping automatically.
+- Implement static geometry and collision boundaries. Stop the default scenario at 30 simulation seconds without looping automatically.
 - Keep advancement independent of HTTP polling, user questions and sensor requests.
 
 **Acceptance criteria**
@@ -110,6 +113,7 @@ Use `P2-01` through `P2-14` as planning identifiers; replace dependency referenc
 - [ ] Pausing freezes simulation time; one step advances exactly 100 ms.
 - [ ] Reset creates a new run at t=0.
 - [ ] World version advances consistently when physical state changes.
+- [ ] Rate changes preserve logical state and 100 ms manual steps; replaying equal simulation-time inputs yields equal outcomes across supported rates.
 
 ### P2-03 — Add visibility-aware camera and timestamped sensor samples
 
@@ -121,7 +125,7 @@ Use `P2-01` through `P2-14` as planning identifiers; replace dependency referenc
 - Add Phase 2 camera field of view, distance limits and line-of-sight occlusion.
 - Return visible object IDs, apparent colors and simulated position estimates with pose/frame context.
 - Attach run ID and simulation time to samples; preserve timezone-aware observation timestamps.
-- Support camera/LiDAR outages and explicit failure results.
+- Support camera/LiDAR outages and explicit failure results. Sample timing depends on simulation time, never directly on playback rate.
 - Provide front-LiDAR range/distance behavior suitable for the patrol controller.
 
 **Acceptance criteria**
@@ -143,7 +147,7 @@ Use `P2-01` through `P2-14` as planning identifiers; replace dependency referenc
 - Store observation ID, run ID, capability/source, simulation time, observation UTC time, reception/storage time, context and payload.
 - Add repository methods for latest observation, last sighting, bounded object history and observations up to a requested simulation time.
 - Keep sampled evidence separate from active belief facts.
-- Preserve existing database snapshots and old sessions.
+- Preserve existing database snapshots and old sessions. Playback rate does not change stored simulation capture times or temporal query ordering.
 
 **Acceptance criteria**
 
@@ -206,11 +210,11 @@ Use `P2-01` through `P2-14` as planning identifiers; replace dependency referenc
 **Work**
 
 - Add a service-owned background scheduler; do not start a new worker on every request.
-- Schedule world advancement and periodic acquisition as separate responsibilities. There is no world-change notification to the agent.
+- Schedule fixed steps using a monotonic wall-clock accumulator scaled by playback_rate (default 0.5); preserve fractional progress during rate changes and prevent skipped/duplicated ticks. Schedule periodic acquisition against simulation time as a separate responsibility. There is no world-change notification to the agent.
 - Split query handling into interpretation, short locked evidence collection/evaluation, and unlocked answer synthesis.
 - Serialize questions per session, while allowing simulation ticks between LLM calls.
 - Protect reset/delete with a session generation token so old answers cannot attach to a new run.
-- Checkpoint simulation and belief state at one-second intervals and on pause/control operations; restore saved runs paused.
+- Checkpoint simulation and belief state at one wall-clock-second intervals and on pause/control operations; restore saved runs paused.
 
 **Acceptance criteria**
 
@@ -257,13 +261,13 @@ Add session-scoped endpoints:
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/simulation/load` | Load a named warehouse preset into a paused run. |
-| `POST /api/simulation/control` | Accept `play`, `pause`, `step`, or `reset`. |
+| `POST /api/simulation/control` | Accept `play`, `pause`, `step`, `reset`, or `set_rate` (playback_rate: 0.25, 0.5, 1.0). |
 | `POST /api/simulation/disrupt` | Apply one validated presenter disruption. |
 | `GET /api/simulation/state` | Return a lightweight, versioned live snapshot. |
 | `GET /api/simulation/export` | Export the run’s replay/evaluation bundle. |
 
 - Separate audience world state from robot observations/beliefs in response types.
-- Include run ID, simulation time, snapshot sequence, patrol/sensor status and recent timeline changes.
+- Include run ID, simulation time, snapshot sequence, selected playback_rate, patrol/sensor status and recent timeline changes.
 - Keep the existing chat endpoint; append capture-time metadata to relevant answers.
 - Do not return the entire ledger and chat history on every live-state poll.
 
@@ -285,8 +289,8 @@ Add session-scoped endpoints:
 
 - Add a `/simulation` workspace using React and SVG.
 - Render shelves, stations, parcels, cart, robot, patrol motion and camera field of view.
-- Poll the lightweight state endpoint every 250 ms while visible; interpolate between received positions without predicting future events.
-- Add play/pause/step/reset, scenario selection and selected disruption controls.
+- Poll the lightweight state endpoint every 250 wall-clock ms while visible, independently of playback rate; interpolate between received positions without predicting future events.
+- Add play/pause/step/reset, 0.25× / 0.5× / 1× playback controls (default 0.5×), scenario selection and selected disruption controls. Interpolate smoothly between received snapshots and clearly label simulation time versus wall time.
 - Clearly label the audience world view, sensor state and provider mode.
 
 **Acceptance criteria**
@@ -378,7 +382,7 @@ Add session-scoped endpoints:
 
 **Work**
 
-- Rehearse the 30-second default scenario and questions, allowing answers immediately afterward when provider latency requires it.
+- Rehearse the 30-simulation-second default scenario at 0.5× (approximately one presentation minute) and questions, allowing answers immediately afterward when provider latency requires it.
 - Prepare a longer interactive demonstration with presenter disruptions.
 - Record a clearly labelled backup and document explicit offline mode.
 - Update architecture documentation, setup instructions, limitations, evaluation results and member contributions.
@@ -387,7 +391,7 @@ Add session-scoped endpoints:
 **Acceptance criteria**
 
 - [ ] A fresh checkout can run the demo using documented commands.
-- [ ] Three clean rehearsals reproduce the expected observations and beliefs.
+- [ ] Three clean rehearsals at default 0.5× reproduce the expected observations and beliefs; verify slower/faster playback and pause/step controls.
 - [ ] Backend tests/lint, frontend build and graph checks pass.
 - [ ] Measured scan cadence, revision latency and answer latency are reported separately.
 - [ ] Demo shows visible relocation, a safety stop/resume, occlusion/uncertainty and a temporal explanation.

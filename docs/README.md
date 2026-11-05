@@ -11,7 +11,7 @@
 7. [Tier 3 Implementation Guide](tier3/Tier3_Implementation_Guide.md) - the mock world, sensor behavior, spatial context, and deterministic test helpers.
 8. [Evaluation and Differentiation Plan](Evaluation_and_Differentiation.md) - how the project proves reliability and stands out in grading.
 9. [Phase Two: Dynamic Simulation](phase-two/Dynamic_Simulation_Plan.md) - proposed time-aware simulation, sensing, memory, and integration milestones.
-10. [Phase Two: Demo and UI](phase-two/Simulation_Demo_UI.md) - proposed 30-second visual demonstration and presentation experience.
+10. [Phase Two: Demo and UI](phase-two/Simulation_Demo_UI.md) - proposed slow-playback visual demo: 30 simulation seconds, approximately one presentation minute at default 0.5×.
 11. [Phase Two: Implementation Roadmap Draft](phase-two/Implementation_Roadmap_Draft.md) - discussion draft covering implementation decisions, team lanes, milestones, and 14 proposed GitHub issues; decisions remain pending.
 
 ## Supporting context
