@@ -133,7 +133,7 @@ def test_inconsistent_or_leaking_sample_rejected(mutation):
 
 
 def test_failure_has_identity_without_hidden_properties():
-    empty = ObservationSample.model_validate(VALID["samples"][2])
+    empty = ObservationSample.model_validate(VALID["samples"][8])
     missing = ObservationSample.model_validate(VALID["samples"][3])
     outage = ObservationSample.model_validate(VALID["samples"][4])
     assert isinstance(empty.result, SensorObservation)
@@ -141,7 +141,7 @@ def test_failure_has_identity_without_hidden_properties():
     assert missing.result.reason == "target_not_visible"
     assert outage.result.reason == "sensor_unavailable"
     assert len({s.sample_id for s in (empty, missing, outage)}) == 3
-    assert missing.sim_time_ms == empty.sim_time_ms  # same-time acquisitions are legal
+    assert missing.sim_time_ms == VALID["samples"][2]["sim_time_ms"]
     bad = missing.model_dump(mode="json")
     bad["result"]["message"] = "Parcel moved behind shelf_01 to (360,300)."
     with pytest.raises(ValidationError):
@@ -320,3 +320,68 @@ def test_fixture_changed_position_matches_station_and_nominal_patrol_view():
     assert math.hypot(dx, dy) < scene.config.camera_range_cm
     sample = ObservationSample.model_validate(VALID["samples"][1])
     assert sample.result.measurements["objects"][0]["position"] == move.to.model_dump()
+
+
+def test_22_second_broad_scan_retains_the_unoccluded_second_parcel():
+    """Fixture-specific geometry check, not a substitute for P2-03 sensing."""
+    scene = ScenarioDefinition.model_validate(VALID["scenario"])
+    sample = ObservationSample.model_validate(VALID["samples"][2])
+    assert sample.sim_time_ms == 22000
+    assert sample.request.target is None
+    pose = sample.observer_pose
+    parcel = next(e for e in scene.entities if e.entity_id == "parcel_02")
+    assert not any(e.kind == "move" and e.entity_id == "parcel_02" for e in scene.events)
+    dx = parcel.footprint.x_cm - pose.x_cm
+    dy = parcel.footprint.y_cm - pose.y_cm
+    assert pose.direction == "north" and dy > 0 and abs(dx) < dy
+    assert math.hypot(dx, dy) < scene.config.camera_range_cm
+    # Shelves lie east of the ray; the cleared cart lies beyond its destination.
+    assert all(
+        e.footprint.x_cm - e.footprint.width_cm / 2 > parcel.footprint.x_cm
+        or e.footprint.y_cm - e.footprint.height_cm / 2 > parcel.footprint.y_cm
+        for e in scene.entities
+        if e.opaque
+    )
+    detections = CameraScan.model_validate(sample.result.measurements).objects
+    assert [d.object_id for d in detections] == ["parcel_02"]
+    assert detections[0].position == Point(x_cm=parcel.footprint.x_cm, y_cm=parcel.footprint.y_cm)
+    assert sample.result.context.extra_context["lighting"] == "yellow"
+    assert detections[0].apparent_color == "brown"
+
+
+def test_23_second_lidar_cannot_report_a_hit_on_the_clear_reference_ray():
+    scene = ScenarioDefinition.model_validate(VALID["scenario"])
+    sample = ObservationSample.model_validate(VALID["samples"][5])
+    assert sample.sim_time_ms == 23000 and sample.observer_pose.direction == "north"
+    # At 22 s the cart has completed its clearance; until 23 s only light changes.
+    snapshot = SimulationSnapshot.model_validate(VALID["snapshots"][2])
+    assert snapshot.status.sim_time_ms == 22000
+    assert all(e.kind == "lighting" for e in scene.events if 22000 < e.at_ms <= 23000)
+    pose = sample.observer_pose
+    for entity in snapshot.entities:
+        if not entity.solid:
+            continue
+        f = entity.footprint
+        spans_ray_x = abs(f.x_cm - pose.x_cm) <= f.width_cm / 2
+        overlaps_sensor_y = (
+            f.y_cm + f.height_cm / 2 >= pose.y_cm
+            and f.y_cm - f.height_cm / 2 <= pose.y_cm + scene.config.lidar_range_cm
+        )
+        assert not (spans_ray_x and overlaps_sensor_y)
+    assert sample.result.measurements == {
+        "detected": False,
+        "nearest_distance_cm": None,
+        "direction": "front",
+        "status": "clear",
+    }
+
+
+def test_empty_scan_example_faces_away_from_all_parcels():
+    scene = ScenarioDefinition.model_validate(VALID["scenario"])
+    sample = ObservationSample.model_validate(VALID["samples"][8])
+    assert sample.observer_pose.direction == "south"
+    assert sample.sim_time_ms == 23500
+    snapshot = SimulationSnapshot.model_validate(VALID["snapshots"][2])
+    assert not any(e.kind == "move" and 22000 < e.at_ms <= 23500 for e in scene.events)
+    assert all(e.footprint.y_cm > sample.observer_pose.y_cm for e in snapshot.entities)
+    assert CameraScan.model_validate(sample.result.measurements).objects == []

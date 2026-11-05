@@ -162,10 +162,18 @@ agent which object moved.
 
 The shared audience snapshots and sensor examples are **independent frozen-pose
 contract examples**, not an engine-produced replay or promises of exact patrol
-observations. They intentionally keep the reference observer at (100,100), north.
+observations. They use the reference observer at (100,100), north, except the explicitly
+south-facing empty-scan example at 23.5 seconds.
 The (330,340) hidden example is in FOV/range but its line of sight intersects shelf_01;
 that isolates occlusion rather than confusing it with distance or being behind the
 robot. Full temporal/pose integration is a downstream test requirement.
+
+At 22 seconds the broad camera scan still detects parcel_02 at (220,260);
+yellow lighting makes its apparent color brown. Only parcel_01 is occluded.
+At 23 seconds the north-facing LiDAR ray has no solid hit within its 200 cm range,
+so the sample is clear with a null distance. A separate 23.5-second south-facing
+camera sample supplies the valid empty-scan example: all parcels remain north of
+the observer. Fixture-specific tests check these geometric facts, not just schemas.
 
 ## Bounded sensor evidence
 

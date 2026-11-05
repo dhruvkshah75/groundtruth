@@ -1009,7 +1009,21 @@ export const validSimulationFixtures = {
         "observed_at": "2026-01-01T00:00:22Z",
         "confidence_score": 1,
         "measurements": {
-          "objects": []
+          "objects": [
+            {
+              "object_id": "parcel_02",
+              "apparent_color": "brown",
+              "position": {
+                "x_cm": 220,
+                "y_cm": 260
+              },
+              "frame_of_reference": "warehouse_map",
+              "bounding_box": {
+                "width_cm": 12,
+                "height_cm": 12
+              }
+            }
+          ]
         },
         "context": {
           "location": "warehouse",
@@ -1111,10 +1125,10 @@ export const validSimulationFixtures = {
         "observed_at": "2026-01-01T00:00:23Z",
         "confidence_score": 1,
         "measurements": {
-          "detected": true,
-          "nearest_distance_cm": 35,
+          "detected": false,
+          "nearest_distance_cm": null,
           "direction": "front",
-          "status": "blocked"
+          "status": "clear"
         },
         "context": {
           "location": "warehouse",
@@ -1208,6 +1222,48 @@ export const validSimulationFixtures = {
           "location": "warehouse",
           "frame_of_reference": "warehouse_map",
           "world_version": 7,
+          "observer": "robot_1",
+          "extra_context": {
+            "lighting": "neutral"
+          }
+        }
+      }
+    },
+    {
+      "sample_id": "00000000-0000-0000-0000-000000000012",
+      "run_id": "00000000-0000-0000-0000-000000000001",
+      "sample_sequence": 8,
+      "epoch_utc": "2026-01-01T00:00:00Z",
+      "sim_time_ms": 23500,
+      "captured_at": "2026-01-01T00:00:23.500000Z",
+      "sensor_id": "camera_01",
+      "observer_pose": {
+        "x_cm": 100,
+        "y_cm": 100,
+        "robot_id": "robot_1",
+        "direction": "south",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 8,
+      "request": {
+        "capability": "camera_detect",
+        "target": null,
+        "parameters": {}
+      },
+      "result": {
+        "observation_id": "00000000-0000-0000-0000-00000000006c",
+        "sensor": "camera_detect",
+        "capability": "camera_detect",
+        "observed_at": "2026-01-01T00:00:23.500000Z",
+        "confidence_score": 1,
+        "measurements": {
+          "objects": []
+        },
+        "context": {
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map",
+          "world_version": 8,
           "observer": "robot_1",
           "extra_context": {
             "lighting": "neutral"
@@ -1312,6 +1368,23 @@ export const validSimulationFixtures = {
           "position": {
             "x_cm": 150,
             "y_cm": 390
+          },
+          "frame_of_reference": "warehouse_map",
+          "bounding_box": {
+            "width_cm": 12,
+            "height_cm": 12
+          }
+        }
+      ]
+    },
+    {
+      "objects": [
+        {
+          "object_id": "parcel_02",
+          "apparent_color": "brown",
+          "position": {
+            "x_cm": 220,
+            "y_cm": 260
           },
           "frame_of_reference": "warehouse_map",
           "bounding_box": {
