@@ -290,3 +290,55 @@ def test_zero_time_events_and_chained_motion_resume_exactly():
     assert e.snapshot() == restored.snapshot()
     e.step()
     assert entity(e).footprint.x_cm == 110
+
+
+def test_restore_rejects_snapshot_duration_beyond_scenario_before_replay(monkeypatch):
+    e = engine()
+    saved = e.export_state()
+    saved["snapshot"]["config"]["duration_ms"] = 31000
+    saved["snapshot"]["status"].update(sim_time_ms=31000, state="completed")
+    # Both halves validate individually; the combined checkpoint must be rejected.
+    from src.contracts import SimulationSnapshot
+
+    SimulationSnapshot.model_validate(saved["snapshot"])
+    calls = 0
+    original = SimulationEngine.advance
+
+    def bounded_advance(self):
+        nonlocal calls
+        calls += 1
+        assert calls <= 301, "restore loops after the scenario has completed"
+        return original(self)
+
+    monkeypatch.setattr(SimulationEngine, "advance", bounded_advance)
+    with pytest.raises(ValueError, match="configuration"):
+        SimulationEngine.restore(saved)
+    assert calls == 0
+
+
+@pytest.mark.parametrize("field,value", [("step_ms", 200), ("camera_range_cm", 450)])
+def test_restore_rejects_other_inconsistent_configuration(field, value):
+    saved = engine().export_state()
+    saved["snapshot"]["config"][field] = value
+    if field == "step_ms":
+        saved["snapshot"]["config"]["sensor_interval_ms"] = 600
+    with pytest.raises(ValueError, match="configuration"):
+        SimulationEngine.restore(saved)
+
+
+def test_restore_stops_if_replay_cannot_make_progress(monkeypatch):
+    e = engine()
+    e.step()
+    saved = e.export_state()
+    calls = 0
+
+    def stalled_advance(self):
+        nonlocal calls
+        calls += 1
+        assert calls == 1, "restore failed to stop after stalled replay"
+        return self.snapshot()
+
+    monkeypatch.setattr(SimulationEngine, "advance", stalled_advance)
+    with pytest.raises(ValueError, match="cannot advance"):
+        SimulationEngine.restore(saved)
+    assert calls == 1

@@ -107,8 +107,10 @@ scenario/config, current snapshot and the ordered submitted physical input log
 (including a pending robot command). Snapshot time and script/input history encode
 motion progress and event cursor. restore reconstructs that progress by deterministic
 replay, then verifies the reconstructed snapshot against the saved one. Corrupted
-physical snapshots, unknown inputs, unsupported versions and unordered/future
-submission logs fail. Payloads are deep copied, not trusted live model references.
+physical snapshots, mismatched scenario identity/configuration (except the independently
+selected playback rate), unknown inputs, unsupported versions and unordered/future
+submission logs fail. Replay also rejects a stalled or overshooting tick instead of
+waiting indefinitely for an unreachable saved time. Payloads are deep copied, not trusted live model references.
 
 Replay restoration costs O(elapsed ticks + events), intentionally bounded by the
 short demo rather than introducing a second opaque mutable motion-state format.

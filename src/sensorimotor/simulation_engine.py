@@ -357,6 +357,14 @@ class SimulationEngine:
             raise ValueError("unsupported checkpoint")
         target = SimulationSnapshot.model_validate(state["snapshot"])
         scene = ScenarioDefinition.model_validate(state["scenario"])
+        # Playback may legitimately change during a run; all simulation semantics
+        # must still agree with the scenario used to reconstruct its history.
+        if scene.config.model_dump(exclude={"playback_rate"}) != target.config.model_dump(
+            exclude={"playback_rate"}
+        ):
+            raise ValueError("checkpoint scenario and snapshot configuration disagree")
+        if scene.scenario_id != target.scenario_id:
+            raise ValueError("checkpoint scenario identity disagrees with snapshot")
         engine = cls(
             scene, epoch_utc=target.status.epoch_utc, id_factory=lambda: target.status.run_id
         )
@@ -378,8 +386,12 @@ class SimulationEngine:
                 cursor += 1
             if engine._snap.status.sim_time_ms == target.status.sim_time_ms:
                 break
+            previous_time = engine._snap.status.sim_time_ms
             engine.play()
             engine.advance()
+            replay_time = engine._snap.status.sim_time_ms
+            if replay_time <= previous_time or replay_time > target.status.sim_time_ms:
+                raise ValueError("checkpoint replay cannot advance to the saved time")
         if cursor != len(inputs):
             raise ValueError("input log is unordered or beyond checkpoint")
         engine.set_rate(target.status.playback_rate)
