@@ -110,16 +110,6 @@ class ObservationLedgerReader(Protocol):
     def query_observations(
         self, query: TemporalObservationQuery
     ) -> list[StoredObservationSample]: ...
-    def query_samples(
-        self,
-        run_id: UUID,
-        capability: str | None = None,
-        sensor_id: str | None = None,
-        entity_id: str | None = None,
-        start_ms: int | None = None,
-        end_ms: int | None = None,
-        limit: int = 100,
-    ) -> list[StoredObservationSample]: ...
     def get_latest_sample(
         self,
         run_id: UUID,
@@ -160,6 +150,8 @@ class ObservationLedger(ObservationLedgerReader, ObservationLedgerWriter, Protoc
 ```
 
 Tier 2 procedural logic consumes this ledger strictly via `ObservationLedgerReader` without importing or interacting with SQLite, raw SQL, or `sqlite3.Row`.
+
+`MemoryRepository.query_samples()` is a concrete repository convenience method, not part of `ObservationLedgerReader`. Protocol consumers use `query_observations(TemporalObservationQuery(mode="samples", run_id=...))` for the same retrieval, including optional capability, sensor, entity and inclusive time filters.
 
 ---
 
@@ -417,7 +409,7 @@ uv run --locked ruff check .
 # Output: All checks passed!
 
 uv run --locked ruff format --check .
-# Output: 119 files already formatted
+# Output: 120 files already formatted
 ```
 
 ---
