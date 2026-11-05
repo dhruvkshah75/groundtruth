@@ -300,3 +300,56 @@ def test_actual_engine_sensor_outage_and_recovery():
     e.step()
     assert camera(s).result.measurements["objects"]
     assert lidar(s).result.measurements["status"] == "clear"
+
+
+def test_real_engine_reacquires_parcel_after_moving_out_of_shelf_occlusion():
+    from src.contracts import MoveEvent, Point
+
+    e = SimulationEngine(
+        ScenarioDefinition.model_validate(DATA["valid"]["scenario"]),
+        epoch_utc=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    sensors = WarehouseSensors(e.snapshot)
+    visible = camera(sensors, "parcel_01")
+    assert visible.result.measurements["objects"][0]["object_id"] == "parcel_01"
+    e.play()
+    for _ in range(210):
+        e.advance()
+    hidden = camera(sensors, "parcel_01")
+    assert hidden.sim_time_ms == 21000
+    assert hidden.result.reason == "target_not_visible"
+    # Keep the observer and opaque shelf fixed; physically move the parcel around
+    # the shelf via engine inputs, rather than toggling the occluder's flag.
+    opaque_shelf = next(x for x in e.snapshot().entities if x.entity_id == "shelf_01")
+    for at_ms, sequence, x, y in [(22000, 0, 350, 420), (23000, 1, 250, 420), (24000, 0, 150, 270)]:
+        e.queue_event(
+            MoveEvent(
+                kind="move",
+                at_ms=at_ms,
+                sequence=sequence,
+                entity_id="parcel_01",
+                to=Point(x_cm=x, y_cm=y),
+                duration_ms=1000,
+            )
+        )
+    for _ in range(40):
+        e.advance()
+    before = e.export_state()
+    reacquired = camera(sensors, "parcel_01")
+    assert e.export_state() == before
+    assert reacquired.run_id == hidden.run_id == visible.run_id
+    assert reacquired.observer_pose == hidden.observer_pose == visible.observer_pose
+    assert reacquired.sim_time_ms == 25000
+    assert visible.captured_at < hidden.captured_at < reacquired.captured_at
+    assert visible.sample_sequence < hidden.sample_sequence < reacquired.sample_sequence
+    assert len({s.sample_id for s in (visible, hidden, reacquired)}) == 3
+    assert next(x for x in e.snapshot().entities if x.entity_id == "shelf_01") == opaque_shelf
+    assert reacquired.result.measurements["objects"] == [
+        {
+            "object_id": "parcel_01",
+            "apparent_color": "red",
+            "position": {"x_cm": 150.0, "y_cm": 270.0},
+            "frame_of_reference": "warehouse_map",
+            "bounding_box": {"width_cm": 12.0, "height_cm": 12.0},
+        }
+    ]

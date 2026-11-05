@@ -130,7 +130,10 @@ surface, zero/no-hit results, target privacy, empty/outage distinction and recov
 lighting, pose, identity/sequence, one-snapshot detachment and playback invariance.
 Actual engine tests reproduce visible relocation, hidden parcel_01 while parcel_02
 remains visible at 22 s, a clear LiDAR ray at 23 s, pause purity, reset numbering and
-scripted outages/recovery. Legacy A/B and tier-boundary tests remain regression gates.
+scripted outages/recovery. A separate engine-backed sequence observes parcel_01,
+loses it behind shelf_01 at 21 s, moves it around the unchanged opaque shelf, and
+reacquires it at (150,270) at 25 s with the same observer/run and later sample identity/time.
+Legacy A/B and tier-boundary tests remain regression gates.
 
 P2-07 should call sample on the simulation acquisition cadence, including failed
 attempts, and pass returned evidence to #24/#27. P2-06 consumes front LiDAR and pose
