@@ -593,46 +593,56 @@ class MemoryRepository:
             storage UTC timestamp.
 
         Raises:
+            ValidationError: If acquisition envelope or nested models are invalid.
             ValueError: If sample_id already exists with different canonical content.
         """
-        existing = self._conn.execute(
-            "SELECT raw_sample_json, stored_at FROM observation_samples WHERE sample_id = ?",
-            (str(sample.sample_id),),
-        ).fetchone()
-
-        if existing is not None:
-            existing_data = json.loads(existing["raw_sample_json"])
-            new_data = sample.model_dump(mode="json")
-            if existing_data == new_data:
-                return self._row_to_stored_sample(existing)
-            raise ValueError(
-                f"Observation sample with ID {sample.sample_id} "
-                "already exists with different content."
-            )
+        # Revalidate detached acquisition payload before any DB interaction
+        detached_data = sample.model_dump(mode="json")
+        validated_sample = ObservationSample.model_validate(detached_data)
 
         stored_at = self._clock()
         if stored_at.tzinfo is None:
             stored_at = stored_at.replace(tzinfo=UTC)
 
-        if isinstance(sample.result, SensorObservation):
+        # Pre-validate full stored record before SQLite commit
+        stored_data = validated_sample.model_dump(mode="json")
+        stored_data["stored_at"] = stored_at
+        stored_sample = StoredObservationSample.model_validate(stored_data)
+
+        existing = self._conn.execute(
+            "SELECT raw_sample_json, stored_at FROM observation_samples WHERE sample_id = ?",
+            (str(stored_sample.sample_id),),
+        ).fetchone()
+
+        if existing is not None:
+            existing_data = json.loads(existing["raw_sample_json"])
+            new_data = validated_sample.model_dump(mode="json")
+            if existing_data == new_data:
+                return self._row_to_stored_sample(existing)
+            raise ValueError(
+                f"Observation sample with ID {stored_sample.sample_id} "
+                "already exists with different content."
+            )
+
+        if isinstance(stored_sample.result, SensorObservation):
             status = "success"
-            observation_id = str(sample.result.observation_id)
+            observation_id = str(stored_sample.result.observation_id)
             failure_reason = None
         else:
             status = "unavailable"
             observation_id = None
-            failure_reason = sample.result.reason
+            failure_reason = stored_sample.result.reason
 
         detections: list[tuple[str, str]] = []
-        if status == "success" and sample.request.capability == "camera_detect":
-            scan = CameraScan.model_validate(sample.result.measurements)
+        if status == "success" and stored_sample.request.capability == "camera_detect":
+            scan = CameraScan.model_validate(stored_sample.result.measurements)
             for obj in scan.objects:
                 detections.append(
                     (obj.object_id, json.dumps(obj.model_dump(mode="json"), sort_keys=True))
                 )
 
-        sample_json = json.dumps(sample.model_dump(mode="json"), sort_keys=True)
-        pose_json = json.dumps(sample.observer_pose.model_dump(mode="json"), sort_keys=True)
+        sample_json = json.dumps(validated_sample.model_dump(mode="json"), sort_keys=True)
+        pose_json = json.dumps(stored_sample.observer_pose.model_dump(mode="json"), sort_keys=True)
 
         with self._conn:
             self._conn.execute(
@@ -645,18 +655,18 @@ class MemoryRepository:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(sample.sample_id),
-                    str(sample.run_id),
-                    sample.sample_sequence,
-                    _dt_to_iso(sample.epoch_utc),
-                    sample.sim_time_ms,
-                    _dt_to_iso(sample.captured_at),
+                    str(stored_sample.sample_id),
+                    str(stored_sample.run_id),
+                    stored_sample.sample_sequence,
+                    _dt_to_iso(stored_sample.epoch_utc),
+                    stored_sample.sim_time_ms,
+                    _dt_to_iso(stored_sample.captured_at),
                     _dt_to_iso(stored_at),
-                    sample.sensor_id,
-                    sample.request.capability,
-                    sample.request.target,
+                    stored_sample.sensor_id,
+                    stored_sample.request.capability,
+                    stored_sample.request.target,
                     pose_json,
-                    sample.world_version,
+                    stored_sample.world_version,
                     status,
                     observation_id,
                     failure_reason,
@@ -671,18 +681,16 @@ class MemoryRepository:
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        str(sample.sample_id),
-                        str(sample.run_id),
+                        str(stored_sample.sample_id),
+                        str(stored_sample.run_id),
                         entity_id,
-                        sample.sim_time_ms,
-                        sample.sample_sequence,
+                        stored_sample.sim_time_ms,
+                        stored_sample.sample_sequence,
                         det_json,
                     ),
                 )
 
-        data = sample.model_dump(mode="json")
-        data["stored_at"] = stored_at
-        return StoredObservationSample.model_validate(data)
+        return stored_sample
 
     def get_observation_sample(self, sample_id: UUID) -> StoredObservationSample | None:
         """Retrieve a stored observation sample by its unique sample_id."""
@@ -699,6 +707,7 @@ class MemoryRepository:
         run_id: UUID,
         capability: str | None = None,
         sensor_id: str | None = None,
+        entity_id: str | None = None,
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 100,
@@ -713,65 +722,148 @@ class MemoryRepository:
         if limit < 1 or limit > 1000:
             raise ValueError("limit must be between 1 and 1000")
 
-        clauses = ["run_id = ?"]
-        params: list[object] = [str(run_id)]
-        if capability is not None:
-            clauses.append("capability = ?")
-            params.append(capability)
-        if sensor_id is not None:
-            clauses.append("sensor_id = ?")
-            params.append(sensor_id)
-        if start_ms is not None:
-            clauses.append("sim_time_ms >= ?")
-            params.append(start_ms)
-        if end_ms is not None:
-            clauses.append("sim_time_ms <= ?")
-            params.append(end_ms)
+        if entity_id is not None:
+            clauses = ["s.run_id = ?", "d.entity_id = ?"]
+            params: list[object] = [str(run_id), entity_id]
+            if capability is not None:
+                clauses.append("s.capability = ?")
+                params.append(capability)
+            if sensor_id is not None:
+                clauses.append("s.sensor_id = ?")
+                params.append(sensor_id)
+            if start_ms is not None:
+                clauses.append("s.sim_time_ms >= ?")
+                params.append(start_ms)
+            if end_ms is not None:
+                clauses.append("s.sim_time_ms <= ?")
+                params.append(end_ms)
 
-        sql = f"""
-            SELECT raw_sample_json, stored_at FROM observation_samples
-            WHERE {" AND ".join(clauses)}
-            ORDER BY sim_time_ms ASC, sample_sequence ASC, sample_id ASC
-            LIMIT ?
-        """
+            sql = f"""
+                SELECT s.raw_sample_json, s.stored_at
+                FROM observation_samples s
+                JOIN observation_detections d ON d.sample_id = s.sample_id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY s.sim_time_ms ASC, s.sample_sequence ASC, s.sample_id ASC
+                LIMIT ?
+            """
+        else:
+            clauses = ["run_id = ?"]
+            params = [str(run_id)]
+            if capability is not None:
+                clauses.append("capability = ?")
+                params.append(capability)
+            if sensor_id is not None:
+                clauses.append("sensor_id = ?")
+                params.append(sensor_id)
+            if start_ms is not None:
+                clauses.append("sim_time_ms >= ?")
+                params.append(start_ms)
+            if end_ms is not None:
+                clauses.append("sim_time_ms <= ?")
+                params.append(end_ms)
+
+            sql = f"""
+                SELECT raw_sample_json, stored_at FROM observation_samples
+                WHERE {" AND ".join(clauses)}
+                ORDER BY sim_time_ms ASC, sample_sequence ASC, sample_id ASC
+                LIMIT ?
+            """
         params.append(limit)
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_stored_sample(r) for r in rows]
 
     def get_latest_sample(
-        self, run_id: UUID, capability: str, at_sim_time_ms: int | None = None
+        self,
+        run_id: UUID,
+        capability: str,
+        sensor_id: str | None = None,
+        entity_id: str | None = None,
+        start_ms: int | None = None,
+        at_sim_time_ms: int | None = None,
     ) -> StoredObservationSample | None:
-        """Return the latest sample for a capability at or before simulation time."""
+        """Return the latest sample for capability/source at or before simulation time."""
+        if start_ms is not None and start_ms < 0:
+            raise ValueError("start_ms must be non-negative")
         if at_sim_time_ms is not None and at_sim_time_ms < 0:
             raise ValueError("at_sim_time_ms must be non-negative")
-        clauses = ["run_id = ?", "capability = ?"]
-        params: list[object] = [str(run_id), capability]
-        if at_sim_time_ms is not None:
-            clauses.append("sim_time_ms <= ?")
-            params.append(at_sim_time_ms)
+        if start_ms is not None and at_sim_time_ms is not None and start_ms > at_sim_time_ms:
+            raise ValueError("start_ms must not exceed at_sim_time_ms")
 
-        sql = f"""
-            SELECT raw_sample_json, stored_at FROM observation_samples
-            WHERE {" AND ".join(clauses)}
-            ORDER BY sim_time_ms DESC, sample_sequence DESC, sample_id DESC
-            LIMIT 1
-        """
+        if entity_id is not None:
+            clauses = ["s.run_id = ?", "s.capability = ?", "d.entity_id = ?"]
+            params: list[object] = [str(run_id), capability, entity_id]
+            if sensor_id is not None:
+                clauses.append("s.sensor_id = ?")
+                params.append(sensor_id)
+            if start_ms is not None:
+                clauses.append("s.sim_time_ms >= ?")
+                params.append(start_ms)
+            if at_sim_time_ms is not None:
+                clauses.append("s.sim_time_ms <= ?")
+                params.append(at_sim_time_ms)
+
+            sql = f"""
+                SELECT s.raw_sample_json, s.stored_at
+                FROM observation_samples s
+                JOIN observation_detections d ON d.sample_id = s.sample_id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY s.sim_time_ms DESC, s.sample_sequence DESC, s.sample_id DESC
+                LIMIT 1
+            """
+        else:
+            clauses = ["run_id = ?", "capability = ?"]
+            params = [str(run_id), capability]
+            if sensor_id is not None:
+                clauses.append("sensor_id = ?")
+                params.append(sensor_id)
+            if start_ms is not None:
+                clauses.append("sim_time_ms >= ?")
+                params.append(start_ms)
+            if at_sim_time_ms is not None:
+                clauses.append("sim_time_ms <= ?")
+                params.append(at_sim_time_ms)
+
+            sql = f"""
+                SELECT raw_sample_json, stored_at FROM observation_samples
+                WHERE {" AND ".join(clauses)}
+                ORDER BY sim_time_ms DESC, sample_sequence DESC, sample_id DESC
+                LIMIT 1
+            """
         row = self._conn.execute(sql, params).fetchone()
         if row is None:
             return None
         return self._row_to_stored_sample(row)
 
     def get_last_sighting(
-        self, run_id: UUID, entity_id: str, at_sim_time_ms: int | None = None
+        self,
+        run_id: UUID,
+        entity_id: str,
+        capability: str | None = None,
+        sensor_id: str | None = None,
+        start_ms: int | None = None,
+        at_sim_time_ms: int | None = None,
     ) -> StoredObservationSample | None:
         """Return the latest positive sighting sample for an entity at or before simulation time."""
         if not entity_id:
             raise ValueError("entity_id must be non-empty")
+        if start_ms is not None and start_ms < 0:
+            raise ValueError("start_ms must be non-negative")
         if at_sim_time_ms is not None and at_sim_time_ms < 0:
             raise ValueError("at_sim_time_ms must be non-negative")
+        if start_ms is not None and at_sim_time_ms is not None and start_ms > at_sim_time_ms:
+            raise ValueError("start_ms must not exceed at_sim_time_ms")
 
         clauses = ["d.run_id = ?", "d.entity_id = ?"]
         params: list[object] = [str(run_id), entity_id]
+        if capability is not None:
+            clauses.append("s.capability = ?")
+            params.append(capability)
+        if sensor_id is not None:
+            clauses.append("s.sensor_id = ?")
+            params.append(sensor_id)
+        if start_ms is not None:
+            clauses.append("d.sim_time_ms >= ?")
+            params.append(start_ms)
         if at_sim_time_ms is not None:
             clauses.append("d.sim_time_ms <= ?")
             params.append(at_sim_time_ms)
@@ -793,6 +885,8 @@ class MemoryRepository:
         self,
         run_id: UUID,
         entity_id: str,
+        capability: str | None = None,
+        sensor_id: str | None = None,
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 100,
@@ -811,6 +905,12 @@ class MemoryRepository:
 
         clauses = ["d.run_id = ?", "d.entity_id = ?"]
         params: list[object] = [str(run_id), entity_id]
+        if capability is not None:
+            clauses.append("s.capability = ?")
+            params.append(capability)
+        if sensor_id is not None:
+            clauses.append("s.sensor_id = ?")
+            params.append(sensor_id)
         if start_ms is not None:
             clauses.append("d.sim_time_ms >= ?")
             params.append(start_ms)
@@ -837,6 +937,7 @@ class MemoryRepository:
                 run_id=query.run_id,
                 capability=query.capability,
                 sensor_id=query.sensor_id,
+                entity_id=query.entity_id,
                 start_ms=query.start_ms,
                 end_ms=query.end_ms,
                 limit=query.limit,
@@ -847,6 +948,9 @@ class MemoryRepository:
             latest = self.get_latest_sample(
                 run_id=query.run_id,
                 capability=query.capability,
+                sensor_id=query.sensor_id,
+                entity_id=query.entity_id,
+                start_ms=query.start_ms,
                 at_sim_time_ms=query.end_ms,
             )
             return [latest] if latest is not None else []
@@ -856,6 +960,9 @@ class MemoryRepository:
             sighting = self.get_last_sighting(
                 run_id=query.run_id,
                 entity_id=query.entity_id,
+                capability=query.capability,
+                sensor_id=query.sensor_id,
+                start_ms=query.start_ms,
                 at_sim_time_ms=query.end_ms,
             )
             return [sighting] if sighting is not None else []
@@ -865,6 +972,8 @@ class MemoryRepository:
             return self.get_entity_sighting_history(
                 run_id=query.run_id,
                 entity_id=query.entity_id,
+                capability=query.capability,
+                sensor_id=query.sensor_id,
                 start_ms=query.start_ms,
                 end_ms=query.end_ms,
                 limit=query.limit,

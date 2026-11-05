@@ -503,13 +503,25 @@ class ObservationLedgerReader(Protocol):
         ...
 
     def get_latest_sample(
-        self, run_id: UUID, capability: str, at_sim_time_ms: int | None = None
+        self,
+        run_id: UUID,
+        capability: str,
+        sensor_id: str | None = None,
+        entity_id: str | None = None,
+        start_ms: int | None = None,
+        at_sim_time_ms: int | None = None,
     ) -> StoredObservationSample | None:
         """Return the latest sample for a capability at or before simulation time."""
         ...
 
     def get_last_sighting(
-        self, run_id: UUID, entity_id: str, at_sim_time_ms: int | None = None
+        self,
+        run_id: UUID,
+        entity_id: str,
+        capability: str | None = None,
+        sensor_id: str | None = None,
+        start_ms: int | None = None,
+        at_sim_time_ms: int | None = None,
     ) -> StoredObservationSample | None:
         """Return the latest positive sighting for an entity at or before simulation time."""
         ...
@@ -518,6 +530,8 @@ class ObservationLedgerReader(Protocol):
         self,
         run_id: UUID,
         entity_id: str,
+        capability: str | None = None,
+        sensor_id: str | None = None,
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 100,

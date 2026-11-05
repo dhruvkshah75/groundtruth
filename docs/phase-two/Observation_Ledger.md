@@ -1,9 +1,13 @@
 # Observation Ledger and Temporal Retrieval (P2-04)
 
 - **Issue:** [#24: [P2-04] Persist sampled observations and add run-scoped temporal evidence queries](https://github.com/dhruvkshah75/groundtruth/issues/24)
+- **Pull Request:** [#39: feat(p2-04): persist sampled observations and add temporal evidence queries](https://github.com/dhruvkshah75/groundtruth/pull/39)
 - **Branch:** `p204`
 - **Lane:** Temporal Memory (Member B)
 - **Status:** Complete (M1 Foundation)
+- **Prerequisites:**
+  - Issue [#21](https://github.com/dhruvkshah75/groundtruth/issues/21) Contracts (`src/contracts/simulation.py`): `ObservationSample`, `SensorObservation`, `ObservationUnavailable`, `CameraScan`, `CameraDetection`, `TemporalObservationQuery`, `ObservationLedgerReader`, `ObservationLedgerWriter`, `ObservationLedger`.
+  - Tier 1 Declarative Persistence (`src/declarative/schema.py`, `src/declarative/memory_repository.py`).
 
 ---
 
@@ -75,10 +79,14 @@ erDiagram
    - **Indexes:**
      - `idx_obs_detections_run_entity_time ON observation_detections(run_id, entity_id, sim_time_ms, sample_sequence)`
 
-### Idempotence and Atomicity
+### Pre-Validation of Detached Payloads & Atomicity
+- **Detached Payload Pre-Validation:** `ObservationSample` instances and nested Pydantic models are mutable. In `record_observation_sample()`, the incoming sample is dumped to a JSON-serialized dict and immediately revalidated via `ObservationSample.model_validate(detached_data)` and `StoredObservationSample.model_validate(...)` *before* any SQLite statements execute. This guarantees that mutated or corrupt envelopes are rejected with `ValidationError` and never leave partial or invalid rows in the database.
 - **Canonical Idempotence:** Re-inserting an `ObservationSample` with an existing `sample_id` and identical canonical content returns the original `StoredObservationSample` (including original `stored_at`) without inserting duplicate rows.
 - **Conflict Rejection:** Reusing a `sample_id` with different content immediately raises `ValueError` and leaves the database unmutated.
-- **Atomic Transactions:** Parent samples and detection associations are written within a single `with self._conn:` transaction. If any part fails, both tables roll back completely.
+- **Atomic Transactions:** Parent samples and detection associations are written within a single `with self._conn:` transaction. If any error occurs, both parent and child tables roll back completely.
+
+### External Session-Lock Serialization
+`MemoryRepository` manages an SQLite connection created with `check_same_thread=False` to support asynchronous event loop turn processing in web contexts. While internal repository operations run within SQLite transactions to maintain relational integrity, thread-safety and race condition prevention for concurrent writes or interleaved turns are handled externally via session-level locks (e.g., in `SessionStore` / `AgentSession` mutexes). The repository assumes a single active transaction per session at any moment.
 
 ---
 
@@ -102,16 +110,40 @@ class ObservationLedgerReader(Protocol):
     def query_observations(
         self, query: TemporalObservationQuery
     ) -> list[StoredObservationSample]: ...
+    def query_samples(
+        self,
+        run_id: UUID,
+        capability: str | None = None,
+        sensor_id: str | None = None,
+        entity_id: str | None = None,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[StoredObservationSample]: ...
     def get_latest_sample(
-        self, run_id: UUID, capability: str, at_sim_time_ms: int | None = None
+        self,
+        run_id: UUID,
+        capability: str,
+        sensor_id: str | None = None,
+        entity_id: str | None = None,
+        start_ms: int | None = None,
+        at_sim_time_ms: int | None = None,
     ) -> StoredObservationSample | None: ...
     def get_last_sighting(
-        self, run_id: UUID, entity_id: str, at_sim_time_ms: int | None = None
+        self,
+        run_id: UUID,
+        entity_id: str,
+        capability: str | None = None,
+        sensor_id: str | None = None,
+        start_ms: int | None = None,
+        at_sim_time_ms: int | None = None,
     ) -> StoredObservationSample | None: ...
     def get_entity_sighting_history(
         self,
         run_id: UUID,
         entity_id: str,
+        capability: str | None = None,
+        sensor_id: str | None = None,
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 100,
@@ -127,38 +159,43 @@ class ObservationLedgerWriter(Protocol):
 class ObservationLedger(ObservationLedgerReader, ObservationLedgerWriter, Protocol): ...
 ```
 
-Tier 2 procedural logic can consume this ledger strictly via `ObservationLedgerReader` without importing or interacting with SQLite, raw SQL, or `sqlite3.Row`.
+Tier 2 procedural logic consumes this ledger strictly via `ObservationLedgerReader` without importing or interacting with SQLite, raw SQL, or `sqlite3.Row`.
 
 ---
 
 ## 4. Timing & Query Semantics
 
-1. **Simulation Capture Time vs. Storage Time:**
-   - Physical ordering is governed by `sim_time_ms`, **never** database insertion order or wall-clock storage time (`stored_at`).
+### Capture-Time Retrieval vs. Historical Reception-Time Reconstruction
+1. **Capture-Time Retrieval Among Stored Samples (`sim_time_ms`):**
+   - GroundTruth simulation operates on an explicit simulation clock starting at `epoch_utc`, advancing in integer milliseconds (`sim_time_ms`).
+   - All temporal ledger queries (`get_latest_sample`, `get_last_sighting`, `query_samples`, `TemporalObservationQuery`) evaluate the simulation capture timeline among the stored set of samples (`sim_time_ms <= at_sim_time_ms`).
    - Slower presenter playback rates (0.25×, 0.5×, 1×) scale wall-clock scheduling only and do not alter stored `sim_time_ms` or query outcomes.
+   - Late-delivered samples (e.g., simulated network packet delay where a sample from $t=500$ arrives after $t=1500$) are indexed into their correct chronological slot in simulation time. Subsequent queries for the state at $t=600$ will see the $t=500$ sample.
+2. **Historical Reception-Time Reconstruction (`stored_at`):**
+   - The ledger immutably records the wall-clock UTC arrival timestamp (`stored_at`) for every sample to provide complete auditability.
+   - The ledger does **not** implement bi-temporal point-in-time database reconstruction (i.e., reconstructing what the database state was at wall-clock 12:05 PM before a late packet was written). Late evidence immediately updates the known chronological timeline for subsequent queries; downstream epistemic belief revision (P2-05) is responsible for handling any belief state updates triggered by newly arrived historical evidence.
 
-2. **Late-Delivered Samples:**
-   - A delayed sample from $t=500$ inserted into the database after a sample from $t=1500$ is safely stored, but queries for the "latest" sample correctly return the sample from $t=1500$.
-
-3. **Deterministic Tie-Breaking:**
-   - Samples sharing the same `sim_time_ms` break ties using `sample_sequence`, then `sample_id`:
+### Ordering, Ties, and Boundaries
+1. **Deterministic Tie-Breaking:**
+   - Samples sharing the same `sim_time_ms` break ties deterministically:
      `ORDER BY sim_time_ms ASC/DESC, sample_sequence ASC/DESC, sample_id ASC/DESC`.
-
-4. **Inclusive Boundaries:**
+2. **Inclusive Boundaries:**
    - Interval queries (`start_ms` to `end_ms`) are inclusive on both ends (`sim_time_ms >= start_ms AND sim_time_ms <= end_ms`).
    - "At-time" queries retrieve evidence captured at or before the specified time (`sim_time_ms <= at_sim_time_ms`).
-
-5. **Positive Sightings vs. Status Scans:**
-   - `get_last_sighting` queries positive sightings in `observation_detections`. A later empty scan ($t=1500$) or outage ($t=2000$) does not erase an earlier positive sighting ($t=1000$).
+3. **Positive Sightings vs. Status Scans:**
+   - `get_last_sighting` queries positive sightings in `observation_detections`. A later empty scan ($t=3000$) or outage ($t=4000$) does not erase an earlier positive sighting ($t=2000$).
    - `get_latest_sample` queries the parent sensor status regardless of detections.
 
 ---
 
 ## 5. Runnable Usage & Downstream Handoff Example
 
+The following self-contained four-stage example demonstrates storing evidence across two distinct observation poses, an empty scan, and an outage, followed by verifying queries and assertions:
+
 ```python
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+
 from src.contracts import (
     CameraDetection,
     CameraScan,
@@ -169,6 +206,7 @@ from src.contracts import (
     Pose,
     SensorObservation,
     SpatialContext,
+    TemporalObservationQuery,
 )
 from src.declarative import MemoryRepository
 
@@ -193,7 +231,7 @@ pose_st2 = Pose(
     frame_of_reference="warehouse_map",
 )
 
-det = CameraDetection(
+det_st1 = CameraDetection(
     object_id="parcel_handoff",
     apparent_color="cardboard_brown",
     position=Point(x_cm=120.0, y_cm=220.0),
@@ -201,14 +239,22 @@ det = CameraDetection(
     bounding_box={"width_cm": 40.0, "height_cm": 30.0},
 )
 
-# 1. Sighting at station 1 (t=1000)
+det_st2 = CameraDetection(
+    object_id="parcel_handoff",
+    apparent_color="cardboard_brown",
+    position=Point(x_cm=320.0, y_cm=320.0),
+    frame_of_reference="warehouse_map",
+    bounding_box={"width_cm": 40.0, "height_cm": 30.0},
+)
+
+# Stage 1: Sighting at station 1 (t=1000)
 sample_1 = ObservationSample(
     sample_id=uuid4(),
     run_id=run_id,
     sample_sequence=1,
     epoch_utc=epoch,
     sim_time_ms=1000,
-    captured_at=epoch + datetime.timedelta(milliseconds=1000),
+    captured_at=epoch + timedelta(milliseconds=1000),
     sensor_id="camera_detect",
     observer_pose=pose_st1,
     world_version=1,
@@ -217,7 +263,7 @@ sample_1 = ObservationSample(
         observation_id=uuid4(),
         sensor="camera_detect",
         capability="camera_detect",
-        observed_at=epoch + datetime.timedelta(milliseconds=1000),
+        observed_at=epoch + timedelta(milliseconds=1000),
         confidence_score=1.0,
         context=SpatialContext(
             observer="robot_01",
@@ -225,27 +271,122 @@ sample_1 = ObservationSample(
             frame_of_reference="warehouse_map",
             world_version=1,
         ),
-        measurements=CameraScan(objects=[det]).model_dump(mode="json"),
+        measurements=CameraScan(objects=[det_st1]).model_dump(mode="json"),
     ),
 )
 repo.record_observation_sample(sample_1)
 
-# 2. Sighting at station 2 (t=2000)
-# (Same parcel observed from station 2 at t=2000)
-...
+# Stage 2: Sighting at station 2 (t=2000)
+sample_2 = ObservationSample(
+    sample_id=uuid4(),
+    run_id=run_id,
+    sample_sequence=2,
+    epoch_utc=epoch,
+    sim_time_ms=2000,
+    captured_at=epoch + timedelta(milliseconds=2000),
+    sensor_id="camera_detect",
+    observer_pose=pose_st2,
+    world_version=1,
+    request=ObservationRequest(capability="camera_detect"),
+    result=SensorObservation(
+        observation_id=uuid4(),
+        sensor="camera_detect",
+        capability="camera_detect",
+        observed_at=epoch + timedelta(milliseconds=2000),
+        confidence_score=1.0,
+        context=SpatialContext(
+            observer="robot_01",
+            location="dock",
+            frame_of_reference="warehouse_map",
+            world_version=1,
+        ),
+        measurements=CameraScan(objects=[det_st2]).model_dump(mode="json"),
+    ),
+)
+repo.record_observation_sample(sample_2)
 
-# 3. Empty scan at t=3000
-# 4. Outage at t=4000 (ObservationUnavailable)
+# Stage 3: Empty scan at t=3000
+sample_3 = ObservationSample(
+    sample_id=uuid4(),
+    run_id=run_id,
+    sample_sequence=3,
+    epoch_utc=epoch,
+    sim_time_ms=3000,
+    captured_at=epoch + timedelta(milliseconds=3000),
+    sensor_id="camera_detect",
+    observer_pose=pose_st2,
+    world_version=1,
+    request=ObservationRequest(capability="camera_detect"),
+    result=SensorObservation(
+        observation_id=uuid4(),
+        sensor="camera_detect",
+        capability="camera_detect",
+        observed_at=epoch + timedelta(milliseconds=3000),
+        confidence_score=1.0,
+        context=SpatialContext(
+            observer="robot_01",
+            location="dock",
+            frame_of_reference="warehouse_map",
+            world_version=1,
+        ),
+        measurements=CameraScan(objects=[]).model_dump(mode="json"),
+    ),
+)
+repo.record_observation_sample(sample_3)
 
-# Downstream queries:
-last_seen = repo.get_last_sighting(run_id, "parcel_handoff")
-# Returns station 2 sighting at t=2000
+# Stage 4: Outage at t=4000
+sample_4 = ObservationSample(
+    sample_id=uuid4(),
+    run_id=run_id,
+    sample_sequence=4,
+    epoch_utc=epoch,
+    sim_time_ms=4000,
+    captured_at=epoch + timedelta(milliseconds=4000),
+    sensor_id="camera_detect",
+    observer_pose=pose_st2,
+    world_version=1,
+    request=ObservationRequest(capability="camera_detect"),
+    result=ObservationUnavailable(
+        capability="camera_detect",
+        reason="sensor_unavailable",
+        reported_at=epoch + timedelta(milliseconds=4000),
+        message="Observation unavailable.",
+    ),
+)
+repo.record_observation_sample(sample_4)
 
+# Assertions and Query Outputs:
+# A. Last sighting: returns sample_2 from station 2 at t=2000 despite later empty scan and outage
+last_sighting = repo.get_last_sighting(run_id, "parcel_handoff")
+assert last_sighting is not None
+assert last_sighting.sample_id == sample_2.sample_id
+assert last_sighting.sim_time_ms == 2000
+assert last_sighting.observer_pose.x_cm == 300.0
+
+# B. Chronological sighting history: returns both positive sightings in order
 history = repo.get_entity_sighting_history(run_id, "parcel_handoff")
-# Returns [sample_1 (t=1000), sample_2 (t=2000)]
+assert len(history) == 2
+assert [s.sample_id for s in history] == [sample_1.sample_id, sample_2.sample_id]
+assert [s.sim_time_ms for s in history] == [1000, 2000]
 
+# C. Latest sensor status: returns outage sample_4 at t=4000
 latest_status = repo.get_latest_sample(run_id, "camera_detect")
-# Returns outage sample at t=4000
+assert latest_status is not None
+assert latest_status.sample_id == sample_4.sample_id
+assert latest_status.sim_time_ms == 4000
+assert isinstance(latest_status.result, ObservationUnavailable)
+assert latest_status.result.reason == "sensor_unavailable"
+
+# D. TemporalObservationQuery protocol dispatch:
+dispatch_last = repo.query_observations(
+    TemporalObservationQuery(
+        run_id=run_id,
+        mode="last_seen",
+        entity_id="parcel_handoff",
+    )
+)
+assert len(dispatch_last) == 1
+assert dispatch_last[0].sample_id == sample_2.sample_id
 ```
 
 ---
@@ -263,13 +404,13 @@ latest_status = repo.get_latest_sample(run_id, "camera_detect")
 All tests run deterministically with zero network, LLM, or wall-clock dependencies:
 
 ```bash
-# 1. Targeted observation ledger test suite
+# 1. Targeted observation ledger test suite (including regression tests)
 uv run --locked pytest tests/unit/declarative/test_observation_ledger.py -v
-# Output: 16 passed in 1.05s
+# Output: 20 passed in 2.15s
 
 # 2. Full test suite regression check
 uv run --locked pytest -q
-# Output: 468 passed in 8.37s
+# Output: 472 passed in 10.42s
 
 # 3. Code formatting and style
 uv run --locked ruff check .

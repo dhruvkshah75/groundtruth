@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from src.contracts import (
     BoundingBox,
@@ -91,6 +92,7 @@ def make_sample(
     sample_sequence: int = 0,
     sim_time_ms: int = 1000,
     capability: str = "camera_detect",
+    sensor_id: str | None = None,
     target: str | None = None,
     detections: list[CameraDetection] | None = None,
     unavailable_reason: str | None = None,
@@ -102,6 +104,7 @@ def make_sample(
     captured_at = epoch_utc + timedelta(milliseconds=sim_time_ms)
     sid = sample_id or uuid4()
     rid = run_id or uuid4()
+    sid_sensor = sensor_id or capability
 
     request = ObservationRequest(capability=capability, target=target)
 
@@ -161,7 +164,7 @@ def make_sample(
         epoch_utc=epoch_utc,
         sim_time_ms=sim_time_ms,
         captured_at=captured_at,
-        sensor_id=capability,
+        sensor_id=sid_sensor,
         observer_pose=pose,
         world_version=world_version,
         request=request,
@@ -771,3 +774,199 @@ def test_fixture_driven_downstream_handoff_example() -> None:
     assert latest_status.sim_time_ms == 4000
     assert isinstance(latest_status.result, ObservationUnavailable)
     assert latest_status.result.reason == "sensor_unavailable"
+
+
+def test_rejected_mutable_acquisition_envelope_leaves_database_empty() -> None:
+    """[P1] Mutating a sample invalidates model contracts and aborts before SQLite mutation."""
+    repo = MemoryRepository()
+    run_id = uuid4()
+    det = make_detection("box_01", 100, 200)
+
+    # Valid sample constructed at t=1000
+    sample = make_sample(run_id=run_id, sim_time_ms=1000, detections=[det])
+
+    # Mutate captured_at to epoch_utc while sim_time_ms is 1000 (violates contract)
+    sample.captured_at = sample.epoch_utc
+
+    with pytest.raises(ValidationError):
+        repo.record_observation_sample(sample)
+
+    # Database must remain completely untouched
+    parent_count = repo._conn.execute("SELECT COUNT(*) FROM observation_samples").fetchone()[0]
+    det_count = repo._conn.execute("SELECT COUNT(*) FROM observation_detections").fetchone()[0]
+    assert parent_count == 0
+    assert det_count == 0
+
+
+def test_source_scoped_latest_query() -> None:
+    """[P2] Honors sensor_id filter in latest queries and dispatches."""
+    repo = MemoryRepository()
+    run_id = uuid4()
+
+    s_cam_a = make_sample(
+        run_id=run_id,
+        sim_time_ms=1000,
+        capability="camera_detect",
+        sensor_id="camera_A",
+    )
+    s_cam_b = make_sample(
+        run_id=run_id,
+        sim_time_ms=2000,
+        capability="camera_detect",
+        sensor_id="camera_B",
+    )
+    repo.record_observation_sample(s_cam_a)
+    repo.record_observation_sample(s_cam_b)
+
+    # Query latest for camera_A should return s_cam_a despite s_cam_b being newer
+    latest_a = repo.get_latest_sample(
+        run_id=run_id,
+        capability="camera_detect",
+        sensor_id="camera_A",
+    )
+    assert latest_a is not None
+    assert latest_a.sample_id == s_cam_a.sample_id
+    assert latest_a.sensor_id == "camera_A"
+    assert latest_a.sim_time_ms == 1000
+
+    # Dispatch via TemporalObservationQuery
+    dispatch_res = repo.query_observations(
+        TemporalObservationQuery(
+            run_id=run_id,
+            mode="latest",
+            capability="camera_detect",
+            sensor_id="camera_A",
+        )
+    )
+    assert len(dispatch_res) == 1
+    assert dispatch_res[0].sample_id == s_cam_a.sample_id
+
+    # Non-existent sensor returns None / empty
+    latest_c = repo.get_latest_sample(
+        run_id=run_id,
+        capability="camera_detect",
+        sensor_id="camera_C",
+    )
+    assert latest_c is None
+    dispatch_c = repo.query_observations(
+        TemporalObservationQuery(
+            run_id=run_id,
+            mode="latest",
+            capability="camera_detect",
+            sensor_id="camera_C",
+        )
+    )
+    assert dispatch_c == []
+
+
+def test_entity_scoped_samples_query() -> None:
+    """[P2] Honors entity_id filter in sample sequence queries and dispatches."""
+    repo = MemoryRepository()
+    run_id = uuid4()
+    det_alpha = make_detection("target_alpha", 100, 200)
+    det_beta = make_detection("target_beta", 300, 400)
+
+    s1 = make_sample(
+        run_id=run_id,
+        sim_time_ms=1000,
+        detections=[det_alpha],
+    )
+    s2 = make_sample(
+        run_id=run_id,
+        sim_time_ms=2000,
+        detections=[det_beta],
+    )
+    s3 = make_sample(
+        run_id=run_id,
+        sim_time_ms=3000,
+        detections=[det_alpha, det_beta],
+    )
+    repo.record_observation_sample(s1)
+    repo.record_observation_sample(s2)
+    repo.record_observation_sample(s3)
+
+    # Query samples seeing target_alpha
+    samples_alpha = repo.query_samples(run_id=run_id, entity_id="target_alpha")
+    assert len(samples_alpha) == 2
+    assert [s.sample_id for s in samples_alpha] == [s1.sample_id, s3.sample_id]
+
+    # Dispatch via TemporalObservationQuery
+    dispatch_alpha = repo.query_observations(
+        TemporalObservationQuery(
+            run_id=run_id,
+            mode="samples",
+            entity_id="target_alpha",
+        )
+    )
+    assert [s.sample_id for s in dispatch_alpha] == [s1.sample_id, s3.sample_id]
+
+    # Non-existent entity returns empty list
+    samples_gamma = repo.query_samples(run_id=run_id, entity_id="target_gamma")
+    assert samples_gamma == []
+
+
+def test_sighting_modes_with_source_and_capability_filters() -> None:
+    """[P2] Honors source and capability filters in last_seen and history query modes."""
+    repo = MemoryRepository()
+    run_id = uuid4()
+    det = make_detection("box_99", 50, 50)
+
+    s_front = make_sample(
+        run_id=run_id,
+        sim_time_ms=1000,
+        capability="camera_detect",
+        sensor_id="camera_front",
+        detections=[det],
+    )
+    s_rear = make_sample(
+        run_id=run_id,
+        sim_time_ms=2000,
+        capability="camera_detect",
+        sensor_id="camera_rear",
+        detections=[det],
+    )
+    repo.record_observation_sample(s_front)
+    repo.record_observation_sample(s_rear)
+
+    # Last sighting scoped to camera_front
+    sighting_front = repo.get_last_sighting(
+        run_id=run_id,
+        entity_id="box_99",
+        sensor_id="camera_front",
+    )
+    assert sighting_front is not None
+    assert sighting_front.sample_id == s_front.sample_id
+    assert sighting_front.sim_time_ms == 1000
+
+    # Dispatch last_seen scoped to camera_front
+    dispatch_last = repo.query_observations(
+        TemporalObservationQuery(
+            run_id=run_id,
+            mode="last_seen",
+            entity_id="box_99",
+            sensor_id="camera_front",
+        )
+    )
+    assert len(dispatch_last) == 1
+    assert dispatch_last[0].sample_id == s_front.sample_id
+
+    # History scoped to camera_rear
+    history_rear = repo.get_entity_sighting_history(
+        run_id=run_id,
+        entity_id="box_99",
+        sensor_id="camera_rear",
+    )
+    assert len(history_rear) == 1
+    assert history_rear[0].sample_id == s_rear.sample_id
+
+    # Dispatch history scoped to camera_rear
+    dispatch_hist = repo.query_observations(
+        TemporalObservationQuery(
+            run_id=run_id,
+            mode="history",
+            entity_id="box_99",
+            sensor_id="camera_rear",
+        )
+    )
+    assert len(dispatch_hist) == 1
+    assert dispatch_hist[0].sample_id == s_rear.sample_id
