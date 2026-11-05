@@ -16,6 +16,34 @@ from .models import (
     SpatialContext,
     StoredFact,
 )
+from .simulation import (
+    BoundingBox,
+    Bounds,
+    CameraDetection,
+    CameraScan,
+    LidarMeasurement,
+    LightingEvent,
+    LightMeasurement,
+    MoveEvent,
+    ObservationSample,
+    PlaybackRate,
+    Point,
+    Pose,
+    PoseMeasurement,
+    Rectangle,
+    RouteSegment,
+    ScenarioDefinition,
+    ScenarioEvent,
+    SceneEntity,
+    SensorAvailability,
+    SensorAvailabilityEvent,
+    SensorSource,
+    SimulationConfig,
+    SimulationControl,
+    SimulationSnapshot,
+    SimulationStatus,
+    TemporalObservationQuery,
+)
 
 __all__ = [
     "AuditEvent",
@@ -33,3 +61,32 @@ __all__ = [
     "SpatialContext",
     "StoredFact",
 ]
+
+
+__all__ += [
+    "BoundingBox",
+    "Bounds",
+    "CameraDetection",
+    "CameraScan",
+    "LightMeasurement",
+    "LidarMeasurement",
+    "LightingEvent",
+    "MoveEvent",
+    "ObservationSample",
+    "Point",
+    "Pose",
+    "PoseMeasurement",
+    "RouteSegment",
+    "ScenarioDefinition",
+    "SceneEntity",
+    "SensorAvailability",
+    "SensorAvailabilityEvent",
+    "SensorSource",
+    "SimulationConfig",
+    "SimulationControl",
+    "SimulationSnapshot",
+    "SimulationStatus",
+    "TemporalObservationQuery",
+]
+
+__all__ += ["PlaybackRate", "Rectangle", "ScenarioEvent"]

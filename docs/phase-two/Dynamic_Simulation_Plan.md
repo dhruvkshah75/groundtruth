@@ -1,12 +1,14 @@
 # Phase Two: Dynamic Simulation and Time-Aware Beliefs
 
-**Status: proposal, not implemented.** This plan responds to the professor's feedback about a changing environment and possible integration with another robotics team. It extends the current three-tier system and complements the required groundedness and perspective scenarios. The separate [demo plan](Simulation_Demo_UI.md) describes how to present it.
+**Status: simulation proposal; P2-01 contracts and fixtures implemented separately.** This plan responds to the professor's feedback about a changing environment and possible integration with another robotics team. It extends the current three-tier system and complements the required groundedness and perspective scenarios. The separate [demo plan](Simulation_Demo_UI.md) describes how to present it.
 
 ## Goal
 
 Build a repeatable 2D simulated environment that changes independently over time. A robot periodically observes only what its simulated sensors can see. GroundTruth maintains sourced, time-aware beliefs from those observations and answers questions about what it observed, what changed, and what it cannot currently verify.
 
 The project does not need a complete 3D reconstruction or a physically accurate replica of reality. The first version is a controlled 2D model, with explicit simplifications, that makes temporal grounding and partial observation visible.
+
+The [shared contract reference](Shared_Simulation_Contracts.md) documents the implemented data definitions and fixture checks. The engine, sensor geometry, runtime and demo below remain proposed.
 
 ## Starting point
 
