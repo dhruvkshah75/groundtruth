@@ -22,6 +22,8 @@
 
 - [Warehouse sensors (P2-03)](phase-two/Warehouse_Sensors.md) - viewpoint-limited observations, failure semantics, timing and engine integration.
 
+- [Observation ledger and temporal queries (P2-04)](phase-two/Observation_Ledger.md) - durable raw observation envelope persistence, normalized detection indexing, run-scoped temporal queries, idempotence, and backward compatibility.
+
 ## Supporting context
 
 - [agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.

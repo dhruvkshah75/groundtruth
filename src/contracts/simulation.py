@@ -444,6 +444,20 @@ class ObservationSample(Contract):
         return self
 
 
+class StoredObservationSample(ObservationSample):
+    """An ObservationSample persisted in Tier 1 SQLite with its storage UTC timestamp."""
+
+    stored_at: datetime
+
+    @field_validator("stored_at")
+    @classmethod
+    def stored_at_must_include_timezone(cls, value: datetime) -> datetime:
+        """Reject naive storage timestamps."""
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("stored_at must be timezone-aware")
+        return value
+
+
 class TemporalObservationQuery(Contract):
     """Inclusive capture-time bounds; does not redefine FactQuery.as_of."""
 
@@ -474,3 +488,55 @@ class SensorSource(Protocol):
     def observe(self, request: ObservationRequest) -> SensorObservation | ObservationUnavailable:
         """Return evidence without advancing simulation time."""
         ...
+
+
+@runtime_checkable
+class ObservationLedgerReader(Protocol):
+    """Agent/Tier 2-visible protocol for temporal observation queries."""
+
+    def get_observation_sample(self, sample_id: UUID) -> StoredObservationSample | None:
+        """Retrieve a stored observation sample by unique sample ID."""
+        ...
+
+    def query_observations(self, query: TemporalObservationQuery) -> list[StoredObservationSample]:
+        """Execute a structured temporal observation query."""
+        ...
+
+    def get_latest_sample(
+        self, run_id: UUID, capability: str, at_sim_time_ms: int | None = None
+    ) -> StoredObservationSample | None:
+        """Return the latest sample for a capability at or before simulation time."""
+        ...
+
+    def get_last_sighting(
+        self, run_id: UUID, entity_id: str, at_sim_time_ms: int | None = None
+    ) -> StoredObservationSample | None:
+        """Return the latest positive sighting for an entity at or before simulation time."""
+        ...
+
+    def get_entity_sighting_history(
+        self,
+        run_id: UUID,
+        entity_id: str,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[StoredObservationSample]:
+        """Return chronological positive sightings for an entity within time bounds."""
+        ...
+
+
+@runtime_checkable
+class ObservationLedgerWriter(Protocol):
+    """Protocol for durably recording observation samples."""
+
+    def record_observation_sample(self, sample: ObservationSample) -> StoredObservationSample:
+        """Durably persist an observation sample and return the stored record."""
+        ...
+
+
+@runtime_checkable
+class ObservationLedger(ObservationLedgerReader, ObservationLedgerWriter, Protocol):
+    """Combined read/write protocol for the Tier 1 observation ledger."""
+
+    ...
