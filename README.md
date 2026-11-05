@@ -38,21 +38,31 @@ The Python layer owns the evidence and answer logic. The browser displays data r
 
 ## Run the app
 
-Install Python dependencies with `uv sync --all-groups`. You also need Node.js 20.19+ and npm.
-
-Start the Python API in one terminal:
+You need `make`, `uv`, Python 3, Node.js 20.19+, and npm. From the project root, install the dependencies:
 
 ```bash
-uv run python -m src.web.server
+make install
 ```
 
-Start the React development server in a second terminal:
+Start the Python API and React development server together:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+make dev
 ```
+
+The two servers run in parallel in the same terminal. Open <http://127.0.0.1:5173> and press **Ctrl+C** to stop both. If either server exits, the other is stopped as well.
+
+To run them separately, use these commands in two terminals:
+
+```bash
+make api
+```
+
+```bash
+make frontend
+```
+
+Run `make help` to list the available commands. The API does not automatically reload after Python changes; restart `make dev` or `make api` to pick them up.
 
 Restart the Python API process after updating to this version. A previous version's in-memory sessions are lost on restart; sessions saved by this version persist across subsequent restarts.
 
