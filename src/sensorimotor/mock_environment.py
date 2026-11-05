@@ -11,6 +11,7 @@ from src.contracts.models import (
     SensorObservation,
     SpatialContext,
 )
+from src.sensorimotor.warehouse_sensors import apparent_color
 from src.sensorimotor.world_models import AmbientLight, Obstacle, SimulatedObject, WorldState
 
 
@@ -256,9 +257,7 @@ class MockEnvironment:
         target_id = request.target
 
         def get_apparent_color(obj):
-            if obj.intrinsic_color == "red" and self._world.light.color_cast == "yellow":
-                return "brown"
-            return obj.intrinsic_color
+            return apparent_color(obj.intrinsic_color, self._world.light.color_cast)
 
         context = self._get_context()
         context.extra_context["lighting"] = self._world.light.color_cast

@@ -20,6 +20,8 @@
 
 - [Simulation engine (P2-02)](phase-two/Simulation_Engine.md) - explicit clock, motion, collisions, lifecycle and replay checkpoints.
 
+- [Warehouse sensors (P2-03)](phase-two/Warehouse_Sensors.md) - viewpoint-limited observations, failure semantics, timing and engine integration.
+
 ## Supporting context
 
 - [agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.
