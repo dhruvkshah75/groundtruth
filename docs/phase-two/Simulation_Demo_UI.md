@@ -1,4 +1,4 @@
-# Phase Two: 30-Second Simulation Demo and UI
+# Phase Two: Slow-Playback Simulation Demo and UI
 
 **Status: proposed presentation and product design, not implemented.** The purpose is to make the professor's changing-environment question visible and understandable in a short demonstration. The underlying behavior and boundaries are specified in [Dynamic Simulation and Time-Aware Beliefs](Dynamic_Simulation_Plan.md).
 
@@ -16,27 +16,32 @@ Use the existing React application as the starting point. One coordinated worksp
 2. **Robot observation:** show the most recent camera reading, its timestamp, and whether the cup is visible. Clearly mark stale or unavailable observations.
 3. **Belief and timeline:** highlight the current or last-seen belief, prior observation, time and source. Show a compact event timeline; update the existing belief graph from backend facts, emphasizing the changed relationship rather than recreating the graph visually without data.
 4. **Agent answer:** a readable response to a selected or typed question, with supporting evidence available on expansion. Use the existing response synthesis where appropriate, without implying the LLM itself observed the environment.
-5. **Controls:** play, pause, reset, step and a small set of scenario presets. Display simulation time, sensing status and provider mode. A presenter can pause to answer questions.
+5. **Controls:** play, pause, reset, step, playback rates **0.25× / 0.5× / 1×** (default **0.5×**), and a small set of scenario presets. Display simulation time, selected rate, sensing status and provider mode. A presenter can pause to answer questions.
 
 Visual states should make the distinction between **world truth**, **sensor observation**, and **agent belief** unmistakable. When the cup is hidden from the robot but visible in the audience view, label the agent's location as last seen or unknown. Do not let frontend world data bypass the sensor boundary into the agent.
 
-## Suggested 30-second sequence
+## Suggested one-minute presentation sequence
 
-Timing is a target for the visual sequence, not a guarantee of LLM response latency. Preload the scenario; allow a brief question and explanation immediately afterwards if necessary.
+The default scenario lasts **30 simulation seconds**, played at **0.5×**, for approximately **60 wall-clock seconds** excluding pauses. At 0.25× it takes approximately 120 seconds, and at 1× approximately 30 seconds. The table uses both clocks so scripted event times cannot be mistaken for presentation time. Preload the scenario, leave stable viewing periods between major changes, and allow questions immediately afterwards if LLM latency requires it.
 
-| Time | What the audience sees | What the system should show |
-| --- | --- | --- |
-| 0–5 s | Robot sees the red cup at table A. | Camera observation and time; belief graph shows the supported location. |
-| 5–12 s | Cup moves to table B within view. | Next scan reports the new location; timeline and active belief update while the prior sighting remains in history. |
-| 12–18 s | Ask “Where was it before, and what changed?” | Answer identifies both sightings and their times, without inventing the path or cause. |
-| 18–24 s | Cup moves out of view or behind an obstacle. | Audience can see the world, while sensor panel says not visible and belief is marked last seen. |
-| 24–30 s | Ask “Where is it now?” | Answer gives the last sighting and says the current location is unverified. |
+The cup remains an illustrative object here; the warehouse fixture expands the same story to parcels, stations, a cart, route blockage/clearance, and lighting. Fit those changes into distinct beats rather than stacking major events at the same instant. The final shared fixture defines exact event times.
 
-If response latency prevents two live questions in 30 seconds, run the visual sequence first and ask the questions immediately afterward. Use a visible preset question or have it ready to submit; do not prefill a fabricated response. Optionally bring the cup back into view to show reacquisition during the longer discussion.
+| Simulation time | Presentation time at 0.5× | What the audience sees | What the system should show |
+| --- | --- | --- | --- |
+| 0–5 s | 0–10 s | Robot observes an object at the first station. | Camera observation and time; belief graph shows the supported location. |
+| 5–12 s | 10–24 s | Object moves to another station within view, then holds position. | Next scan reports the new location; the belief and timeline update while the earlier sighting remains. |
+| 12–18 s | 24–36 s | A stable inspection period; ask “Where was it before, and what changed?” | Answer identifies sightings and their simulation times without inventing path or cause. |
+| 18–24 s | 36–48 s | Object moves out of view or behind a shelf. | Audience sees world truth; sensor panel says not visible and belief is marked last seen. |
+| 24–30 s | 48–60 s | Hold the scene; ask “Where is it now?” | Answer gives the last sighting and says current location is unverified. |
+
+The simulation keeps running during questions unless the presenter explicitly pauses it. If provider latency prevents both answers within the approximate one-minute sequence, ask immediately afterwards. Never prefill fabricated responses. Optionally demonstrate cart/route and lighting changes in a longer interactive replay and bring the object back into view to show reacquisition.
+
+Playback rate controls pacing rather than robot speed, sensing policy, or timestamps. Keep the 100 ms simulation step and 500 ms simulation sensor interval fixed. At 0.5× these nominally occur every 200 ms and 1 wall-clock second respectively. Manual step advances 100 simulation ms regardless of selected rate. Rendering can remain smooth between snapshots, and 250 ms wall-time polling must not be slowed with playback. See the [timing specification](Dynamic_Simulation_Plan.md#presentation-pacing-and-playback-time).
 
 ## Visual and interaction requirements
 
 - Use restrained motion and clear labels, colors and icons so the professor can follow the event without a narration-heavy explanation. Include text labels rather than relying on color alone.
+- Keep movement smooth through interpolation between received states, without predicting future events. Display selected playback rate and clearly label simulation timestamps. Speed changes must not reset or jump the world.
 - Synchronize displayed world, sensor time and belief updates with the backend; distinguish delayed observations from the present world state.
 - Make graph changes legible: focus the relevant object and relationship, animate or highlight a genuine revision, and show the superseded relationship in history rather than silently erasing it.
 - Explain a missing detection without implying disappearance. A blind spot should make the knowledge limitation visible.
@@ -54,7 +59,7 @@ If response latency prevents two live questions in 30 seconds, run the visual se
 
 ## Demo acceptance and backup
 
-The demo is ready when a clean reset consistently reproduces the visible-move and out-of-view cases, the graph corresponds to actual backend beliefs, and the answer distinguishes current observation from last seen. Verify pause, step, reset, provider status and failure messages. Run automated scenario tests and prepare a concise evidence log for each displayed decision.
+The demo is ready when a clean reset consistently reproduces the visible-move and out-of-view cases, the graph corresponds to actual backend beliefs, and the answer distinguishes current observation from last seen. Verify 0.5× default pacing, all three rate controls, pause, step, reset, provider status and failure messages. Confirm the same simulation-time inputs produce equivalent observations and beliefs across rates, and that pauses do not age simulation-based evidence. Run automated scenario tests and prepare a concise evidence log for each displayed decision.
 
 Use a recorded demonstration as a clearly labelled backup for network or hardware failure, and keep deterministic offline mode available with its limitations disclosed. Rehearse both. Do not claim an offline rule-based answer came from the live LLM.
 

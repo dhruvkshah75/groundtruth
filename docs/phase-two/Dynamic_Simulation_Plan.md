@@ -27,7 +27,7 @@ User question -> Tier 2 -> evidence and temporal evaluation -> grounded answer
 
 The environment does not notify the agent of changes. The simulator keeps an authoritative state for rendering and calculating sensor readings; the agent must access the world only through sensor observations. The audience may see the world and the agent's belief side by side, clearly labelled, but the agent cannot use the audience view as evidence.
 
-A periodic loop is an appropriate first model of robot sensing. Start with a configurable interval such as one simulation second, and allow a question to request a fresh scan when supported. The LLM need not run for each frame: deterministic code handles acquisition and change detection; the LLM can interpret user questions and explain supported results. This lowers cost and latency. Sampling still means movement between scans can be missed.
+A periodic loop is an appropriate first model of robot sensing. Use a configurable interval, initially 500 simulation milliseconds, and allow a question to request a fresh scan when supported. The LLM need not run for each frame: deterministic code handles acquisition and change detection; the LLM can interpret user questions and explain supported results. This lowers cost and latency. Sampling still means movement between scans can be missed.
 
 ## Proposed world and sensors
 
@@ -37,6 +37,23 @@ A periodic loop is an appropriate first model of robot sensing. Start with a con
 - Keep the existing LiDAR route example and add moving obstacles after the cup scenario works. Optional missed detections and measurement noise come later.
 - Simulation time must be explicit and advance consistently when paused, stepped or replayed. Distinguish observation time from storage time; handle delayed or out-of-order observations without silently treating them as latest.
 - Stable object IDs supplied by the simulator are an initial simplification, not real visual re-identification. Two similar objects without reliable identity require uncertainty or clarification.
+
+## Presentation pacing and playback time
+
+Default to **0.5× playback** so the audience can follow movement, observations, and graph changes. A 30-second simulated scenario takes approximately **60 seconds of presentation time**, excluding pauses and question latency. Offer **0.25×**, **0.5×**, and **1×** controls, plus pause and manual step.
+
+| Quantity | Simulation-time setting | Presentation time at 0.5× |
+| --- | --- | --- |
+| Scenario duration | 30 seconds | Approximately 60 seconds |
+| Fixed physics step | 100 ms | Nominally every 200 ms |
+| Sensor interval | 500 ms | Nominally every 1 second |
+| Freshness limit | 1,000 ms | Reached after 2 seconds of playback without newer evidence |
+
+Playback rate is a presentation/runtime setting, separate from robot speed in cm per simulation second. Changing rate changes how quickly fixed steps are scheduled against a monotonic wall clock; it does not change physics step size, event times, sensing cadence, acquisition timestamps, freshness calculations, or the logical outcome at the same simulation time. Validate a shared `playback_rate` field against the supported values and include the selected rate in configuration/status snapshots. Rate changes must not reset, jump, duplicate, or skip simulation ticks. A paused manual step always advances exactly 100 simulation ms at any rate.
+
+Interpolate only between received backend snapshots for smooth frontend motion. Rendering and the proposed 250 ms live-state polling remain wall-time operations, independent of playback rate; they cannot advance world time or create observations. Pausing also freezes simulation-based freshness. Actual LLM/network latency remains wall time and is not slowed by playback controls; answers retain their evidence-capture simulation time.
+
+Space major scripted changes apart and leave stable viewing periods between them. At 0.25× the same scenario takes approximately two minutes; at 1× it takes approximately 30 seconds. These are nominal playback durations, not hard real-time guarantees. Verify pacing with an injected monotonic clock, and replay the same simulation-time inputs across rates to check equivalent observations and belief transitions without wall-clock sleeps.
 
 ## Observation, memory and answers
 
