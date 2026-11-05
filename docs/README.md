@@ -14,6 +14,10 @@
 10. [Phase Two: Demo and UI](phase-two/Simulation_Demo_UI.md) - proposed slow-playback visual demo: 30 simulation seconds, approximately one presentation minute at default 0.5×.
 11. [Phase Two: Implementation Roadmap Draft](phase-two/Implementation_Roadmap_Draft.md) - discussion draft covering implementation decisions, team lanes, milestones, and 14 proposed GitHub issues; decisions remain pending.
 
+## Phase 2 implementation reference
+
+- [Shared simulation contracts (P2-01)](phase-two/Shared_Simulation_Contracts.md) - validated types, warehouse definition, shared fixtures, timing semantics, and downstream integration handoff.
+
 ## Supporting context
 
 - [agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.
