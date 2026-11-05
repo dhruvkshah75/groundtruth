@@ -13,14 +13,25 @@ Graph projection (GT-05):
     check_graph_consistency — Pure function that produces a GraphConsistencyReport.
 """
 
+from src.contracts import (
+    ObservationLedger,
+    ObservationLedgerReader,
+    ObservationLedgerWriter,
+    StoredObservationSample,
+)
+
 from .active_graph import ActiveBeliefGraph, ActiveFactReader, GraphSyncedRepository
 from .consistency import GraphConsistencyReport, check_graph_consistency
 from .memory_repository import MemoryRepository, RevisionOutcome
 
 __all__ = [
-    # Repository — GT-03
+    # Repository — GT-03 / P2-04
     "MemoryRepository",
     "RevisionOutcome",
+    "StoredObservationSample",
+    "ObservationLedger",
+    "ObservationLedgerReader",
+    "ObservationLedgerWriter",
     # Graph projection — GT-05
     "ActiveFactReader",
     "ActiveBeliefGraph",
