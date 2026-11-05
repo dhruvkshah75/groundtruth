@@ -18,6 +18,8 @@
 
 - [Shared simulation contracts (P2-01)](phase-two/Shared_Simulation_Contracts.md) - validated types, warehouse definition, shared fixtures, timing semantics, and downstream integration handoff.
 
+- [Simulation engine (P2-02)](phase-two/Simulation_Engine.md) - explicit clock, motion, collisions, lifecycle and replay checkpoints.
+
 ## Supporting context
 
 - [agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.
