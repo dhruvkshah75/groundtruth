@@ -400,6 +400,12 @@ class GraphSyncedRepository:
             return self._repository.query_facts(query)
         raise NotImplementedError("Underlying repository does not support query_facts")
 
+    def get_facts_by_sample_id(self, sample_id: UUID) -> list[StoredFact]:
+        """Delegate get_facts_by_sample_id to the underlying repository."""
+        if hasattr(self._repository, "get_facts_by_sample_id"):
+            return self._repository.get_facts_by_sample_id(sample_id)
+        return []
+
     def get_audit_chain(self, fact_id: UUID) -> AuditTrail:
         """Delegate get_audit_chain to the underlying repository."""
         if hasattr(self._repository, "get_audit_chain"):

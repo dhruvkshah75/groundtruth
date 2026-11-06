@@ -274,6 +274,18 @@ class MemoryRepository:
         cursor = self._conn.execute(sql, params)
         return [self._row_to_stored_fact(row) for row in cursor.fetchall()]
 
+    def get_facts_by_sample_id(self, sample_id: UUID) -> list[StoredFact]:
+        """Return all stored facts referencing sample_id in their evidence payload."""
+        cursor = self._conn.execute(
+            """
+            SELECT * FROM facts
+            WHERE json_extract(evidence_json, '$.sample_id') = ?
+            ORDER BY created_at ASC
+            """,
+            (str(sample_id),),
+        )
+        return [self._row_to_stored_fact(row) for row in cursor.fetchall()]
+
     # ------------------------------------------------------------------
     # revision
     # ------------------------------------------------------------------
