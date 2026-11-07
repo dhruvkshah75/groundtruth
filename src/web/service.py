@@ -21,6 +21,19 @@ from src.contracts.simulation import (
     SimulationControl,
     SimulationSnapshot,
 )
+from src.contracts.simulation_api import (
+    SimulationAudience,
+    SimulationBeliefState,
+    SimulationControlRequest,
+    SimulationDisruptRequest,
+    SimulationDisruptResponse,
+    SimulationExportBundle,
+    SimulationLoadRequest,
+    SimulationObservationState,
+    SimulationPatrolState,
+    SimulationRunIdentity,
+    SimulationStateResponse,
+)
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.procedural.temporal_belief_ingestion import TemporalBeliefIngestionService
@@ -34,13 +47,35 @@ from src.sensorimotor.world_models import (
     WorldState,
 )
 from src.web.session_store import SessionStore
-from src.web.simulation_runtime import SimulationRuntime
+from src.web.simulation_export import SimulationExporter, SimulationExportTarget
+from src.web.simulation_presets import warehouse_preset
+from src.web.simulation_runtime import MAX_PRESENTER_INPUTS, SimulationRuntime
 
 LOGGER = logging.getLogger(__name__)
 
 
 class StaleRequestError(RuntimeError):
     """The conversation, run, or session changed while answering."""
+
+
+class SimulationStateConflict(RuntimeError):
+    """A valid command cannot be applied to the current run state."""
+
+
+class SimulationInputRejected(ValueError):
+    """The engine rejected a proposed presenter input without scheduling it."""
+
+
+class SimulationUnavailable(RuntimeError):
+    """The simulation cannot complete the operation."""
+
+
+class SimulationExportNotReady(RuntimeError):
+    """No replay exporter is wired into this service."""
+
+
+class SessionUnavailable(RuntimeError):
+    """The session registry is at capacity or shutting down."""
 
 
 class SessionSimulationStatus(TypedDict):
@@ -187,10 +222,12 @@ class AgentSession:
     lock: threading.RLock = field(default_factory=threading.RLock)
 
     now: Callable[[], float] = monotonic
+    id_factory: Callable[[], UUID] = uuid4
     runtime: SimulationRuntime | None = field(init=False, default=None)
     load_error: str | None = field(init=False, default=None)
     _request_lock: threading.Lock = field(init=False, default_factory=threading.Lock)
     _generation: int = field(init=False, default=0)
+    _load_request: SimulationLoadRequest | None = field(init=False, default=None)
     _conversation_generation: int = field(init=False, default=0)
     _retired: bool = field(init=False, default=False)
     _dirty: bool = field(init=False, default=False)
@@ -221,11 +258,16 @@ class AgentSession:
     def load_simulation(self, scenario: ScenarioDefinition, epoch_utc: datetime) -> None:
         self.touch()
         self._generation += 1
+        self._load_request = None
         self.runtime = None
         self.load_error = None
         try:
             self.runtime = SimulationRuntime(
-                scenario, epoch_utc=epoch_utc, ingest=self._ingestion().ingest_sample, now=self.now
+                scenario,
+                epoch_utc=epoch_utc,
+                ingest=self._ingestion().ingest_sample,
+                now=self.now,
+                id_factory=self.id_factory,
             )
         except Exception:
             self.load_error = "Warehouse initialization failed. Reload the run to recover."
@@ -239,10 +281,13 @@ class AgentSession:
             "audit_history": deepcopy(self.audit_history),
             "suggested_question": self.suggested_question,
             "world": self.agent.environment.get_world_state().model_dump(mode="json"),
+            "simulation_generation": self._generation,
         }
 
         if self.runtime is not None:
             state["simulation_runtime"] = self.runtime.checkpoint()
+        if self._load_request is not None:
+            state["simulation_load_request"] = self._load_request.model_dump(mode="json")
         return state
 
     def restore(self, state: dict, memory: bytes) -> None:
@@ -254,13 +299,21 @@ class AgentSession:
         self.history = state.get("history", [])
         self.audit_history = state.get("audit_history", {})
         self.suggested_question = state.get("suggested_question", "")
+        self._generation = state.get("simulation_generation", int("simulation_runtime" in state))
+        if "simulation_load_request" in state:
+            self._load_request = SimulationLoadRequest.model_validate(
+                state["simulation_load_request"]
+            )
         if "simulation_runtime" in state:
             self.runtime = SimulationRuntime.restore(
                 state["simulation_runtime"],
                 ingest=self._ingestion().ingest_sample,
                 now=self.now,
                 memory=self.agent.memory,
+                id_factory=self.id_factory,
             )
+            # A recovered checkpoint can be behind the last observed live tick.
+            self._generation += 1
 
     def reset(self) -> None:
         """Clear session activity and restore the neutral facility belief baseline."""
@@ -282,6 +335,7 @@ class AgentSession:
     def _invalidate_world(self) -> None:
         self.touch()
         self._generation += 1
+        self._load_request = None
         self.runtime = None
         self.load_error = None
         self._dirty = True
@@ -751,6 +805,71 @@ class AgentSession:
             "persistence_error": runtime.persistence_error,
         }
 
+    def require_simulation_identity(self, expected: SimulationRunIdentity) -> None:
+        self.require_active()
+        current_run_id = self.runtime.run_id if self.runtime else None
+        if (expected.run_id, expected.generation) != (current_run_id, self._generation):
+            raise StaleRequestError("The simulation run has changed. Read state and retry.")
+
+    def require_simulation(self, *, allow_failed: bool = False) -> SimulationRuntime:
+        runtime = self.runtime
+        if self.load_error or (runtime and runtime.error and not allow_failed):
+            raise SimulationUnavailable("The simulation failed. Reset or load the run again.")
+        if runtime is None:
+            raise SimulationStateConflict("Load a warehouse simulation first.")
+        return runtime
+
+    def live_simulation_state(self) -> SimulationStateResponse:
+        """Capture a detached polling response while the caller holds the session lock."""
+        runtime = self.runtime
+        snap = runtime.read() if runtime else None
+        status = snap.status if snap else None
+        observation = {}
+        if status is not None:
+            for capability in ("camera_detect", "lidar_scan", "ambient_light", "robot_pose"):
+                latest = self.agent.memory.get_latest_sample(
+                    status.run_id, capability, at_sim_time_ms=status.sim_time_ms
+                )
+                if latest is not None:
+                    observation[capability] = latest
+        error = runtime.error if runtime else self.load_error
+        return SimulationStateResponse(
+            run_id=status.run_id if status else None,
+            generation=self._generation,
+            revision=runtime.revision if runtime else 0,
+            snapshot_sequence=snap.snapshot_sequence if snap else None,
+            sim_time_ms=status.sim_time_ms if status else None,
+            epoch_utc=status.epoch_utc if status else None,
+            playback_rate=status.playback_rate if status else 0.5,
+            state="error" if error else status.state if status else "pending",
+            error=error,
+            persistence_error=runtime.persistence_error if runtime else None,
+            llm_ready=self.config.is_live and self.config.has_valid_key,
+            patrol=SimulationPatrolState(
+                state=runtime.controller.state,
+                waypoint_index=runtime.controller.current_waypoint_index,
+                target_waypoint=runtime.controller.target_waypoint,
+            )
+            if runtime
+            else None,
+            audience=SimulationAudience(
+                snapshot=snap,
+                bounds=runtime.scenario.bounds,
+                robot_radius_cm=runtime.scenario.robot_radius_cm,
+                routes=runtime.scenario.routes,
+                patrol=runtime.scenario.patrol,
+            ).model_copy(deep=True)
+            if runtime
+            else None,
+            observation=SimulationObservationState(
+                latest=observation,
+                last_acquisition_ms=runtime.last_acquisition_ms if runtime else None,
+            ),
+            belief=SimulationBeliefState(
+                recent_changes=list(runtime.belief_changes) if runtime else []
+            ),
+        )
+
     def snapshot(self) -> dict[str, object]:
         """Read actual environment, graph, active beliefs, and full memory ledger."""
         graph = self.agent.graph.get_graph()
@@ -796,6 +915,9 @@ class AgentService:
         *,
         now: Callable[[], float] = monotonic,
         background: bool = True,
+        epoch_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        id_factory: Callable[[], UUID] = uuid4,
+        exporter: SimulationExporter | None = None,
     ) -> None:
         self._store = store
         self._sessions: dict[str, AgentSession] = {}
@@ -806,6 +928,9 @@ class AgentService:
         self._shutdown_lock = threading.Lock()
         self._config = config or get_provider_config()
         self._now = now
+        self._epoch_now = epoch_now
+        self._id_factory = id_factory
+        self._exporter = exporter
         self._background = background
         self._stop = threading.Event()
         self._runner: threading.Thread | None = None
@@ -816,7 +941,7 @@ class AgentService:
         with self._lifecycle:
             self._lifecycle.wait_for(lambda: key not in self._changing_ids or self._stop.is_set())
             if self._stop.is_set():
-                raise RuntimeError("Agent service is shutting down.")
+                raise SessionUnavailable("Agent service is shutting down.")
             self._changing_ids.add(key)
         try:
             yield
@@ -829,7 +954,7 @@ class AgentService:
         canonical_id = _canonical_session_id(session_id)
         with self._lock:
             if self._stop.is_set():
-                raise RuntimeError("Agent service is shutting down.")
+                raise SessionUnavailable("Agent service is shutting down.")
             existing = self._sessions.get(canonical_id)
         if existing is not None:
             return existing
@@ -838,7 +963,7 @@ class AgentService:
                 if canonical_id in self._sessions:
                     return self._sessions[canonical_id]
                 if len(self._sessions) + self._reserved_slots >= 128:
-                    raise RuntimeError("The local demo has reached its 128-session limit.")
+                    raise SessionUnavailable("The local demo has reached its 128-session limit.")
                 self._reserved_slots += 1
             try:
                 session = self._restore_session(canonical_id)
@@ -854,7 +979,7 @@ class AgentService:
             return session
 
     def _restore_session(self, key: str) -> AgentSession:
-        session = AgentSession(config=self._config, now=self._now)
+        session = AgentSession(config=self._config, now=self._now, id_factory=self._id_factory)
         if self._store is None:
             return session
         session._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="groundtruth-save")
@@ -866,6 +991,7 @@ class AgentService:
                 self.save_session(key, session)
         except Exception:
             session.runtime = None
+            session._load_request = None
             session.load_error = (
                 "Could not restore saved session. Reset or load a scenario to recover."
             )
@@ -1003,6 +1129,10 @@ class AgentService:
                         ):
                             return
                         payload = capture()
+                elif runtime is not None:
+                    with session.lock:
+                        if runtime.persistence_error:
+                            raise SimulationUnavailable("An earlier checkpoint failed.")
                 store.save(key, *payload)
             except Exception:
                 with session.lock:
@@ -1026,7 +1156,7 @@ class AgentService:
     ) -> SessionSimulationStatus:
         session = self.get_session(session_id)
         with session.lock:
-            session.load_simulation(scenario, epoch_utc or datetime.now(UTC))
+            session.load_simulation(scenario, epoch_utc or self._epoch_now())
             pending = self._queue_save(_canonical_session_id(session_id), session)
             status = session.simulation_status()
         self._ensure_runner()
@@ -1044,22 +1174,191 @@ class AgentService:
             runtime = session.runtime
             if runtime is None:
                 raise ValueError("Load a warehouse simulation first.")
-            if control.action == "reset":
-                scenario = runtime.scenario.model_copy(deep=True)
-                scenario.config.playback_rate = runtime.clock.rate
-                session.load_simulation(scenario, datetime.now(UTC))
-            elif control.action == "set_rate":
-                assert control.playback_rate is not None
-                runtime.set_rate(control.playback_rate)
-            else:
-                {"play": runtime.play, "pause": runtime.pause, "step": runtime.step}[
-                    control.action
-                ]()
+            self._apply_simulation_control(session, runtime, control)
             pending = self._queue_save(_canonical_session_id(session_id), session)
             status = session.simulation_status()
         if pending is not None:
             pending.result()
         return status
+
+    def _apply_simulation_control(
+        self, session: AgentSession, runtime: SimulationRuntime, control: SimulationControl
+    ) -> None:
+        if control.action == "reset":
+            scenario = runtime.scenario.model_copy(deep=True)
+            scenario.config.playback_rate = runtime.clock.rate
+            session.load_simulation(scenario, self._epoch_now())
+        elif control.action == "set_rate":
+            assert control.playback_rate is not None
+            runtime.set_rate(control.playback_rate)
+        else:
+            {"play": runtime.play, "pause": runtime.pause, "step": runtime.step}[control.action]()
+
+    def load_warehouse(
+        self, session_id: str, request: SimulationLoadRequest
+    ) -> SimulationStateResponse:
+        key = _canonical_session_id(session_id)
+        scenario = warehouse_preset()
+        session = self.get_session(key)
+        with session.lock:
+            session.require_active()
+            previous = session._load_request
+            if previous and previous.request_id == request.request_id:
+                if previous != request:
+                    raise SimulationStateConflict("This request ID has a different load payload.")
+                session.require_simulation()
+                session.touch()
+                pending = session._pending_save
+            else:
+                session.require_simulation_identity(request.expected)
+                try:
+                    session.load_simulation(scenario, self._epoch_now())
+                except Exception as exc:
+                    raise SimulationUnavailable("Could not initialize the simulation.") from exc
+                session._load_request = request
+                pending = self._save_simulation_api(key, session)
+            state = session.live_simulation_state()
+        self._ensure_runner()
+        self._confirm_simulation_save(session, pending, state)
+        return state
+
+    def apply_simulation_control(
+        self, session_id: str, request: SimulationControlRequest
+    ) -> SimulationStateResponse:
+        key = _canonical_session_id(session_id)
+        session = self.get_session(key)
+        with session.lock:
+            session.require_simulation_identity(request.expected)
+            runtime = session.require_simulation(allow_failed=request.action == "reset")
+            state = runtime.read().status.state
+            if request.action == "step" and state != "paused":
+                raise SimulationStateConflict("Manual step requires a paused run.")
+            if request.action == "play" and state == "completed":
+                raise SimulationStateConflict("Reset the completed run before playing.")
+            session.touch()
+            before = runtime.revision
+            try:
+                self._apply_simulation_control(session, runtime, request)
+            except Exception as exc:
+                raise SimulationUnavailable("The simulation control failed.") from exc
+            if session.runtime is not runtime or runtime.revision != before:
+                pending = self._save_simulation_api(key, session)
+            else:
+                pending = session._pending_save
+            result = session.live_simulation_state()
+        self._confirm_simulation_save(session, pending, result)
+        return result
+
+    def disrupt_simulation(
+        self, session_id: str, request: SimulationDisruptRequest
+    ) -> SimulationDisruptResponse:
+        key = _canonical_session_id(session_id)
+        session = self.get_session(key)
+        with session.lock:
+            session.require_active()
+            runtime = session.runtime
+            previous = (
+                runtime.presenter_requests.get(request.request_id)
+                if runtime and request.expected.run_id == runtime.run_id
+                else None
+            )
+            if previous is not None:
+                saved_request, event = previous
+                if saved_request != request:
+                    raise SimulationStateConflict(
+                        "This request ID has a different disruption payload."
+                    )
+                session.require_simulation()
+                pending = session._pending_save
+            else:
+                session.require_simulation_identity(request.expected)
+                runtime = session.require_simulation()
+                if runtime.read().status.state == "completed":
+                    raise SimulationStateConflict(
+                        "Reset the completed run before scheduling events."
+                    )
+                if len(runtime.presenter_requests) >= MAX_PRESENTER_INPUTS:
+                    raise SimulationStateConflict("This run has reached its presenter input limit.")
+                try:
+                    event = runtime.schedule_disruption(request)
+                except ValueError as exc:
+                    raise SimulationInputRejected(
+                        "The disruption has an invalid target, geometry, or schedule."
+                    ) from exc
+                pending = self._save_simulation_api(key, session)
+            session.touch()
+            state = session.live_simulation_state()
+        self._confirm_simulation_save(session, pending, state)
+        return SimulationDisruptResponse(event=event, state=state)
+
+    def _save_simulation_api(self, key: str, session: AgentSession) -> Future | None:
+        try:
+            return self._queue_save(key, session)
+        except Exception as exc:
+            raise SimulationUnavailable("Could not save the simulation checkpoint.") from exc
+
+    @staticmethod
+    def _confirm_simulation_save(
+        session: AgentSession, pending: Future | None, state: SimulationStateResponse
+    ) -> None:
+        if pending is not None:
+            try:
+                pending.result()
+            except Exception as exc:
+                raise SimulationUnavailable("Could not save the simulation checkpoint.") from exc
+        with session.lock:
+            session.require_simulation_identity(state)
+            session.require_simulation()
+
+    def read_live_simulation(self, session_id: str) -> SimulationStateResponse:
+        session = self.get_session(session_id)
+        with session.lock:
+            session.touch()
+            return session.live_simulation_state()
+
+    def export_simulation(self, session_id: str) -> SimulationExportBundle:
+        key = _canonical_session_id(session_id)
+        if self._exporter is None:
+            raise SimulationExportNotReady("Replay export is not ready. It requires P2-12.")
+        session = self.get_session(key)
+        with session.lock:
+            session.touch()
+            runtime = session.require_simulation()
+            snapshot = runtime.read()
+            target = SimulationExportTarget(
+                session_id=key,
+                run_id=runtime.run_id,
+                generation=session._generation,
+                epoch_utc=snapshot.status.epoch_utc,
+                sim_time_ms=snapshot.status.sim_time_ms,
+                snapshot_sequence=snapshot.snapshot_sequence,
+                next_sample_sequence=runtime.next_sample_sequence,
+                scenario=runtime.scenario.model_copy(deep=True),
+                presenter_events=tuple(
+                    event.model_copy(deep=True) for _, event in runtime.presenter_requests.values()
+                ),
+            )
+        bundle = SimulationExportBundle.model_validate(
+            self._exporter.export(deepcopy(target)).model_dump()
+        )
+        if (
+            bundle.run_id != target.run_id
+            or bundle.epoch_utc != target.epoch_utc
+            or bundle.sim_time_ms != target.sim_time_ms
+            or bundle.snapshot_sequence != target.snapshot_sequence
+            or bundle.scenario != target.scenario
+            or bundle.presenter_events != list(target.presenter_events)
+            or any(
+                sample.sample_sequence >= target.next_sample_sequence
+                for sample in bundle.observations
+            )
+        ):
+            raise RuntimeError("Exporter returned an inconsistent run boundary.")
+        with session.lock:
+            session.require_simulation_identity(
+                SimulationRunIdentity(run_id=target.run_id, generation=target.generation)
+            )
+        return bundle
 
     def read_simulation(self, session_id: str) -> SessionSimulationRead:
         session = self.get_session(session_id)

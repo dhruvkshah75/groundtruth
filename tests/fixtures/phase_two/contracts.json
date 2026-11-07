@@ -1301,6 +1301,85 @@
         "limit": 100
       }
     ],
+    "api_load": {
+      "preset": "warehouse_inspection_v1",
+      "expected": {
+        "run_id": null,
+        "generation": 0
+      },
+      "request_id": "00000000-0000-0000-0000-000000000010"
+    },
+    "api_controls": [
+      {
+        "action": "set_rate",
+        "playback_rate": 0.25,
+        "expected": {
+          "run_id": "00000000-0000-0000-0000-000000000001",
+          "generation": 1
+        }
+      },
+      {
+        "action": "step",
+        "expected": {
+          "run_id": "00000000-0000-0000-0000-000000000001",
+          "generation": 1
+        }
+      }
+    ],
+    "api_disruptions": [
+      {
+        "expected": {
+          "run_id": "00000000-0000-0000-0000-000000000001",
+          "generation": 1
+        },
+        "request_id": "00000000-0000-0000-0000-000000000011",
+        "at_ms": 500,
+        "disruption": {
+          "kind": "relocate_parcel",
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150,
+            "y_cm": 390
+          },
+          "duration_ms": 1000
+        }
+      },
+      {
+        "expected": {
+          "run_id": "00000000-0000-0000-0000-000000000001",
+          "generation": 1
+        },
+        "request_id": "00000000-0000-0000-0000-000000000012",
+        "disruption": {
+          "kind": "sensor_availability",
+          "capability": "lidar_scan",
+          "available": false
+        }
+      }
+    ],
+    "api_pending": {
+      "run_id": null,
+      "generation": 0,
+      "revision": 0,
+      "snapshot_sequence": null,
+      "sim_time_ms": null,
+      "epoch_utc": null,
+      "playback_rate": 0.5,
+      "state": "pending",
+      "error": null,
+      "persistence_error": null,
+      "llm_ready": false,
+      "patrol": null,
+      "audience": null,
+      "observation": {
+        "latest": {},
+        "last_acquisition_ms": null
+      },
+      "belief": {
+        "graph_path": "/api/state",
+        "recent_changes": []
+      }
+    },
     "controls": [
       {
         "action": "play"

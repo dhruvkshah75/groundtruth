@@ -1,4 +1,12 @@
 import type { ApiErrorPayload, ApiHealth, AppState } from "./types";
+import type {
+  SimulationControlRequest,
+  SimulationDisruptRequest,
+  SimulationDisruptResponse,
+  SimulationExportBundle,
+  SimulationLoadRequest,
+  SimulationStateResponse,
+} from "./simulationTypes";
 
 const SESSION_KEY = "groundtruth-session-id";
 
@@ -13,6 +21,13 @@ export function getSessionId(): string {
 
 export function setSessionId(id: string): void {
   sessionStorage.setItem(SESSION_KEY, id);
+}
+
+export class ApiRequestError extends Error {
+  constructor(public status: number, public code: string | undefined, message: string) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -37,9 +52,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (path === "/api/new-chat" && response.status === 404 && detail?.code === "not_found") {
       throw new Error("New chat requires the updated backend. Restart the Python Agent server to enable it; restarting clears the current in-memory session.");
     }
-    throw new Error(detail?.error || `The Agent API returned HTTP ${response.status}.`);
+    throw new ApiRequestError(
+      response.status, detail?.code, detail?.error || `The Agent API returned HTTP ${response.status}.`,
+    );
   }
   return payload as T;
+}
+
+function postSimulation<T>(action: "load" | "control" | "disrupt", payload: object): Promise<T> {
+  return request<T>(`/api/simulation/${action}`, { method: "POST", body: JSON.stringify(payload) });
 }
 
 export const api = {
@@ -70,4 +91,9 @@ export const api = {
     }
   },
   reset: () => request<AppState>("/api/reset", { method: "POST", body: "{}" }),
+  simulationState: () => request<SimulationStateResponse>("/api/simulation/state"),
+  loadSimulation: (payload: SimulationLoadRequest) => postSimulation<SimulationStateResponse>("load", payload),
+  controlSimulation: (payload: SimulationControlRequest) => postSimulation<SimulationStateResponse>("control", payload),
+  disruptSimulation: (payload: SimulationDisruptRequest) => postSimulation<SimulationDisruptResponse>("disrupt", payload),
+  exportSimulation: () => request<SimulationExportBundle>("/api/simulation/export"),
 };

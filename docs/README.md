@@ -29,6 +29,7 @@
 - [Temporal object questions and evidence-grounded explanations (P2-08)](phase-two/Temporal_Questions.md) - additive `object_location_query` intent supporting 5 temporal modes, strict anti-interpolation epistemic grounding, outage resilience, and audit-backed explanations.
 
 - [Session simulation runtime (P2-07)](phase-two/Session_Runtime.md) - independent warehouse scheduling, evidence capture, checkpoint recovery, and service integration.
+- [Simulation HTTP API (P2-09)](phase-two/Simulation_API.md) - presenter controls, live polling, and the replay exporter interface.
 
 ## Supporting context
 
