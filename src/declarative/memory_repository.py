@@ -826,6 +826,15 @@ class MemoryRepository:
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_stored_sample(r) for r in rows]
 
+    def get_latest_run_sample(self, run_id: UUID) -> StoredObservationSample | None:
+        """Return the highest allocated sample sequence across a run's capabilities."""
+        row = self._conn.execute(
+            "SELECT raw_sample_json, stored_at FROM observation_samples WHERE run_id = ? "
+            "ORDER BY sample_sequence DESC LIMIT 1",
+            (str(run_id),),
+        ).fetchone()
+        return self._row_to_stored_sample(row) if row is not None else None
+
     def get_latest_sample(
         self,
         run_id: UUID,

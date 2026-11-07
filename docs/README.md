@@ -28,6 +28,8 @@
 - [Temporal belief ingestion and epistemic summaries (P2-05)](phase-two/Temporal_Belief_Ingestion.md) - time-aware belief updates, auditable revisions, last-seen tracking, and route verification.
 - [Temporal object questions and evidence-grounded explanations (P2-08)](phase-two/Temporal_Questions.md) - additive `object_location_query` intent supporting 5 temporal modes, strict anti-interpolation epistemic grounding, outage resilience, and audit-backed explanations.
 
+- [Session simulation runtime (P2-07)](phase-two/Session_Runtime.md) - independent warehouse scheduling, evidence capture, checkpoint recovery, and service integration.
+
 ## Supporting context
 
 - [agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.

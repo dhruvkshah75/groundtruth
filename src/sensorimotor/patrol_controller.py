@@ -461,6 +461,17 @@ class PatrolController:
     # Step 2: Post-Tick Reconciliation
     # ------------------------------------------------------------------
 
+    def confirm_idle_tick(self, sample: ObservationSample) -> None:
+        """Advance the checkpoint boundary when the decision issued no command."""
+        if (
+            not self._reconciled
+            or sample.run_id != self._run_id
+            or sample.sim_time_ms != self._current_sim_time_ms + self._config.step_ms
+            or self._extract_pose(sample) != self._current_pose
+        ):
+            raise ValueError("Uncommanded tick does not match the patrol pose or time")
+        self._current_sim_time_ms = sample.sim_time_ms
+
     def reconcile(
         self,
         post_tick_pose_observation: ObservationSample,

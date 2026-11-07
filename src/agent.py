@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,9 +26,10 @@ from src.procedural.capability_validator import CapabilityValidator
 from src.procedural.epistemic_evaluator import EpistemicEvaluation, EpistemicEvaluator
 from src.procedural.execution_results import PlanExecutionResult
 from src.procedural.intent_coverage_reviewer import IntentCoverageReviewer
-from src.procedural.intent_planner import IntentPlanner
+from src.procedural.intent_planner import IntentPlanner, IntentPlannerOutcome
 from src.procedural.intent_provider import IntentProvider, IntentProviderUnavailableError
 from src.procedural.plan_builder import PlanBuilder
+from src.procedural.plan_executor import EnvironmentInterface
 from src.procedural.rule_based_provider import RuleBasedIntentProvider
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import RobotState, WorldState
@@ -176,8 +179,20 @@ class GroundedAgent:
 
     def ask(self, question: str) -> AgentResponse:
         """Execute one complete grounded query cycle: plan -> execute -> evaluate -> synthesize."""
-        # 1. Execute plan via composition boundary
-        plan_result = self._composition.process_question(question)
+        return self.capture(question, self.interpret(question))()
+
+    def interpret(self, question: str) -> IntentPlannerOutcome:
+        return self._composition.interpret(question)
+
+    def capture(
+        self,
+        question: str,
+        intent: IntentPlannerOutcome,
+        *,
+        sensors: EnvironmentInterface | None = None,
+    ) -> Callable[[], AgentResponse]:
+        """Execute deterministic operations and prepare a detached provider-only continuation."""
+        plan_result = self._composition.execute_intent(intent, sensors=sensors)
 
         # Propagate live provider failures immediately to the API layer
         fallback = getattr(plan_result, "fallback", None)
@@ -190,6 +205,7 @@ class GroundedAgent:
             plan_result=plan_result,
             user_question=question,
             memory_repo=self._memory,
+            revise_routes=sensors is None,
         )
 
         # 3. Pull current active projection and facts
@@ -198,78 +214,34 @@ class GroundedAgent:
 
         plan_verifiable = getattr(plan_result, "plan_verifiable", None)
 
-        # 4. Synthesize final answer via ReAct loop when provider supports it
-        final_answer = eval_outcome.explanation
-        explanation_source = "rule_based"
-        tool_name = "intent_evaluation"
-        tool_call_id = "deterministic_0"
-        tool_args: dict[str, Any] = {}
-        model_name = None
-
-        if self._provider is not None:
-            tool_name = getattr(self._provider, "last_tool_name", "") or "intent_evaluation"
-            tool_call_id = getattr(self._provider, "last_tool_call_id", "") or "deterministic_0"
-            tool_args = getattr(self._provider, "last_tool_args", {}) or {}
-            model_name = getattr(self._provider, "model_name", None)
-
-            if hasattr(self._provider, "generate_grounded_explanation"):
-                tool_result = {
-                    "status": eval_outcome.status,
-                    "perspectives": eval_outcome.perspectives,
-                    "revisions": [
-                        {
-                            "old_fact_id": str(r.audit_event.input_fact_ids[0])
-                            if r.audit_event.input_fact_ids
-                            else None,
-                            "new_fact_id": str(r.successor.fact_id),
-                            "reason": r.audit_event.reason,
-                            "new_fact": (
-                                f"{r.successor.subject} {r.successor.predicate} "
-                                f"{r.successor.object}"
-                            ),
-                        }
-                        for r in eval_outcome.revisions
-                    ],
-                    "sensor_observations": eval_outcome.sensor_telemetry,
-                    "active_memory_facts": [
-                        f"{f.subject} {f.predicate} {f.object} (source: {f.source_agent})"
-                        for f in eval_outcome.memory_facts
-                    ],
-                    "deterministic_evaluation_summary": eval_outcome.explanation,
+        provider = self._provider
+        tool_name = getattr(provider, "last_tool_name", "") or "intent_evaluation"
+        tool_call_id = getattr(provider, "last_tool_call_id", "") or "deterministic_0"
+        tool_args = deepcopy(getattr(provider, "last_tool_args", {}) or {})
+        model_name = getattr(provider, "model_name", None)
+        tool_result = {
+            "status": eval_outcome.status,
+            "perspectives": eval_outcome.perspectives,
+            "revisions": [
+                {
+                    "old_fact_id": str(r.audit_event.input_fact_ids[0])
+                    if r.audit_event.input_fact_ids
+                    else None,
+                    "new_fact_id": str(r.successor.fact_id),
+                    "reason": r.audit_event.reason,
+                    "new_fact": (
+                        f"{r.successor.subject} {r.successor.predicate} {r.successor.object}"
+                    ),
                 }
-                try:
-                    grounded_text = self._provider.generate_grounded_explanation(
-                        user_question=question,
-                        tool_name=tool_name,
-                        tool_call_id=tool_call_id,
-                        tool_result=tool_result,
-                    )
-                    exact = validate_grounded_response(grounded_text, eval_outcome)
-                    reviewed = (
-                        bool(grounded_text and grounded_text.strip())
-                        and not exact
-                        and hasattr(self._provider, "verify_grounded_explanation")
-                        and self._provider.verify_grounded_explanation(
-                            question, tool_result, grounded_text
-                        )
-                    )
-                    if exact or reviewed:
-                        final_answer = grounded_text.strip()
-                        explanation_source = "llm"
-                    else:
-                        LOGGER.warning(
-                            "LLM grounded explanation failed consistency guard or was empty; "
-                            "safely using deterministic evaluation outcome"
-                        )
-                        final_answer = eval_outcome.explanation
-                        explanation_source = "deterministic_fallback"
-                except IntentProviderUnavailableError:
-                    raise
-                except Exception as exc:
-                    LOGGER.warning("LLM explanation call failed (%s); using fallback", exc)
-                    final_answer = eval_outcome.explanation
-                    explanation_source = "deterministic_fallback"
-
+                for r in eval_outcome.revisions
+            ],
+            "sensor_observations": eval_outcome.sensor_telemetry,
+            "active_memory_facts": [
+                f"{f.subject} {f.predicate} {f.object} (source: {f.source_agent})"
+                for f in eval_outcome.memory_facts
+            ],
+            "deterministic_evaluation_summary": eval_outcome.explanation,
+        }
         approved_ops = getattr(plan_result, "approved_operations", [])
         execution_summary = {
             "memory_queries_count": len(getattr(plan_result, "memory_results", [])),
@@ -384,26 +356,80 @@ class GroundedAgent:
             arguments=tool_args,
             approved_operations=list(approved_ops),
             execution_summary=execution_summary,
-            explanation_source=explanation_source,
+            explanation_source="rule_based",
             model=model_name,
             operations=operations_trace,
         )
 
-        return AgentResponse(
-            question=question,
-            answer=final_answer,
-            status=eval_outcome.status,
-            perspectives=eval_outcome.perspectives,
-            revisions=eval_outcome.revisions,
-            audit_events=eval_outcome.audit_events,
-            audit_trails=eval_outcome.audit_trails,
-            active_facts=active_facts,
-            sensor_telemetry=eval_outcome.sensor_telemetry,
-            graph=current_graph,
-            plan_verifiable=plan_verifiable,
-            plan_reason=_plan_reason(plan_result),
-            react_trace=react_trace,
+        response = deepcopy(
+            AgentResponse(
+                question=question,
+                answer=eval_outcome.explanation,
+                status=eval_outcome.status,
+                perspectives=eval_outcome.perspectives,
+                revisions=eval_outcome.revisions,
+                audit_events=eval_outcome.audit_events,
+                audit_trails=eval_outcome.audit_trails,
+                active_facts=active_facts,
+                sensor_telemetry=eval_outcome.sensor_telemetry,
+                graph=current_graph,
+                plan_verifiable=plan_verifiable,
+                plan_reason=_plan_reason(plan_result),
+                react_trace=react_trace,
+            )
         )
+        evaluation = deepcopy(eval_outcome)
+        payload = deepcopy(tool_result)
+        return lambda: _explain(response, provider, evaluation, payload)
+
+
+def _explain(
+    response: AgentResponse,
+    provider: IntentProvider | None,
+    eval_outcome: EpistemicEvaluation,
+    tool_result: dict[str, Any],
+) -> AgentResponse:
+    """Run synthesis and review with request-owned evidence only."""
+    trace = response.react_trace
+    assert trace is not None
+    question = response.question
+    tool_name, tool_call_id = trace.tool_name, trace.tool_call_id
+    final_answer, explanation_source = response.answer, trace.explanation_source
+    if hasattr(provider, "generate_grounded_explanation"):
+        try:
+            grounded_text = provider.generate_grounded_explanation(
+                user_question=question,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_result=tool_result,
+            )
+            exact = validate_grounded_response(grounded_text, eval_outcome)
+            reviewed = (
+                bool(grounded_text and grounded_text.strip())
+                and not exact
+                and hasattr(provider, "verify_grounded_explanation")
+                and provider.verify_grounded_explanation(question, tool_result, grounded_text)
+            )
+            if exact or reviewed:
+                final_answer = grounded_text.strip()
+                explanation_source = "llm"
+            else:
+                LOGGER.warning(
+                    "LLM grounded explanation failed consistency guard or was empty; "
+                    "safely using deterministic evaluation outcome"
+                )
+                final_answer = eval_outcome.explanation
+                explanation_source = "deterministic_fallback"
+        except IntentProviderUnavailableError:
+            raise
+        except Exception:
+            LOGGER.warning("LLM explanation call failed. Using deterministic fallback.")
+            final_answer = eval_outcome.explanation
+            explanation_source = "deterministic_fallback"
+
+    response.answer = final_answer
+    trace.explanation_source = explanation_source
+    return response
 
 
 def _plan_reason(plan_result: object) -> str | None:

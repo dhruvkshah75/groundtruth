@@ -25,6 +25,9 @@ class CompositionService:
         self._builder = builder
         self._executor = PlanExecutor(memory_repository=memory, environment=environment)
 
+    def interpret(self, user_question: str) -> IntentPlannerOutcome:
+        return self._planner.plan_intent(user_question)
+
     def process_question(
         self, user_question: str
     ) -> PlanExecutionResult | PlanningOutcome | IntentPlannerOutcome:
@@ -33,7 +36,11 @@ class CompositionService:
         Returns:
             The executed results if planning succeeded, or the fallback outcome.
         """
-        intent_outcome = self._planner.plan_intent(user_question)
+        return self.execute_intent(self.interpret(user_question))
+
+    def execute_intent(
+        self, intent_outcome: IntentPlannerOutcome, *, sensors: EnvironmentInterface | None = None
+    ) -> PlanExecutionResult | PlanningOutcome | IntentPlannerOutcome:
         if intent_outcome.fallback is not None:
             return intent_outcome
 
@@ -43,4 +50,4 @@ class CompositionService:
             return plan_outcome
 
         assert plan_outcome.plan is not None
-        return self._executor.execute(plan_outcome.plan)
+        return self._executor.execute(plan_outcome.plan, sensors=sensors)
