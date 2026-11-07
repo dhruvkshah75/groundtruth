@@ -49,6 +49,16 @@ from .simulation import (
     StoredObservationSample,
     TemporalObservationQuery,
 )
+from .simulation_api import (
+    SimulationApiError,
+    SimulationControlRequest,
+    SimulationDisruptRequest,
+    SimulationDisruptResponse,
+    SimulationExportBundle,
+    SimulationLoadRequest,
+    SimulationRunIdentity,
+    SimulationStateResponse,
+)
 
 __all__ = [
     "AuditEvent",
@@ -100,3 +110,14 @@ __all__ += [
 ]
 
 __all__ += ["PlaybackRate", "Rectangle", "ScenarioEvent"]
+
+__all__ += [
+    "SimulationApiError",
+    "SimulationControlRequest",
+    "SimulationDisruptRequest",
+    "SimulationDisruptResponse",
+    "SimulationExportBundle",
+    "SimulationLoadRequest",
+    "SimulationRunIdentity",
+    "SimulationStateResponse",
+]

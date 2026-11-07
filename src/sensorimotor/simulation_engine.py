@@ -16,6 +16,7 @@ from src.contracts.simulation import (
     Pose,
     ScenarioDefinition,
     ScenarioEvent,
+    SensorAvailabilityEvent,
     SimulationControl,
     SimulationSnapshot,
     SimulationStatus,
@@ -174,6 +175,24 @@ class SimulationEngine:
                 "value": EVENT.dump_python(event, mode="json"),
             }
         )
+
+    def schedule_presenter_event(self, event: ScenarioEvent) -> ScenarioEvent:
+        """Assign an order and reserve an exclusive lighting or sensor slot."""
+        for scheduled in self._events:
+            if scheduled.at_ms != event.at_ms:
+                continue
+            if isinstance(event, LightingEvent) and isinstance(scheduled, LightingEvent):
+                raise ValueError("A lighting change is already scheduled for this tick.")
+            if (
+                isinstance(event, SensorAvailabilityEvent)
+                and isinstance(scheduled, SensorAvailabilityEvent)
+                and event.capability == scheduled.capability
+            ):
+                raise ValueError("A change for this sensor is already scheduled for this tick.")
+        sequence = max((scheduled.sequence for scheduled in self._events), default=-1) + 1
+        assigned = event.model_copy(update={"sequence": sequence})
+        self.queue_event(assigned)
+        return assigned
 
     def command_robot(self, destination: Pose) -> None:
         """Request one next-tick, speed-bounded translation/cardinal turn.

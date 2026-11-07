@@ -9,14 +9,34 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+from uuid import UUID
 
+from src.contracts.simulation_api import (
+    SimulationApiError,
+    SimulationControlRequest,
+    SimulationDisruptRequest,
+    SimulationLoadRequest,
+)
 from src.procedural.intent_provider import IntentProviderUnavailableError
-from src.web.service import AgentService, StaleRequestError
+from src.web.service import (
+    AgentService,
+    SessionUnavailable,
+    SimulationExportNotReady,
+    SimulationInputRejected,
+    SimulationStateConflict,
+    SimulationUnavailable,
+    StaleRequestError,
+)
 from src.web.session_store import SessionStore
 
 LOGGER = logging.getLogger("groundtruth.web")
 MAX_REQUEST_BYTES = 16_384
 DEFAULT_WEB_ROOT = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+SIMULATION_POST = {
+    "/api/simulation/load": (SimulationLoadRequest, AgentService.load_warehouse),
+    "/api/simulation/control": (SimulationControlRequest, AgentService.apply_simulation_control),
+    "/api/simulation/disrupt": (SimulationDisruptRequest, AgentService.disrupt_simulation),
+}
 
 
 class AgentRequestHandler(SimpleHTTPRequestHandler):
@@ -29,6 +49,9 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
+        if path in ("/api/simulation/state", "/api/simulation/export"):
+            self._simulation_request(path)
+            return
         if path == "/api/health":
             self._send_json(200, self.service.health())
             return
@@ -59,12 +82,15 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 "Frontend build is missing. Run `npm install` and `npm run build` first.",
             )
             return
-        if path == "/graph":
+        if path in ("/graph", "/simulation", "/simulation/"):
             self.path = "/index.html"
         super().do_GET()
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
+        if path in SIMULATION_POST:
+            self._simulation_request(path)
+            return
         if not path.startswith("/api/"):
             self._send_error_json(404, "not_found", "API endpoint not found.")
             return
@@ -114,6 +140,57 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 500, "agent_request_failed", "Agent request failed. Check backend logs."
             )
 
+    def _simulation_request(self, path: str) -> None:
+        try:
+            session_id = str(UUID(self.headers.get("X-Session-ID", "")))
+        except ValueError:
+            self._send_simulation_error(
+                400, "invalid_session", "X-Session-ID must be a valid UUID."
+            )
+            return
+
+        attachment = None
+        try:
+            if path in SIMULATION_POST:
+                model, action = SIMULATION_POST[path]
+                try:
+                    request = model.model_validate(self._read_json_body())
+                except (ValueError, RecursionError):
+                    self._send_simulation_error(
+                        400, "invalid_request", "Invalid simulation request."
+                    )
+                    return
+                result = action(self.service, session_id, request)
+            elif path == "/api/simulation/export":
+                result = self.service.export_simulation(session_id)
+                attachment = f'attachment; filename="groundtruth-replay-{result.run_id}.json"'
+            else:
+                result = self.service.read_live_simulation(session_id)
+            payload = result.model_dump(mode="json")
+        except SimulationInputRejected as exc:
+            self._send_simulation_error(400, "invalid_request", str(exc))
+        except StaleRequestError:
+            self._send_simulation_error(409, "stale_run", "The simulation run or session changed.")
+        except SimulationStateConflict as exc:
+            self._send_simulation_error(409, "state_conflict", str(exc))
+        except SimulationExportNotReady as exc:
+            self._send_simulation_error(503, "export_not_ready", str(exc))
+        except IntentProviderUnavailableError:
+            self._send_simulation_error(503, "provider_unavailable", "The provider is unavailable.")
+        except (SimulationUnavailable, SessionUnavailable):
+            LOGGER.warning("Simulation request could not complete")
+            self._send_simulation_error(
+                503, "runtime_unavailable", "The simulation could not complete the operation."
+            )
+        except Exception:
+            LOGGER.error("Unexpected simulation API failure")
+            self._send_simulation_error(500, "simulation_failed", "The simulation request failed.")
+        else:
+            self._send_json(200, payload, attachment=attachment)
+
+    def _send_simulation_error(self, status: int, code: str, message: str) -> None:
+        self._send_json(status, SimulationApiError(code=code, error=message).model_dump())
+
     def do_DELETE(self) -> None:
         if urlsplit(self.path).path != "/api/session":
             self._send_error_json(404, "not_found", "API endpoint not found.")
@@ -137,17 +214,21 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         if self.headers.get_content_type() != "application/json":
             raise ValueError("Content-Type must be application/json.")
         raw_body = self.rfile.read(size)
+        if len(raw_body) != size:
+            raise ValueError("Incomplete request body.")
         payload = json.loads(raw_body)
         if not isinstance(payload, dict):
             raise ValueError("JSON request body must be an object.")
         return payload
 
-    def _send_json(self, status: int, payload: object) -> None:
+    def _send_json(self, status: int, payload: object, *, attachment: str | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if attachment:
+            self.send_header("Content-Disposition", attachment)
         self.end_headers()
         self.wfile.write(body)
 

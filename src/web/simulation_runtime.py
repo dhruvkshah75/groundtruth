@@ -5,18 +5,41 @@ This module does not start threads or manage sessions and persistence.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime
 from time import monotonic
 from uuid import UUID, uuid4
 
+from pydantic import TypeAdapter
+
 from src.contracts.models import ObservationRequest, ObservationUnavailable, SensorObservation
-from src.contracts.simulation import ObservationSample, ScenarioDefinition, SimulationSnapshot
+from src.contracts.simulation import (
+    LightingEvent,
+    MoveEvent,
+    ObservationSample,
+    Point,
+    ScenarioDefinition,
+    ScenarioEvent,
+    SensorAvailabilityEvent,
+    SimulationSnapshot,
+)
+from src.contracts.simulation_api import (
+    MAX_RECENT_BELIEF_CHANGES,
+    RelocateParcel,
+    SetCart,
+    SetLighting,
+    SimulationBeliefChange,
+    SimulationDisruptRequest,
+)
 from src.procedural.temporal_belief_ingestion import IngestionResult
 from src.sensorimotor.patrol_controller import PatrolCheckpoint, PatrolController
 from src.sensorimotor.simulation_engine import SimulationEngine
 from src.sensorimotor.warehouse_sensors import WarehouseSensors
 from src.web.simulation_clock import SimulationClock
+
+MAX_PRESENTER_INPUTS = 64
+EVENT = TypeAdapter(ScenarioEvent)
 
 
 class SimulationRuntime:
@@ -47,6 +70,9 @@ class SimulationRuntime:
         self.engine = engine
         self.scenario = scenario.model_copy(deep=True)
         self._sequence = 0
+        self.revision = 0
+        self.belief_changes: deque[SimulationBeliefChange] = deque(maxlen=MAX_RECENT_BELIEF_CHANGES)
+        self.presenter_requests: dict[UUID, tuple[SimulationDisruptRequest, ScenarioEvent]] = {}
         self._fresh_on_resume = False
         self.error: str | None = None
         self.persistence_error: str | None = None
@@ -80,6 +106,10 @@ class SimulationRuntime:
     def sim_time_ms(self) -> int:
         return self.engine.snapshot().status.sim_time_ms
 
+    @property
+    def next_sample_sequence(self) -> int:
+        return self._sequence
+
     def checkpoint(self) -> dict:
         return {
             "version": 1,
@@ -91,10 +121,16 @@ class SimulationRuntime:
             "lidar": self._lidar.model_dump(mode="json"),
             "next_sequence": self._sequence,
             "backlog_ms": self.clock.backlog_ms,
+            "response_revision": self.revision,
+            "belief_changes": [change.model_dump(mode="json") for change in self.belief_changes],
+            "presenter_requests": [
+                [request.model_dump(mode="json"), event.model_dump(mode="json")]
+                for request, event in self.presenter_requests.values()
+            ],
         }
 
     @classmethod
-    def restore(cls, state: dict, *, ingest, now, memory) -> SimulationRuntime:
+    def restore(cls, state: dict, *, ingest, now, memory, id_factory=uuid4) -> SimulationRuntime:
         if state["version"] != 1:
             raise ValueError("Unsupported runtime checkpoint version")
         engine = SimulationEngine.restore(state["engine"])
@@ -102,7 +138,7 @@ class SimulationRuntime:
         snap = engine.snapshot()
         scenario = ScenarioDefinition.model_validate(state["engine"]["scenario"])
         runtime = cls.__new__(cls)
-        runtime._wire(engine, scenario, ingest, now, uuid4)
+        runtime._wire(engine, scenario, ingest, now, id_factory)
         pose = ObservationSample.model_validate(state["pose"])
         lidar = ObservationSample.model_validate(state["lidar"])
         controller = PatrolCheckpoint.model_validate(state["controller"])
@@ -140,6 +176,18 @@ class SimulationRuntime:
         )
         runtime._pose, runtime._lidar = pose, lidar
         runtime._sequence = state["next_sequence"]
+        # Restore pauses a saved run. Give that state a newer response revision.
+        runtime.revision = state.get("response_revision", runtime._sequence) + 1
+        runtime.belief_changes.extend(
+            SimulationBeliefChange.model_validate(change)
+            for change in state.get("belief_changes", [])
+        )
+        for saved_request, saved_event in state.get("presenter_requests", []):
+            request = SimulationDisruptRequest.model_validate(saved_request)
+            runtime.presenter_requests[request.request_id] = (
+                request,
+                EVENT.validate_python(saved_event),
+            )
         runtime.last_acquisition_ms = latest.sim_time_ms
         runtime.clock.restore_backlog(state["backlog_ms"])
         runtime._fresh_on_resume = True
@@ -172,10 +220,74 @@ class SimulationRuntime:
             self.fail("Observation ingestion failed.")
             raise
         self.last_acquisition_ms = sample.sim_time_ms
+        self.revision += 1
+        if isinstance(result, IngestionResult):
+            self._record_belief_changes(sample, result)
         return sample
+
+    def _record_belief_changes(self, sample: ObservationSample, result: IngestionResult) -> None:
+        revisions = {
+            fact_id: revision.event_id
+            for revision in result.revisions_created
+            for fact_id in revision.output_fact_ids
+        }
+        for fact_id in dict.fromkeys(
+            [*(fact.fact_id for fact in result.facts_created), *revisions]
+        ):
+            self.belief_changes.append(
+                SimulationBeliefChange(
+                    sample_id=sample.sample_id,
+                    sample_sequence=sample.sample_sequence,
+                    sim_time_ms=sample.sim_time_ms,
+                    fact_id=fact_id,
+                    revision_event_id=revisions.get(fact_id),
+                )
+            )
+
+    def schedule_disruption(self, request: SimulationDisruptRequest) -> ScenarioEvent:
+        self._require_healthy()
+        snap = self.read()
+        at_ms = (
+            request.at_ms
+            if request.at_ms is not None
+            else snap.status.sim_time_ms + snap.config.step_ms
+        )
+        fields = {"at_ms": at_ms, "sequence": 0}
+        disruption = request.disruption
+        if isinstance(disruption, RelocateParcel):
+            if not any(
+                e.entity_id == disruption.entity_id and e.kind == "parcel" for e in snap.entities
+            ):
+                raise ValueError("The relocation target must be a warehouse parcel.")
+            event = MoveEvent(
+                kind="move",
+                **fields,
+                entity_id=disruption.entity_id,
+                to=disruption.to,
+                duration_ms=disruption.duration_ms,
+            )
+        elif isinstance(disruption, SetCart):
+            # The named warehouse uses these two cart positions in its script.
+            event = MoveEvent(
+                kind="move",
+                **fields,
+                entity_id="cart_01",
+                to=Point(x_cm=100 if disruption.kind == "cart_block" else 180, y_cm=470),
+                duration_ms=1000,
+            )
+        elif isinstance(disruption, SetLighting):
+            event = LightingEvent(**fields, **disruption.model_dump())
+        else:
+            event = SensorAvailabilityEvent(**fields, **disruption.model_dump())
+        assigned = self.engine.schedule_presenter_event(event)
+        self.presenter_requests[request.request_id] = (request, assigned)
+        self.revision += 1
+        return assigned
 
     def fail(self, message: str) -> None:
         self.pause()
+        if self.error != message:
+            self.revision += 1
         self.error = message
 
     def _require_healthy(self) -> None:
@@ -209,18 +321,26 @@ class SimulationRuntime:
 
     def play(self) -> None:
         self._require_healthy()
+        if self.clock.running:
+            return
         self.engine.play()
         if self.engine.snapshot().status.state == "running":
             self.clock.play()
+            self.revision += 1
 
     def pause(self) -> None:
+        if self.clock.running:
+            self.revision += 1
         self.clock.pause()
         self.engine.pause()
 
     def set_rate(self, rate: float) -> None:
         self._require_healthy()
+        if type(rate) in (float, int) and self.clock.rate == rate:
+            return
         self.clock.set_rate(rate)
         self.engine.set_rate(rate)
+        self.revision += 1
 
     def step(self) -> None:
         self._require_healthy()

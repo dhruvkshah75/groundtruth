@@ -1,3 +1,5 @@
+import type { SimulationStateResponse } from "./simulationTypes";
+
 export type SpatialContext = {
   location: string | null;
   frame_of_reference: string | null;
@@ -85,6 +87,7 @@ export type AgentResponse = {
   plan_verifiable: boolean | null;
   plan_reason: string | null;
   react_trace?: ReActTrace | null;
+  simulation_evidence?: { run_id: string; sim_time_ms: number; request_id: string };
 };
 
 export type WorldState = {
@@ -104,6 +107,17 @@ export type WorldState = {
 };
 
 export type AppState = {
+  simulation_status?: Pick<SimulationStateResponse, "state" | "error"> & Partial<{
+    run_id: string;
+    generation: number;
+    epoch_utc: string;
+    sim_time_ms: number;
+    playback_rate: SimulationStateResponse["playback_rate"];
+    backlog_ms: number;
+    last_acquisition_ms: number;
+    patrol_state: NonNullable<SimulationStateResponse["patrol"]>["state"];
+    persistence_error: string | null;
+  }>;
   history: AgentResponse[];
   suggested_question: string;
   graph: {

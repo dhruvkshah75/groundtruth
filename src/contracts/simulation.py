@@ -290,7 +290,7 @@ class SimulationSnapshot(Contract):
 
 
 class SimulationControl(Contract):
-    """Future wire request only; does not implement an HTTP handler."""
+    """Playback command shared by the engine, runtime and HTTP API."""
 
     action: Literal["play", "pause", "step", "reset", "set_rate"]
     playback_rate: PlaybackRate | None = None

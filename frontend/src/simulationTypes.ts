@@ -109,6 +109,13 @@ export type Rectangle = {
   "height_cm": number;
 };
 
+export type RelocateParcel = {
+  "kind": "relocate_parcel";
+  "entity_id": string;
+  "to": Point;
+  "duration_ms": number;
+};
+
 export type RouteSegment = {
   "route_id": string;
   "start": Point;
@@ -164,6 +171,48 @@ export type SensorObservation = {
   "context"?: SpatialContext;
 };
 
+export type SetCart = {
+  "kind": "cart_block" | "cart_clear";
+};
+
+export type SetLighting = {
+  "kind": "lighting";
+  "color_cast": "neutral" | "yellow";
+  "intensity": number;
+};
+
+export type SetSensorAvailability = {
+  "kind": "sensor_availability";
+  "capability": "camera_detect" | "lidar_scan";
+  "available": boolean;
+};
+
+export type SimulationApiError = {
+  "code": "invalid_request" | "invalid_session" | "stale_run" | "state_conflict" | "runtime_unavailable" | "provider_unavailable" | "export_not_ready" | "simulation_failed";
+  "error": string;
+};
+
+export type SimulationAudience = {
+  "snapshot": SimulationSnapshot;
+  "bounds": Bounds;
+  "robot_radius_cm": number;
+  "routes": Array<RouteSegment>;
+  "patrol": Array<Point>;
+};
+
+export type SimulationBeliefChange = {
+  "sample_id": string;
+  "sample_sequence": number;
+  "sim_time_ms": number;
+  "fact_id": string;
+  "revision_event_id"?: string | null;
+};
+
+export type SimulationBeliefState = {
+  "graph_path"?: "/api/state";
+  "recent_changes": Array<SimulationBeliefChange>;
+};
+
 export type SimulationConfig = {
   "step_ms"?: number;
   "sensor_interval_ms"?: number;
@@ -182,6 +231,58 @@ export type SimulationControl = {
   "playback_rate"?: 0.25 | 0.5 | 1.0 | null;
 };
 
+export type SimulationControlRequest = {
+  "action": "play" | "pause" | "step" | "reset" | "set_rate";
+  "playback_rate"?: 0.25 | 0.5 | 1.0 | null;
+  "expected": SimulationRunIdentity;
+};
+
+export type SimulationDisruptRequest = {
+  "expected": SimulationRunIdentity;
+  "request_id": string;
+  "at_ms"?: number | null;
+  "disruption": RelocateParcel | SetCart | SetLighting | SetSensorAvailability;
+};
+
+export type SimulationDisruptResponse = {
+  "event": MoveEvent | LightingEvent | SensorAvailabilityEvent;
+  "state": SimulationStateResponse;
+};
+
+export type SimulationExportBundle = {
+  "schema_version": 1;
+  "run_id": string;
+  "epoch_utc": string;
+  "sim_time_ms": number;
+  "snapshot_sequence": number;
+  "scenario": ScenarioDefinition;
+  "presenter_events": Array<MoveEvent | LightingEvent | SensorAvailabilityEvent>;
+  "observations": Array<StoredObservationSample>;
+  "belief_changes": Array<SimulationBeliefChange>;
+};
+
+export type SimulationLoadRequest = {
+  "preset": "warehouse_inspection_v1";
+  "expected": SimulationRunIdentity;
+  "request_id": string;
+};
+
+export type SimulationObservationState = {
+  "latest": Partial<Record<"camera_detect" | "lidar_scan" | "ambient_light" | "robot_pose", StoredObservationSample>>;
+  "last_acquisition_ms": number | null;
+};
+
+export type SimulationPatrolState = {
+  "state": "moving" | "turning" | "blocked" | "waiting_for_sensor" | "complete" | "stalled";
+  "waypoint_index": number;
+  "target_waypoint": Point | null;
+};
+
+export type SimulationRunIdentity = {
+  "run_id": string | null;
+  "generation": number;
+};
+
 export type SimulationSnapshot = {
   "scenario_id": string;
   "config": SimulationConfig;
@@ -193,6 +294,24 @@ export type SimulationSnapshot = {
   "color_cast": string;
   "light_intensity": number;
   "sensor_availability": SensorAvailability;
+};
+
+export type SimulationStateResponse = {
+  "run_id": string | null;
+  "generation": number;
+  "revision": number;
+  "snapshot_sequence": number | null;
+  "sim_time_ms": number | null;
+  "epoch_utc": string | null;
+  "playback_rate": 0.25 | 0.5 | 1.0;
+  "state": "pending" | "paused" | "running" | "completed" | "error";
+  "error": string | null;
+  "persistence_error": string | null;
+  "llm_ready": boolean;
+  "patrol": SimulationPatrolState | null;
+  "audience": SimulationAudience | null;
+  "observation": SimulationObservationState;
+  "belief": SimulationBeliefState;
 };
 
 export type SimulationStatus = {
@@ -209,6 +328,21 @@ export type SpatialContext = {
   "world_version"?: number | null;
   "observer"?: string | null;
   "extra_context"?: Record<string, JsonValue>;
+};
+
+export type StoredObservationSample = {
+  "sample_id": string;
+  "run_id": string;
+  "sample_sequence": number;
+  "epoch_utc": string;
+  "sim_time_ms": number;
+  "captured_at": string;
+  "sensor_id": string;
+  "observer_pose": Pose;
+  "world_version": number;
+  "request": ObservationRequest;
+  "result": SensorObservation | ObservationUnavailable;
+  "stored_at": string;
 };
 
 export type TemporalObservationQuery = {
