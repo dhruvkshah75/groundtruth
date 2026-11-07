@@ -296,6 +296,10 @@ try {
   await dragTab("System inspector");
   await dock.getByRole("region", { name: "System inspector", exact: true }).waitFor();
   await assertAlignedHeaders();
+  await dock.getByRole("button", { name: "Tier 3 · physical environment" }).click();
+  await dock.getByText("Warehouse physical state (audience ground truth). The agent's knowledge comes from its sensor observations.").waitFor();
+  await dock.getByText("Objects (6)", { exact: true }).waitFor();
+  await dock.getByText("Obstacles (3)", { exact: true }).waitFor();
   await button("Belief graph").press("Shift+Enter");
   await dock.getByRole("region", { name: "Belief network" }).waitFor();
   await assertAlignedHeaders();
@@ -368,11 +372,19 @@ try {
   await post("Load preset", "load");
   await post("2×", "control");
   await post("Play", "control");
-  await page.getByText("Run finished · Reload preset to start again", { exact: true })
+  await page.getByText("Run finished. Reload the preset to schedule disruptions.", { exact: true })
     .waitFor({ timeout: 22_000 });
   assert.equal(await page.getByText("Completed", { exact: true }).count(), 0);
-  await page.getByText("Run finished. Reload the preset to schedule disruptions.").waitFor();
+  assert.equal(await page.locator(".sim-clock").getByText(/Reload preset/).count(), 0);
   assert.equal(await clock.innerText(), "30.000 s");
+  await button("Chat").click();
+  await page.getByRole("textbox", { name: "Ask the cognitive Agent" }).fill("Where is parcel 01 now?");
+  await button("Send message").click();
+  const traceName = page.locator(".react-trace-tool-name").last();
+  await traceName.waitFor();
+  assert.equal(await traceName.innerText(), "object location query");
+  assert.equal(await traceName.evaluate((element) => getComputedStyle(element).fontFamily),
+    await traceName.evaluate((element) => getComputedStyle(element.parentElement).fontFamily));
 
   console.log("Simulation browser checks passed on the real backend at 1440, 1024, 768 and 390px.");
 } finally {

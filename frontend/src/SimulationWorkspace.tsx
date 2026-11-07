@@ -55,7 +55,7 @@ function ObservationPanel({ state, stale }: { state: SimulationStateResponse | n
             <strong>{warehouseLabel(object_id)}</strong>
             <span>{apparent_color} · {position.x_cm.toFixed(0)}, {position.y_cm.toFixed(0)} cm</span>
           </li>)}
-        </ul> : <p className="sim-subtle">{detections ? "No parcels detected in this capture." : "Awaiting a camera sample."}</p>}
+        </ul> : <p className="sim-subtle">{detections ? "No objects detected in this capture." : "Awaiting a camera sample."}</p>}
     </div>
     <div className="sim-observation">
       <h3>Front LiDAR</h3>
@@ -242,7 +242,6 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
       <div className="sim-toolbar">
         <div className="sim-clock">
           <span className="sim-clock-label">Simulation time</span>
-          {state?.state === "completed" && <span role="status">Run finished · Reload preset to start again</span>}
           <strong>{state?.sim_time_ms == null ? "—" : simTime(state.sim_time_ms)}</strong>
         </div>
         {playStep}

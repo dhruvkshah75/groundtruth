@@ -560,6 +560,7 @@ def test_stalled_sqlite_transaction_does_not_block_another_session(
 
 def test_fresh_warehouse_lidar_ignores_conflicting_previous_run_facts(clock, warehouse):
     from src.contracts import FactQuery
+    from src.declarative.memory_repository import MemoryRepository
 
     service = service_for(clock)
     key = str(uuid4())
@@ -573,10 +574,15 @@ def test_fresh_warehouse_lidar_ignores_conflicting_previous_run_facts(clock, war
         service.control_simulation(key, SimulationControl(action="reset"))
         new_run = str(session.runtime.run_id)
         facts = session.agent.memory.query_facts(FactQuery(subject="route_A", active_only=True))
-        assert {(fact.context.extra_context.get("run_id"), fact.object) for fact in facts} >= {
-            (old_run, "blocked"),
-            (new_run, "clear"),
+        assert {(fact.context.extra_context.get("run_id"), fact.object) for fact in facts} == {
+            (new_run, "clear")
         }
+        with MemoryRepository(":memory:") as history:
+            history.restore_snapshot(session.agent.memory.export_snapshot())
+            old_facts = history.query_facts(FactQuery(subject="route_A", active_only=True))
+            assert (old_run, "blocked") in {
+                (fact.context.extra_context.get("run_id"), fact.object) for fact in old_facts
+            }
         item = session.ask("Is the front route clear to move forward?")
         assert item["status"] == "grounded"
         assert item["answer"] == "The forward LiDAR scan reported clear."

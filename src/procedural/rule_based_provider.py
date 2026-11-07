@@ -133,6 +133,8 @@ class RuleBasedIntentProvider(IntentProvider):
             for t in (
                 "parcel",
                 "box",
+                "shelf",
+                "cart",
                 "package",
                 "item",
                 "object",
@@ -474,8 +476,8 @@ class RuleBasedIntentProvider(IntentProvider):
         if "parcel_handoff" in text or "parcel handoff" in text:
             return "parcel_handoff"
 
-        # Regex for parcel_XX or box_XX with digits
-        m_digit = re.search(r"\b(parcel[_\s]?\d+|box[_\s]?\d+)\b", text)
+        # Recognize numbered warehouse equipment as well as parcels.
+        m_digit = re.search(r"\b((?:parcel|box|shelf|cart)[_\s]?\d+)\b", text)
         if m_digit:
             return m_digit.group(1).replace(" ", "_")
 

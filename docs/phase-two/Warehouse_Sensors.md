@@ -64,8 +64,8 @@ agent; keep its snapshot supplier in simulator-side composition only.
 
 ## Geometry and measurements
 
-The inventory camera detects **parcel-kind entities**. Shelves/cart are physical
-geometry; stations and routes are annotations, not inventory detections. Targeted
+The camera detects visible parcels, shelves, and carts. Stations and routes are
+annotations, not camera detections. Targeted
 and broad successes use CameraScan's sorted unique `objects` array; a targeted
 success contains exactly the requested ID. Detection fields are ID, apparent color,
 map-frame position estimate and existing width/height bounding-box fields only.
@@ -75,14 +75,14 @@ in returned evidence. Stable IDs and exact noise-free positions are mock assumpt
 Visibility checks room and visible flag, then center range and bearing relative to
 cardinal pose, then line of sight. Field-of-view/range boundaries are included
 (with 1e-9 numerical tolerance); touching an opaque rectangle edge/corner blocks the
-ray. A parcel exactly at observer center has undefined projection; acquisition
+ray. An object exactly at observer center has undefined projection; acquisition
 returns a generic typed failure instead of an arbitrary bearing. All geometry is
 validated finite by the P2-01 snapshot contract. Only the center is tested: partial
 visibility, pixel imaging and learned tracking are outside scope.
 
 Opaque footprints in the robot's room block sight, excluding the target itself.
 Non-opaque stations never occlude. The merged scene contract has no `active` flag:
-`visible` controls parcel detection, `opaque` controls occlusion, `solid` controls
+`visible` controls camera detection, `opaque` controls occlusion, `solid` controls
 LiDAR/physics; disabling an obstacle's sensing effects requires clearing its relevant
 flags. Making a parcel invisible does not automatically make physical geometry
 transparent. Other-room geometry is ignored.

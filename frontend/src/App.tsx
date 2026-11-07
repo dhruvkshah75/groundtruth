@@ -560,7 +560,7 @@ function App() {
                   <p className="composer-hint">Enter to send <span>·</span> Shift + Enter for a new line</p>
                 </form>
               </section>}
-              {tab === "inspector" && <Inspector state={state} />}
+              {tab === "inspector" && <Inspector key={activeChatId} state={state} sessionId={activeChatId} />}
               {tab === "graph" && <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}>
                 <BeliefGraphPage embedded workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} />
               </Suspense>}
@@ -672,7 +672,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
             >
               <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                 <Sparkles size={12} />
-                <span>ReAct Tool Cycle: <code>{displayText(trace.tool_name)}</code></span>
+                <span>ReAct Tool Cycle: <span className="react-trace-tool-name">{displayText(trace.tool_name)}</span></span>
               </span>
               <ChevronDown size={13} className={`trace-chevron ${showTrace ? "open" : ""}`} />
             </button>
@@ -795,7 +795,24 @@ function InspectorSection({ title, children }: { title: string; children: React.
   </div>;
 }
 
-function Inspector({ state }: { state: AppState | null }) {
+function Inspector({ state: initialState, sessionId }: { state: AppState | null; sessionId: string }) {
+  const [state, setState] = useState(initialState);
+  useEffect(() => { setState(initialState); }, [initialState]);
+  useEffect(() => {
+    let active = true;
+    let timer: number;
+    async function poll() {
+      try {
+        if (!document.hidden) {
+          const next = await api.state(sessionId);
+          if (active) setState(next);
+        }
+      } catch { /* Keep the last inspector snapshot until the next refresh. */ }
+      if (active) timer = window.setTimeout(poll, 1000);
+    }
+    void poll();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [sessionId]);
   const latest = state?.history.at(-1) ?? null;
   return (
     <section className="inspector" aria-label="System inspector">
@@ -877,7 +894,7 @@ function Inspector({ state }: { state: AppState | null }) {
           <div className="inspector-section-body">
             {state ? (
               <>
-                <p className="empty-detail">This is the conversation environment, separate from the warehouse simulation. See Robot observation in the Simulation view for its camera and LiDAR readings.</p>
+                {state.environment_source === "warehouse_truth" && <p className="empty-detail">Warehouse physical state (audience ground truth). The agent's knowledge comes from its sensor observations.</p>}
                 {state.environment.scenario_name && <ValueCard label="Loaded scenario">{displayText(state.environment.scenario_name)}</ValueCard>}
                 <ValueCard label="World version">{state.environment.world_version}</ValueCard>
                 <ValueCard label="Robot pose"><StructuredValue value={state.environment.robot} /></ValueCard>

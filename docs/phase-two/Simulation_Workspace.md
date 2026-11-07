@@ -63,12 +63,17 @@ events, so a repeated or overlapping disruption can return a validation error.
   list gives object coordinates and the robot's authoritative pose.
 - **Robot observation** reads the backend's latest camera and front LiDAR
   attempts. Each has its original simulation capture time. Camera rows show
-  detected parcels and apparent color. An empty capture, an unavailable
+  detected parcels, shelves, and carts and their apparent color. An empty capture, an unavailable
   sensor, and an old sample have separate labels. A LiDAR obstacle measurement
   and the controller's patrol state are shown separately.
 - **Agent belief** displays bounded fact and revision references supplied by
   the runtime. [P2-11 / #35](https://github.com/dhruvkshah75/groundtruth/issues/35)
   owns the richer timeline, graph and answer coupling.
+
+The inspector's Tier 3 section displays the warehouse's audience-only physical
+state, including its objects and solid obstacles. This physical state is not sent
+to the agent as observation evidence. The active belief graph and entity resolver
+are scoped to the current run; prior mock and simulation evidence remains stored.
 
 The [workspace](../../frontend/src/SimulationWorkspace.tsx) calls the shared
 [client](../../frontend/src/api.ts) through [useSimulation](../../frontend/src/useSimulation.ts).

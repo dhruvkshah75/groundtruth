@@ -39,6 +39,19 @@ def lidar(sensors):
     )
 
 
+@pytest.mark.parametrize("entity_id", ["shelf_01", "cart_01"])
+def test_camera_observes_visible_warehouse_equipment_without_leaking_hidden_entities(entity_id):
+    snap, sensors = setup()
+    entity = next(item for item in snap.entities if item.entity_id == entity_id)
+    for item in snap.entities:
+        item.opaque = False
+    entity.footprint.x_cm, entity.footprint.y_cm = 100, 200
+    observed = camera(sensors, entity_id).result
+    assert observed.measurements["objects"][0]["object_id"] == entity_id
+    entity.visible = False
+    assert camera(sensors, entity_id).result.reason == "target_not_visible"
+
+
 @pytest.mark.parametrize(
     "direction,position",
     [("north", (100, 250)), ("east", (250, 100)), ("south", (100, 50)), ("west", (50, 100))],
@@ -169,9 +182,11 @@ def test_single_snapshot_capture_ids_order_and_light_pose_consistency():
     assert [d["object_id"] for d in sample.result.measurements["objects"]] == [
         "parcel_01",
         "parcel_02",
+        "shelf_01",
     ]
     assert all(
-        d["apparent_color"] == "brown" and "intrinsic_color" not in d
+        (d["object_id"] == "shelf_01" or d["apparent_color"] == "brown")
+        and "intrinsic_color" not in d
         for d in sample.result.measurements["objects"]
     )
     snap.robot_pose.x_cm = 110  # captured result remains detached
@@ -223,7 +238,10 @@ def test_real_engine_relocation_hidden_target_and_corrected_fixture_examples():
     hidden = camera(s, "parcel_01")
     assert hidden.result.reason == "target_not_visible"
     broad = camera(s)
-    assert [d["object_id"] for d in broad.result.measurements["objects"]] == ["parcel_02"]
+    assert [d["object_id"] for d in broad.result.measurements["objects"]] == [
+        "parcel_02",
+        "shelf_01",
+    ]
     assert broad.result.measurements["objects"][0]["apparent_color"] == "brown"
     assert (
         next(x for x in e.snapshot().entities if x.entity_id == "parcel_01").footprint.x_cm == 330

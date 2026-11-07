@@ -93,12 +93,31 @@ class MemoryRepository:
         self._db_path = db_path
         self._clock = clock or _utc_now
         self._uuid_factory = uuid_factory or uuid4
+        self._active_run_id: UUID | None = None
         self._write_listeners: list[Callable[[], None]] = list(write_listeners or [])
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
         initialize_schema(self._conn)
+
+    def set_active_run(self, run_id: UUID | None) -> None:
+        """Scope live facts and aliases to a simulation run without deleting history."""
+        if run_id != self._active_run_id:
+            self._active_run_id = run_id
+            self._notify_write_listeners()
+
+    def _scoped_assertion(self, assertion: FactAssertion) -> FactAssertion:
+        if self._active_run_id is None:
+            return assertion
+        extra = assertion.context.extra_context
+        run_id = str(self._active_run_id)
+        if extra.get("run_id", run_id) != run_id:
+            raise ValueError("Fact belongs to another simulation run")
+        context = assertion.context.model_copy(
+            update={"extra_context": {**extra, "run_id": run_id}}
+        )
+        return assertion.model_copy(update={"context": context})
 
     def observation_ingestion_lock(self) -> AbstractContextManager:
         """Share one reentrant ingestion boundary across services using this repository."""
@@ -163,6 +182,7 @@ class MemoryRepository:
         Assigns a UUID and created_at inside Tier 1. Does not supersede any
         existing fact; conflicting assertions coexist until an explicit revision.
         """
+        assertion = self._scoped_assertion(assertion)
         fact_id = self._uuid_factory()
         created_at = self._clock()
         context_json = assertion.context.model_dump_json()
@@ -225,6 +245,10 @@ class MemoryRepository:
         """
         conditions: list[str] = []
         params: list[object] = []
+
+        if self._active_run_id is not None:
+            conditions.append("json_extract(context_json, '$.extra_context.run_id') = ?")
+            params.append(str(self._active_run_id))
 
         if query.subject is not None:
             conditions.append("subject = ?")
@@ -315,6 +339,7 @@ class MemoryRepository:
             ValueError: If old_fact_id is unknown, already superseded, or
                         parameters are invalid.
         """
+        replacement = self._scoped_assertion(replacement)
         if not reason.strip():
             raise ValueError("reason must not be empty")
         if not policy_rule.strip():
@@ -325,7 +350,13 @@ class MemoryRepository:
         # Fast pre-flight check (existence only) outside the transaction so we
         # can raise a clear ValueError before acquiring a write lock.
         exists_row = self._conn.execute(
-            "SELECT 1 FROM facts WHERE fact_id = ?", (str(old_fact_id),)
+            "SELECT 1 FROM facts WHERE fact_id = ? AND "
+            "(? IS NULL OR json_extract(context_json, '$.extra_context.run_id') = ?)",
+            (
+                str(old_fact_id),
+                str(self._active_run_id) if self._active_run_id else None,
+                str(self._active_run_id) if self._active_run_id else None,
+            ),
         ).fetchone()
         if exists_row is None:
             raise ValueError(f"fact {old_fact_id} does not exist")
@@ -532,6 +563,15 @@ class MemoryRepository:
         )
         self._conn.commit()
 
+    def observed_entity_ids(self, run_id: UUID) -> list[str]:
+        """List identities actually present in a run's persisted camera detections."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT entity_id FROM observation_detections WHERE run_id = ? "
+            "ORDER BY entity_id",
+            (str(run_id),),
+        ).fetchall()
+        return [row["entity_id"] for row in rows]
+
     def resolve_entity(self, mention: str) -> EntityResolution:
         """Resolve a user-friendly entity name to canonical ID(s).
 
@@ -545,6 +585,20 @@ class MemoryRepository:
             (normalized,),
         ).fetchall()
         candidates = [r["canonical_entity_id"] for r in rows]
+        if self._active_run_id is not None:
+            run_id = str(self._active_run_id)
+            candidates = [
+                entity
+                for entity in candidates
+                if self._conn.execute(
+                    "SELECT 1 FROM observation_detections WHERE run_id = ? AND entity_id = ? "
+                    "UNION ALL SELECT 1 FROM facts WHERE "
+                    "json_extract(context_json, '$.extra_context.run_id') = ? "
+                    "AND (subject = ? OR object = ?) LIMIT 1",
+                    (run_id, entity, run_id, entity, entity),
+                ).fetchone()
+                is not None
+            ]
 
         if len(candidates) == 0:
             return EntityResolution(mention=mention, status="missing")
