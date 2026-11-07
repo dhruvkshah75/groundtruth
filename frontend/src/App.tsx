@@ -642,8 +642,8 @@ function Inspector({ state }: { state: AppState | null }) {
                 <ValueCard label="Active graph nodes">{state.graph.nodes.length ? state.graph.nodes.map(displayText).join(", ") : "No active graph nodes."}</ValueCard>
                 <InspectorCard label="Active belief graph" className="table-card">
                   {state.graph.edges.length ? (
-                    <div className="table-scroll"><table><thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Source</th></tr></thead><tbody>
-                      {state.graph.edges.map((edge) => <tr key={edge.key}><td>{displayText(edge.source)}</td><td>{displayText(edge.predicate)}</td><td>{displayText(edge.target)}</td><td>{displayText(edge.source_agent)}</td></tr>)}
+                    <div className="table-scroll environment-table-scroll" role="region" aria-label="Active belief graph, scroll horizontally for more fields" tabIndex={0}><table className="environment-table"><thead><tr><th scope="col">Subject</th><th scope="col">Predicate</th><th scope="col">Object</th><th scope="col">Source</th></tr></thead><tbody>
+                      {state.graph.edges.map((edge) => <tr key={edge.key}><th scope="row">{displayText(edge.source)}</th><td>{displayText(edge.predicate)}</td><td>{displayText(edge.target)}</td><td>{displayText(edge.source_agent)}</td></tr>)}
                     </tbody></table></div>
                   ) : <p className="empty-detail">No active edges in the graph.</p>}
                 </InspectorCard>
@@ -819,10 +819,10 @@ function LedgerTable({ facts }: { facts: Fact[] }) {
   return (
     <InspectorCard label={`SQLite evidence ledger · ${facts.length} fact(s)`} className="table-card">
       {facts.length ? (
-        <div className="table-scroll"><table><thead><tr><th>Claim</th><th>Source</th><th>State</th></tr></thead><tbody>
+        <div className="table-scroll environment-table-scroll" role="region" aria-label="Evidence ledger, scroll horizontally for more fields" tabIndex={0}><table className="environment-table ledger-table"><thead><tr><th scope="col">Claim</th><th scope="col">Source</th><th scope="col">State</th></tr></thead><tbody>
           {facts.map((fact) => (
             <tr key={fact.fact_id}>
-              <td>{displayText(fact.subject)} {displayText(fact.predicate)} {displayText(fact.object)}<small>{formatTime(fact.observed_at)}</small></td>
+              <th scope="row">{displayText(fact.subject)} {displayText(fact.predicate)} {displayText(fact.object)}<small>{formatTime(fact.observed_at)}</small></th>
               <td>{displayText(fact.source_agent)}<small>{Math.round(fact.confidence_score * 100)}% confidence</small></td>
               <td>{fact.superseded_by ? "Superseded" : "Active"}</td>
             </tr>

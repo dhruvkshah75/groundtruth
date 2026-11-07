@@ -497,3 +497,5 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 .environment-table tbody tr:last-child th, .environment-table tbody tr:last-child td { border-bottom: 0; }
 .environment-table .inspector-fields { min-width: 180px; }
 .environment-table .inspector-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.ledger-table tbody th { max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
+.ledger-table tbody th small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 400; }
