@@ -856,7 +856,9 @@ class AgentService:
         with self._lock:
             sessions = tuple(self._sessions.items())
         for key, session in sessions:
-            with session.lock:
+            if not session.lock.acquire(blocking=False):
+                continue
+            try:
                 runtime = session.runtime
                 if session._retired or runtime is None or runtime.error:
                     continue
@@ -879,6 +881,8 @@ class AgentService:
                 except Exception:
                     runtime.fail(runtime.error or "Simulation scheduler failed.")
                     LOGGER.warning("Warehouse scheduler paused a failed run")
+            finally:
+                session.lock.release()
 
     def _queue_save(self, key: str, session: AgentSession) -> Future | None:
         # Session lock orders capture and submission. All writes/deletes share one

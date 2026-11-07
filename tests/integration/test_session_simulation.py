@@ -234,6 +234,38 @@ def test_slow_checkpoint_does_not_block_other_sessions_or_resurrect_deleted_id(
         store.close()
 
 
+def test_scheduler_skips_locked_session_and_advances_other(clock, warehouse):
+    service = service_for(clock)
+    first, second = str(uuid4()), str(uuid4())
+    load(service, first, warehouse)
+    load(service, second, warehouse)
+    session = service.get_session(first)
+    entered, release = Event(), Event()
+
+    def hold_lock():
+        with session.lock:
+            entered.set()
+            assert release.wait(5)
+
+    try:
+        with ThreadPoolExecutor() as pool:
+            holder = pool.submit(hold_lock)
+            assert entered.wait(5)
+            clock[0] = 1
+            pump = pool.submit(service.pump)
+            try:
+                pump.result(timeout=2)
+                assert service.read_simulation(second)["status"]["sim_time_ms"] == 500
+            finally:
+                release.set()
+                holder.result(timeout=5)
+        service.pump()
+        assert service.read_simulation(first)["status"]["sim_time_ms"] == 500
+    finally:
+        release.set()
+        service.shutdown()
+
+
 def test_bad_checkpoint_is_preserved_until_explicit_recovery(clock, warehouse, tmp_path):
     store = SessionStore(tmp_path / "corrupt.sqlite")
     key = str(uuid4())

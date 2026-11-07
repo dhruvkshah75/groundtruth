@@ -17,6 +17,8 @@
 warehouse runtime per loaded session. The service starts one scheduler when the first
 warehouse is loaded or restored. Legacy A/B sessions retain their static behavior.
 The scheduler wakes every 50 wall milliseconds and only pumps due simulation work.
+It skips busy session locks and catches up on subsequent pumps, subject to the
+per-pump tick limit, so another session can continue advancing.
 
 - `load_simulation(session_id, scenario, *, epoch_utc=None) -> SessionSimulationStatus`
   starts a new paused run, with one initial sensor batch and a fresh run ID.
