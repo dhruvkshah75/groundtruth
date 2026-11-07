@@ -6,6 +6,7 @@ enabling offline operation, continuous integration testing, and local demos.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -231,7 +232,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 q,
             )
 
-            if m_joined and not bool(re.search(r"\bat\s+[0-9a-zA-Z.]+\s+", q)):
+            if m_joined:
                 has_at_phrase = True
                 raw_expr = m_joined.group(1)
                 unit = m_joined.group(2).lower()
@@ -265,6 +266,8 @@ class RuleBasedIntentProvider(IntentProvider):
                     raw_expr = raw_expr.strip()
                     try:
                         val = float(raw_expr)
+                        if not math.isfinite(val) or not math.isfinite(val * 1000):
+                            raise ValueError("Time must be finite")
                         if val < 0:
                             # Reject negative values before integer truncation
                             at_sim_time_ms = (
@@ -281,7 +284,7 @@ class RuleBasedIntentProvider(IntentProvider):
                                 at_sim_time_ms = int(val)
                             else:
                                 at_sim_time_ms = int(val * 1000)
-                    except ValueError:
+                    except (ValueError, OverflowError):
                         word_val = _parse_word_number(raw_expr)
                         if word_val is not None:
                             if word_val < 0:

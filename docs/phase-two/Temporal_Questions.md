@@ -224,3 +224,9 @@ All checks passed!
 uv run --locked ruff format --check .
 138 files already formatted
 ```
+
+### Review follow-up: run-scoped evidence
+
+Previous-run sightings cannot verify the active run's current location. Last-seen ages for a previous run are measured against that run's recorded horizon and labeled accordingly. A revision is associated with a transition only when its facts identify the selected run and the successor cites the transition's observation sample. Revisions without that provenance remain unassociated. Joined time units may precede a run qualifier, and non-finite or overflowing times are rejected.
+
+The follow-up adds targeted checks for these cases in `tests/unit/procedural/test_temporal_questions.py`.

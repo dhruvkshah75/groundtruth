@@ -743,6 +743,19 @@ class EpistemicEvaluator:
                             obs_pose = latest_camera.observer_pose
                             sighting = latest_camera
 
+                if active_run_id is not None and selected_run_id != active_run_id:
+                    return EpistemicEvaluation(
+                        status="uncertain",
+                        explanation=(
+                            f"Current location of {display_name} cannot be verified from "
+                            f"a previous run. Its last sighting in run {selected_run_id} was at "
+                            f"{sighting.sim_time_ms} ms at x={x_cm} cm, y={y_cm} cm "
+                            f"(sample ID: {sighting.sample_id})."
+                        ),
+                        memory_facts=memory_facts,
+                        sensor_telemetry=telemetry,
+                    )
+
                 # Compare sighting timestamp with request's captured simulation time & freshness
                 ref_time_ms = (
                     capture_time_ms
@@ -868,11 +881,25 @@ class EpistemicEvaluator:
                 y_cm = _fmt_coord(det[1])
                 obs_pose = sighting.observer_pose
 
-                ref_time_ms = (
-                    capture_time_ms
-                    if capture_time_ms is not None
-                    else (latest_camera.sim_time_ms if latest_camera else sighting.sim_time_ms)
-                )
+                previous_run = active_run_id is not None and selected_run_id != active_run_id
+                if previous_run:
+                    horizon = (
+                        memory_repo.get_run_horizon_ms(selected_run_id)
+                        if selected_run_id is not None
+                        and hasattr(memory_repo, "get_run_horizon_ms")
+                        else None
+                    )
+                    ref_time_ms = (
+                        horizon
+                        if horizon is not None
+                        else (latest_camera.sim_time_ms if latest_camera else sighting.sim_time_ms)
+                    )
+                else:
+                    ref_time_ms = (
+                        capture_time_ms
+                        if capture_time_ms is not None
+                        else (latest_camera.sim_time_ms if latest_camera else sighting.sim_time_ms)
+                    )
                 age_ms = max(0, ref_time_ms - sighting.sim_time_ms)
 
                 subsequent_ctx = "No subsequent conflicting camera scans recorded."
@@ -890,13 +917,16 @@ class EpistemicEvaluator:
                                 f"detect {display_name}."
                             )
 
+                if previous_run:
+                    subsequent_ctx += " Previous run evidence cannot verify the current location."
+                age_context = " at the end of the selected run" if previous_run else ""
                 return EpistemicEvaluation(
                     status="verified",
                     explanation=(
                         f"{display_name} was last seen at simulation time "
                         f"{sighting.sim_time_ms} ms at x={x_cm} cm, y={y_cm} cm in "
                         f"{obs_pose.location} by {obs_pose.robot_id} "
-                        f"(sample ID: {sighting.sample_id}, age: {age_ms} ms). "
+                        f"(sample ID: {sighting.sample_id}, age: {age_ms} ms{age_context}). "
                         f"Current verification status: {subsequent_ctx}"
                     ),
                     memory_facts=memory_facts,
@@ -1092,34 +1122,33 @@ class EpistemicEvaluator:
                     for f in tr.facts:
                         all_audit_facts[f.fact_id] = f
 
-                run_scoped_events: list[tuple[AuditEvent, set[str], set[str]]] = []
+                run_scoped_events: list[tuple[AuditEvent, set[str]]] = []
                 for ev in events:
-                    in_facts = [
-                        all_audit_facts[fid] for fid in ev.input_fact_ids if fid in all_audit_facts
-                    ]
-                    out_facts = [
+                    output_facts = [
                         all_audit_facts[fid] for fid in ev.output_fact_ids if fid in all_audit_facts
                     ]
-                    ev_facts = in_facts + out_facts
-
-                    # Check run scoping: exclude events belonging to other runs
-                    if selected_run_id is not None and str(selected_run_id) != str(UUID(int=0)):
-                        fact_runs = {
-                            f.context.extra_context.get("run_id") or f.evidence.get("run_id")
-                            for f in ev_facts
-                            if (f.context and f.context.extra_context.get("run_id"))
-                            or f.evidence.get("run_id")
-                        }
-                        if any(str(r) != str(selected_run_id) for r in fact_runs if r is not None):
-                            continue
-
-                    from_locs = {f.object for f in in_facts} | {
-                        f.context.location for f in in_facts if f.context and f.context.location
+                    event_facts = [
+                        all_audit_facts[fid]
+                        for fid in set(ev.input_fact_ids + ev.output_fact_ids)
+                        if fid in all_audit_facts
+                    ]
+                    if not event_facts or selected_run_id is None:
+                        continue
+                    # Every fact must have positive, consistent run provenance.
+                    fact_runs = [
+                        f.context.extra_context.get("run_id") or f.evidence.get("run_id")
+                        for f in event_facts
+                    ]
+                    if any(str(run) != str(selected_run_id) for run in fact_runs):
+                        continue
+                    # The successor's sample identifies the transition that caused the revision.
+                    sample_ids = {
+                        str(f.evidence["sample_id"])
+                        for f in output_facts
+                        if f.evidence.get("sample_id")
                     }
-                    to_locs = {f.object for f in out_facts} | {
-                        f.context.location for f in out_facts if f.context and f.context.location
-                    }
-                    run_scoped_events.append((ev, from_locs, to_locs))
+                    if sample_ids:
+                        run_scoped_events.append((ev, sample_ids))
 
                 trans_texts = []
                 associated_events: list[AuditEvent] = []
@@ -1131,8 +1160,8 @@ class EpistemicEvaluator:
                     )
                     matching_revs = [
                         ev
-                        for ev, from_locs, to_locs in run_scoped_events
-                        if (loc1 in from_locs or not from_locs) and (loc2 in to_locs or not to_locs)
+                        for ev, sample_ids in run_scoped_events
+                        if str(s2.sample_id) in sample_ids
                     ]
                     if matching_revs:
                         associated_events.extend(matching_revs)

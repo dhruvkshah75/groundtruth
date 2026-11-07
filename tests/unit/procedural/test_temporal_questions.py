@@ -463,7 +463,13 @@ def test_changes_mode_visible_station_relocation() -> None:
             source_agent="operator",
             confidence_score=1.0,
             observed_at=EPOCH,
-            context=SpatialContext(observer="system", location="station_1", world_version=1),
+            context=SpatialContext(
+                observer="system",
+                location="station_1",
+                world_version=1,
+                extra_context={"run_id": str(run_id)},
+            ),
+            evidence={"sample_id": str(s1.sample_id)},
         )
     )
     f2_assert = FactAssertion(
@@ -473,7 +479,13 @@ def test_changes_mode_visible_station_relocation() -> None:
         source_agent="robot_transfer",
         confidence_score=1.0,
         observed_at=EPOCH + timedelta(seconds=4),
-        context=SpatialContext(observer="system", location="station_2", world_version=2),
+        context=SpatialContext(
+            observer="system",
+            location="station_2",
+            world_version=2,
+            extra_context={"run_id": str(run_id)},
+        ),
+        evidence={"sample_id": str(s2.sample_id)},
     )
     agent.memory.record_revision(
         old_fact_id=f1.fact_id,
@@ -1173,6 +1185,7 @@ def test_changes_mode_revision_evidence_scoped_and_associated_with_transition() 
             context=SpatialContext(
                 observer="system", location="station_2", extra_context={"run_id": str(run_2)}
             ),
+            evidence={"sample_id": str(s2.sample_id)},
         ),
         reason="Transferred by AGV in run 2",
         policy_rule="station_handover_policy",
@@ -1362,3 +1375,101 @@ def test_telemetry_preserves_successful_sample_envelope() -> None:
     assert t["sample_id"] == str(sample.sample_id)
     assert "sim_time_ms" in t
     assert t["sim_time_ms"] == 2500
+
+
+def test_previous_run_current_and_last_seen_use_selected_run_time() -> None:
+    from src.contracts.models import IntentRequest
+    from src.procedural.intent_planner import IntentPlannerOutcome
+
+    agent = setup_agent()
+    old_run, new_run = uuid4(), uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+    sighting = make_sample(old_run, 20000, 1, detections=[make_detection("parcel_01")])
+    later = make_sample(old_run, 24000, 2, detections=[])
+    agent.memory.record_observation_sample(sighting)
+    agent.memory.record_observation_sample(later)
+
+    class Sensors:
+        run_id = new_run
+        sim_time_ms = 500
+
+    def query(mode: str) -> Any:
+        question = "Location of parcel_01"
+        intent = IntentPlannerOutcome(
+            intent=IntentRequest(
+                intent="object_location_query",
+                mode=mode,
+                run_id=old_run,
+                entity_mentions=["parcel_01"],
+                user_question=question,
+            )
+        )
+        return agent.capture(question, intent, sensors=Sensors(), capture_time_ms=500)()
+
+    current = query("current")
+    assert current.status == "uncertain"
+    last = query("last_seen")
+    assert "age: 4000 ms at the end of the selected run" in last.answer
+    assert "cannot verify the current location" in last.answer
+
+
+def test_time_suffix_and_nonfinite_values() -> None:
+    from src.procedural.rule_based_provider import RuleBasedIntentProvider
+
+    provider = RuleBasedIntentProvider()
+    assert provider.propose_intent("Where was parcel_01 at 7s in run 1?")["at_sim_time_ms"] == 7000
+    for value in ("1e309", "1e308"):
+        agent = setup_agent()
+        agent.memory.add_alias("parcel_01", "parcel_01")
+        result = agent.ask(f"Where was parcel_01 at {value} seconds?")
+        assert result.status == "unsupported"
+        assert result.react_trace.execution_summary["temporal_queries_count"] == 0
+
+
+def test_revision_requires_run_and_observation_provenance() -> None:
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+    samples = []
+    for n, x in enumerate((100, 200, 100, 200), start=1):
+        sample = make_sample(run_id, n * 1000, n, detections=[make_detection("parcel_01", x, 200)])
+        agent.memory.record_observation_sample(sample)
+        samples.append(sample)
+
+    def revision(run: str | None, sample_id: str | None, reason: str) -> None:
+        context = SpatialContext(extra_context={"run_id": run} if run else {})
+        old = agent.memory.record_fact(
+            FactAssertion(
+                subject="parcel_01",
+                predicate="located_at",
+                object="dock",
+                source_agent="sensor",
+                confidence_score=1,
+                observed_at=EPOCH,
+                context=context,
+            )
+        )
+        agent.memory.record_revision(
+            old_fact_id=old.fact_id,
+            replacement=FactAssertion(
+                subject="parcel_01",
+                predicate="located_at",
+                object="dock",
+                source_agent="sensor",
+                confidence_score=1,
+                observed_at=EPOCH,
+                context=context,
+                evidence={"sample_id": sample_id} if sample_id else {},
+            ),
+            reason=reason,
+            policy_rule="test",
+            revised_at=EPOCH,
+        )
+
+    revision(str(run_id), str(samples[1].sample_id), "first transition")
+    revision(None, str(samples[1].sample_id), "unknown run")
+    revision(str(run_id), None, "unknown observation")
+    response = agent.ask("Has parcel_01 moved?")
+    assert response.answer.count("first transition") == 1
+    assert "unknown run" not in response.answer
+    assert "unknown observation" not in response.answer
