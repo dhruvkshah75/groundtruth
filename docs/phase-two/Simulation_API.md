@@ -1,7 +1,7 @@
 # Simulation HTTP API (P2-09)
 
 [Issue #33](https://github.com/dhruvkshah75/groundtruth/issues/33) ·
-[Implementation PR](https://github.com/dhruvkshah75/groundtruth/pulls?q=is%3Apr+head%3Acodex%2Fp2-09-simulation-api)
+[Implementation PR #45](https://github.com/dhruvkshah75/groundtruth/pull/45)
 
 The API exposes the named warehouse run owned by a browser session. P2-07
 [session runtime](Session_Runtime.md) (issue [#31](https://github.com/dhruvkshah75/groundtruth/issues/31),
