@@ -69,6 +69,8 @@ class EpistemicEvaluator:
         plan_result: PlanExecutionResult | PlanningOutcome | IntentPlannerOutcome,
         user_question: str,
         memory_repo: EpistemicMemoryInterface,
+        *,
+        revise_routes: bool = True,
     ) -> EpistemicEvaluation:
         """Perform epistemic evaluation of execution results against memory and sensors."""
         # 1. Handle planning-level fallbacks
@@ -162,6 +164,7 @@ class EpistemicEvaluator:
                 lidar_obs=lidar_obs,
                 memory_facts=memory_facts,
                 memory_repo=memory_repo,
+                revise_routes=revise_routes,
             )
 
         # A successful pose observation is direct evidence for current-location
@@ -280,12 +283,28 @@ class EpistemicEvaluator:
         lidar_obs: SensorObservation,
         memory_facts: list[StoredFact],
         memory_repo: EpistemicMemoryInterface,
+        revise_routes: bool = True,
     ) -> EpistemicEvaluation:
         """Scenario A: compare active map belief with live LiDAR and revise if conflicted."""
         measurements = lidar_obs.measurements
         sensor_status = measurements.get("status")
         nearest_dist = measurements.get("nearest_distance_cm")
         telemetry = [lidar_obs.model_dump(mode="json")]
+
+        # Warehouse ingestion owns route beliefs and scopes them to a run.
+        # This answer describes the current scan independently of legacy map facts.
+        if not revise_routes:
+            if sensor_status not in ("clear", "blocked"):
+                return EpistemicEvaluation(
+                    status="unverifiable",
+                    explanation="LiDAR did not return a recognized clear/blocked route status.",
+                    sensor_telemetry=telemetry,
+                )
+            return EpistemicEvaluation(
+                status="grounded",
+                explanation=f"The forward LiDAR scan reported {sensor_status}.",
+                sensor_telemetry=telemetry,
+            )
 
         # A route claim only applies to this observed place and frame of reference.
         map_facts = [
