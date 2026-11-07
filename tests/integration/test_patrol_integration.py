@@ -216,7 +216,7 @@ def test_playback_rate_independence():
     """Verify controller decisions are identical at equal simulation times across rates."""
     results_by_rate = {}
 
-    for rate in (0.25, 0.5, 1.0):
+    for rate in (0.25, 0.5, 1.0, 2.0):
         scene_data = deepcopy(DATA["valid"]["scenario"])
         scene_data["config"]["playback_rate"] = rate
         eng, sensors, scene = create_engine_and_sensors(scene_data)
@@ -247,7 +247,12 @@ def test_playback_rate_independence():
 
         results_by_rate[rate] = trace
 
-    assert results_by_rate[0.25] == results_by_rate[0.5] == results_by_rate[1.0]
+    assert (
+        results_by_rate[0.25]
+        == results_by_rate[0.5]
+        == results_by_rate[1.0]
+        == results_by_rate[2.0]
+    )
 
 
 def test_paired_engine_controller_checkpoint_resumes_pending_tick_once():

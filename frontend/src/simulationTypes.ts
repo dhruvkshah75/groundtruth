@@ -139,7 +139,7 @@ export type ScenarioDefinition = {
 
 export type SceneEntity = {
   "entity_id": string;
-  "kind": "parcel" | "station" | "shelf" | "cart";
+  "kind": string;
   "location": string;
   "footprint": Rectangle;
   "intrinsic_color": string;
@@ -217,7 +217,7 @@ export type SimulationConfig = {
   "step_ms"?: number;
   "sensor_interval_ms"?: number;
   "duration_ms"?: number;
-  "playback_rate"?: 0.25 | 0.5 | 1.0;
+  "playback_rate"?: 0.25 | 0.5 | 1.0 | 2.0;
   "camera_fov_deg"?: number;
   "camera_range_cm"?: number;
   "lidar_range_cm"?: number;
@@ -228,12 +228,12 @@ export type SimulationConfig = {
 
 export type SimulationControl = {
   "action": "play" | "pause" | "step" | "reset" | "set_rate";
-  "playback_rate"?: 0.25 | 0.5 | 1.0 | null;
+  "playback_rate"?: 0.25 | 0.5 | 1.0 | 2.0 | null;
 };
 
 export type SimulationControlRequest = {
   "action": "play" | "pause" | "step" | "reset" | "set_rate";
-  "playback_rate"?: 0.25 | 0.5 | 1.0 | null;
+  "playback_rate"?: 0.25 | 0.5 | 1.0 | 2.0 | null;
   "expected": SimulationRunIdentity;
 };
 
@@ -303,7 +303,7 @@ export type SimulationStateResponse = {
   "snapshot_sequence": number | null;
   "sim_time_ms": number | null;
   "epoch_utc": string | null;
-  "playback_rate": 0.25 | 0.5 | 1.0;
+  "playback_rate": 0.25 | 0.5 | 1.0 | 2.0;
   "state": "pending" | "paused" | "running" | "completed" | "error";
   "error": string | null;
   "persistence_error": string | null;
@@ -319,7 +319,7 @@ export type SimulationStatus = {
   "epoch_utc": string;
   "sim_time_ms": number;
   "state": "paused" | "running" | "completed";
-  "playback_rate"?: 0.25 | 0.5 | 1.0;
+  "playback_rate"?: 0.25 | 0.5 | 1.0 | 2.0;
 };
 
 export type SpatialContext = {

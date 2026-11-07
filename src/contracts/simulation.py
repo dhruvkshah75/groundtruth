@@ -28,7 +28,7 @@ Finite = Annotated[float, Field(allow_inf_nan=False, strict=True)]
 Positive = Annotated[Finite, Field(gt=0)]
 Identifier = Annotated[str, Field(min_length=1, pattern=r"^\S+$")]
 Direction = Literal["north", "east", "south", "west"]
-PlaybackRate = Literal[0.25, 0.5, 1.0]
+PlaybackRate = Literal[0.25, 0.5, 1.0, 2.0]
 
 
 class Contract(BaseModel):
@@ -55,7 +55,7 @@ class SimulationConfig(Contract):
     @classmethod
     def numeric_rate(cls, value: object) -> object:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("playback_rate must be numeric: 0.25, 0.5 or 1.0")
+            raise ValueError("playback_rate must be numeric: 0.25, 0.5, 1.0 or 2.0")
         return value
 
     @model_validator(mode="after")
@@ -95,7 +95,7 @@ class SceneEntity(Contract):
     """Simulator truth only; never a camera detection."""
 
     entity_id: Identifier
-    kind: Literal["parcel", "station", "shelf", "cart"]
+    kind: Identifier
     location: Identifier
     footprint: Rectangle
     intrinsic_color: Identifier
@@ -221,8 +221,8 @@ class ScenarioDefinition(Contract):
                 if event.entity_id not in by_id:
                     raise ValueError("unknown motion entity")
                 entity = by_id[event.entity_id]
-                if entity.kind not in ("parcel", "cart"):
-                    raise ValueError("only parcels and carts have scripted motion")
+                if entity.kind == "station":
+                    raise ValueError("station annotations cannot have scripted motion")
                 if event.at_ms < move_ends.get(event.entity_id, 0):
                     raise ValueError("overlapping motion for entity")
                 end_ms += event.duration_ms

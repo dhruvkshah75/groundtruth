@@ -64,7 +64,8 @@
   --success-surface: #292929;
   --success-line: #494949;
 }
-* { box-sizing: border-box; scrollbar-color: #c9bfce transparent; scrollbar-width: thin; }
+* { box-sizing: border-box; scrollbar-color: transparent transparent; scrollbar-width: thin; }
+[data-scrolling] { scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent; }
 html, body, #root { width: 100%; height: 100%; min-width: 320px; margin: 0; }
 body { height: 100dvh; overflow: hidden; }
 button, input, textarea { font: inherit; }
@@ -98,7 +99,7 @@ textarea { caret-color: var(--accent); }
 .workspace-header { display: flex; height: 60px; flex: 0 0 60px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 24px 0 16px; }
 .workspace-heading { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .workspace-heading h1 { min-width: 0; margin: 0; overflow: hidden; font-size: .875rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-visible .workspace-heading > .icon-button { display: none; }
+.sidebar-visible .workspace-heading > .icon-button:first-child { display: none; }
 .workspace-agent-name { padding-left: 12px; border-left: 1px solid var(--line-strong); color: var(--quiet); font-size: .75rem; }
 .chat-workspace { container-type: inline-size; display: flex; min-height: 0; flex: 1; flex-direction: column; }
 .conversation { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
@@ -112,13 +113,12 @@ textarea { caret-color: var(--accent); }
 .user-message { max-width: min(85%, 680px); align-self: flex-end; padding: 12px 16px; border-radius: 12px; color: var(--text); background: var(--selection); font-size: .875rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-message { min-width: 0; }
 .composer-wrap { width: min(100%, 1200px); flex-shrink: 0; align-self: center; padding: 12px 40px 18px; }
-.composer { padding: 8px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface); transition: border-color 160ms ease; }
+.composer { display: flex; align-items: flex-end; gap: 6px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface); transition: border-color 160ms ease; }
 .composer:focus-within { border-color: var(--accent); }
-.composer textarea { display: block; width: 100%; min-height: 48px; max-height: 160px; resize: vertical; padding: 4px 8px; border: 0; outline: none; color: var(--text); background: transparent; font-size: .875rem; line-height: 1.5; }
+.composer textarea { display: block; flex: 1; min-width: 0; min-height: 32px; max-height: 160px; resize: none; padding: 4px 8px; border: 0; outline: none; color: var(--text); background: transparent; font-size: .875rem; line-height: 1.5; }
 .composer textarea::placeholder { color: var(--quiet); opacity: 1; }
 .composer textarea:focus-visible { outline: none; }
-.composer-footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding-left: 8px; }
-.send-button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 12px; color: #fff; background: var(--accent); }
+.send-button { display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 12px; color: #fff; background: var(--accent); }
 .send-button:hover:not(:disabled) { background: var(--accent-hover); }
 .send-button:disabled { color: var(--muted); background: var(--line-strong); opacity: .7; }
 .composer-hint { margin: 8px 0 0; color: var(--quiet); font-size: .6875rem; text-align: center; }
@@ -220,7 +220,7 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 .react-trace-container { margin: 12px 0 0 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
 .react-trace-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 12px; border: 0; background: transparent; color: var(--muted); font-size: 10px; font-weight: 500; cursor: pointer; transition: background .15s ease; }
 .react-trace-toggle:hover { background: var(--selection); color: var(--text); }
-.react-trace-toggle code { color: var(--accent); }
+.react-trace-tool-name { color: var(--accent); font: inherit; letter-spacing: normal; word-spacing: normal; }
 .trace-chevron { transition: transform .15s ease; }
 .trace-chevron.open { transform: rotate(180deg); }
 .react-trace-details { padding: 10px 12px; border-top: 1px solid var(--line); display: grid; gap: 8px; font-size: 10px; }
@@ -302,7 +302,7 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
   .workspace-sidebar { position: fixed; z-index: 60; inset: 0 auto 0 0; width: min(280px, calc(100vw - 48px)); box-shadow: 12px 0 40px rgb(42 34 45 / 10%); }
   .workspace.sidebar-hidden .workspace-sidebar { display: none; }
   .workspace-backdrop { position: fixed; z-index: 59; inset: 0; display: block; border: 0; background: rgb(0 0 0 / 28%); }
-  .sidebar-visible .workspace-heading > .icon-button { display: inline-grid; }
+  .sidebar-visible .workspace-heading > .icon-button:first-child { display: inline-grid; }
   .workspace-header { padding: 0 16px 0 12px; }
   .workspace-agent-name { display: none; }
   .conversation-inner { padding: 20px 20px 8px; }
@@ -428,7 +428,6 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
   .chat-dialog-actions button { min-height: 44px; }
 }
 
-:root[data-theme="dark"] { scrollbar-color: #505050 transparent; }
 :root[data-theme="dark"] ::selection { color: var(--text); background: #454545; }
 
 :root[data-theme="dark"] .workspace-main { background: var(--background); }
@@ -499,3 +498,51 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 .environment-table .inspector-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .ledger-table tbody th { max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
 .ledger-table tbody th small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 400; }
+
+/* The simulation stays mounted when a companion pane opens or closes. */
+.workspace-stage, .workspace-pane { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; position: relative; }
+.workspace-nav-item[draggable="true"] { cursor: grab; }
+.workspace-stage.with-dock { display: grid; grid-template-columns: var(--primary-pane-width) 1px minmax(0, 1fr); }
+.workspace-split-divider {
+  position: relative;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+  background: var(--line-strong);
+}
+.workspace-split-divider::after { content: ""; position: absolute; inset: 0 -5px; }
+.workspace-split-divider:hover, .workspace-split-divider:focus-visible { background: var(--accent); }
+.workspace-split-divider:focus-visible { outline: none; }
+.workspace-dock { overflow: hidden; background: var(--surface); }
+.workspace-dock-header { display: flex; align-items: center; gap: 6px; min-height: 46px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.workspace-dock-header h2 { margin: 0 auto 0 0; font-size: .875rem; font-weight: 600; }
+.workspace-header.with-dock { gap: 0; padding-left: 0; }
+.workspace-header.with-dock .workspace-heading { box-sizing: border-box; flex: 0 0 var(--primary-pane-width); min-width: 0; padding-left: 16px; }
+.workspace-close-primary { margin-left: auto; margin-right: 6px; flex-shrink: 0; }
+.workspace-header.with-dock .workspace-dock-header { flex: 1; min-width: 0; align-self: stretch; border-bottom: 0; border-left: 1px solid var(--line); }
+:root[data-theme] .inspector-section {
+  border-color: var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: blur(18px) saturate(115%);
+  -webkit-backdrop-filter: blur(18px) saturate(115%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 8px 24px var(--glass-shadow);
+}
+:root[data-theme] .inspector-section-heading:hover { background: var(--glass-selected); }
+.workspace-stage.with-dock :is(.conversation-inner, .composer-wrap) { padding-inline: 14px; }
+.workspace-drop-zone {
+  position: absolute;
+  z-index: 45;
+  inset: 8px 8px 8px auto;
+  width: min(38%, 510px);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  border: 2px dashed var(--accent);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: center;
+}
+.workspace-drop-zone > div { display: grid; justify-items: center; gap: 8px; pointer-events: none; }
+.workspace-drop-zone.left { inset: 8px auto 8px 8px; }
+.workspace-drop-zone svg { color: var(--accent); }

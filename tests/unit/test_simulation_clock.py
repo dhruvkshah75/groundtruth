@@ -5,7 +5,7 @@ import pytest
 from src.web.simulation_clock import SimulationClock
 
 
-@pytest.mark.parametrize(("rate", "expected"), [(0.25, 2), (0.5, 5), (1.0, 10)])
+@pytest.mark.parametrize(("rate", "expected"), [(0.25, 2), (0.5, 5), (1.0, 10), (2.0, 20)])
 def test_rate_and_paused_time(rate, expected):
     now = [0.0]
     clock = SimulationClock(step_ms=100, rate=rate, now=lambda: now[0])

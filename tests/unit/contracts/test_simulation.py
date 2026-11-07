@@ -61,7 +61,7 @@ def test_shared_invalid_examples_rejected(case):
         getattr(simulation, case["contract"]).model_validate(case["payload"])
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), True, "0.5", 0, 2])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), True, "0.5", 0, 3])
 def test_rate_rejection_across_config_status_and_control(value):
     for model, payload in [
         (SimulationConfig, {}),
@@ -95,11 +95,11 @@ def test_invalid_configuration_boundaries(field, value):
 
 def test_pacing_does_not_change_simulation_defaults():
     base = SimulationConfig().model_dump(exclude={"playback_rate"})
-    for rate, seconds in [(0.25, 120), (0.5, 60), (1.0, 30)]:
+    for rate, seconds in [(0.25, 120), (0.5, 60), (1.0, 30), (2.0, 15)]:
         config = SimulationConfig(playback_rate=rate)
         assert config.model_dump(exclude={"playback_rate"}) == base
         assert config.duration_ms / rate / 1000 == seconds
-        assert config.step_ms / rate == {0.25: 400, 0.5: 200, 1.0: 100}[rate]
+        assert config.step_ms / rate == {0.25: 400, 0.5: 200, 1.0: 100, 2.0: 50}[rate]
 
 
 @pytest.mark.parametrize(

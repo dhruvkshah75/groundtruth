@@ -14,7 +14,7 @@ class SimulationClock:
     """Accumulate simulation milliseconds without losing unprocessed ticks."""
 
     def __init__(self, *, step_ms: int, rate: float, now: Callable[[], float] = monotonic):
-        if step_ms <= 0 or isinstance(rate, bool) or rate not in (0.25, 0.5, 1.0):
+        if step_ms <= 0 or isinstance(rate, bool) or rate not in (0.25, 0.5, 1.0, 2.0):
             raise ValueError("invalid simulation step or playback rate")
         self.step_ms = step_ms
         self.rate = rate
@@ -39,7 +39,7 @@ class SimulationClock:
         self.running = False
 
     def set_rate(self, rate: float) -> None:
-        if isinstance(rate, bool) or rate not in (0.25, 0.5, 1.0):
+        if isinstance(rate, bool) or rate not in (0.25, 0.5, 1.0, 2.0):
             raise ValueError("unsupported playback rate")
         self._account()
         self.rate = rate

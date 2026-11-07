@@ -158,7 +158,7 @@ def test_http_lifecycle_rates_and_legacy_compatibility(api):
     assert paused["patrol"]["waypoint_index"] == 0
     assert send(BASE + "/load", original_request)[1] == paused
 
-    for rate in (0.25, 0.5, 1):
+    for rate in (0.25, 0.5, 1, 2, 1):
         code, changed, _ = control(send, paused, "set_rate", playback_rate=rate)
         assert code == 200
         assert changed["snapshot_sequence"] == paused["snapshot_sequence"]

@@ -107,6 +107,7 @@ export type WorldState = {
 };
 
 export type AppState = {
+  environment_source?: "warehouse_truth" | "mock";
   simulation_status?: Pick<SimulationStateResponse, "state" | "error"> & Partial<{
     run_id: string;
     generation: number;

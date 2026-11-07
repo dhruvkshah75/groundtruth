@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -15,8 +16,9 @@ from typing import Literal, NotRequired, TypedDict
 from uuid import UUID, uuid4
 
 from src.agent import AgentResponse, GroundedAgent
-from src.contracts import FactAssertion, FactQuery, SpatialContext
+from src.contracts import CameraScan, FactAssertion, FactQuery, SensorObservation, SpatialContext
 from src.contracts.simulation import (
+    ObservationSample,
     ScenarioDefinition,
     SimulationControl,
     SimulationSnapshot,
@@ -36,7 +38,7 @@ from src.contracts.simulation_api import (
 )
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
-from src.procedural.temporal_belief_ingestion import TemporalBeliefIngestionService
+from src.procedural.temporal_belief_ingestion import IngestionResult, TemporalBeliefIngestionService
 from src.providers import ProviderConfig, create_provider, get_provider_config
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import (
@@ -255,6 +257,41 @@ class AgentSession:
         # The agent already registered graph invalidation on this ledger.
         return TemporalBeliefIngestionService(self.agent.memory)
 
+    def _simulation_ingestion(self) -> Callable[[ObservationSample], IngestionResult]:
+        """Register identities from successful camera observations, not simulator truth."""
+        ingestion = self._ingestion()
+
+        def ingest(sample: ObservationSample) -> IngestionResult:
+            self.agent.memory.set_active_run(sample.run_id)
+            result = ingestion.ingest_sample(sample)
+            if (
+                result.status != "rejected"
+                and sample.request.capability == "camera_detect"
+                and isinstance(sample.result, SensorObservation)
+            ):
+                for detection in CameraScan.model_validate(sample.result.measurements).objects:
+                    self._remember_simulation_entity(detection.object_id)
+            return result
+
+        return ingest
+
+    def _remember_simulation_entity(self, entity: str) -> None:
+        self.agent.memory.add_alias(entity, entity)
+        self.agent.memory.add_alias(entity.replace("_", " "), entity)
+        numbered = re.fullmatch(r"(.+)_([0-9]+)", entity)
+        if numbered:
+            short = f"{numbered.group(1)}_{int(numbered.group(2))}"
+            self.agent.memory.add_alias(short, entity)
+            self.agent.memory.add_alias(short.replace("_", " "), entity)
+
+    def _register_scenario_entities(self, runtime: SimulationRuntime) -> None:
+        """Register known names only; observations still establish physical claims."""
+        for entity in runtime.scenario.entities:
+            self.agent.memory.register_simulation_entity(runtime.run_id, entity.entity_id)
+            self._remember_simulation_entity(entity.entity_id)
+            self.agent.memory.add_alias(entity.kind, entity.entity_id)
+            self.agent.memory.add_alias(f"the {entity.kind}", entity.entity_id)
+
     def load_simulation(self, scenario: ScenarioDefinition, epoch_utc: datetime) -> None:
         self.touch()
         self._generation += 1
@@ -265,10 +302,11 @@ class AgentSession:
             self.runtime = SimulationRuntime(
                 scenario,
                 epoch_utc=epoch_utc,
-                ingest=self._ingestion().ingest_sample,
+                ingest=self._simulation_ingestion(),
                 now=self.now,
                 id_factory=self.id_factory,
             )
+            self._register_scenario_entities(self.runtime)
         except Exception:
             self.load_error = "Warehouse initialization failed. Reload the run to recover."
             raise
@@ -307,11 +345,15 @@ class AgentSession:
         if "simulation_runtime" in state:
             self.runtime = SimulationRuntime.restore(
                 state["simulation_runtime"],
-                ingest=self._ingestion().ingest_sample,
+                ingest=self._simulation_ingestion(),
                 now=self.now,
                 memory=self.agent.memory,
                 id_factory=self.id_factory,
             )
+            self.agent.memory.set_active_run(self.runtime.run_id)
+            self._register_scenario_entities(self.runtime)
+            for entity in self.agent.memory.observed_entity_ids(self.runtime.run_id):
+                self._remember_simulation_entity(entity)
             # A recovered checkpoint can be behind the last observed live tick.
             self._generation += 1
 
@@ -743,6 +785,10 @@ class AgentSession:
             with self.lock:
                 self._validate_request(identity)
                 agent = self.agent
+                if self.runtime is None:
+                    world = agent.environment.get_world_state()
+                    for entity_id in {*world.objects, *world.obstacles}:
+                        self._remember_simulation_entity(entity_id)
             try:
                 intent = agent.interpret(cleaned)
                 with self.lock:
@@ -879,7 +925,52 @@ class AgentSession:
         ]
         active_facts = self.agent.memory.query_facts(FactQuery(active_only=True))
         all_facts = self.agent.memory.query_facts(FactQuery(active_only=False))
+        fact_ids = {str(fact.fact_id) for fact in all_facts}
+        audit_events = [
+            event
+            for event in self.audit_history.values()
+            if self.runtime is None
+            or fact_ids.intersection(
+                event.get("input_fact_ids", []) + event.get("output_fact_ids", [])
+            )
+        ]
         world = self.agent.environment.get_world_state()
+        if self.runtime is not None:
+            physical = self.runtime.read()
+            world = WorldState(
+                world_version=physical.world_version,
+                scenario_name=physical.scenario_id,
+                robot=RobotState(**physical.robot_pose.model_dump()),
+                light=AmbientLight(
+                    intensity=physical.light_intensity, color_cast=physical.color_cast
+                ),
+                objects={
+                    entity.entity_id: SimulatedObject(
+                        object_id=entity.entity_id,
+                        x_cm=entity.footprint.x_cm,
+                        y_cm=entity.footprint.y_cm,
+                        location=entity.location,
+                        intrinsic_color=entity.intrinsic_color,
+                        visible=entity.visible,
+                        bounding_box={
+                            "width_cm": entity.footprint.width_cm,
+                            "height_cm": entity.footprint.height_cm,
+                        },
+                    )
+                    for entity in physical.entities
+                    if entity.kind != "station"
+                },
+                obstacles={
+                    entity.entity_id: Obstacle(
+                        obstacle_id=entity.entity_id,
+                        x_cm=entity.footprint.x_cm,
+                        y_cm=entity.footprint.y_cm,
+                        location=entity.location,
+                    )
+                    for entity in physical.entities
+                    if entity.solid
+                },
+            )
 
         result = {
             "history": list(self.history),
@@ -892,8 +983,9 @@ class AgentSession:
             },
             "active_facts": [_model_to_dict(fact) for fact in active_facts],
             "ledger": [_model_to_dict(fact) for fact in all_facts],
-            "audit_events": list(self.audit_history.values()),
+            "audit_events": audit_events,
             "environment": world.model_dump(mode="json"),
+            "environment_source": "warehouse_truth" if self.runtime is not None else "mock",
             "capabilities": [
                 capability.model_dump(mode="json")
                 for capability in self.agent.environment.get_capabilities()

@@ -1,0 +1,399 @@
+// Exercise the production frontend against a running offline GroundTruth server.
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { chromium } from "playwright";
+
+const base = process.env.GROUNDTRUTH_TEST_URL ?? "http://127.0.0.1:8765";
+const output = process.env.GROUNDTRUTH_SIM_SCREENSHOTS;
+const browser = await chromium.launch({
+  executablePath: process.env.CHROME_PATH,
+  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+});
+const session = randomUUID();
+const secondSession = randomUUID();
+const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+const page = await context.newPage();
+page.setDefaultTimeout(8_000);
+const button = (name) => page.getByRole("button", { name, exact: true });
+const clock = page.locator(".sim-clock strong");
+const robot = page.locator("[data-robot]");
+const stateUrl = "**/api/simulation/state";
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const api = (path, options) => context.request.fetch(`${base}/api/simulation/${path}`, {
+  headers: { "X-Session-ID": session }, ...options,
+});
+
+async function eventually(check) {
+  const end = Date.now() + 7_000;
+  while (Date.now() < end) {
+    if (await check()) return;
+    await delay(35);
+  }
+  assert.fail("Expected browser state did not appear");
+}
+
+async function post(name, endpoint, status = 200) {
+  const [response] = await Promise.all([
+    page.waitForResponse((candidate) => candidate.url().endsWith(`/api/simulation/${endpoint}`)
+      && candidate.request().method() === "POST"),
+    button(name).click(),
+  ]);
+  const data = await response.json();
+  assert.equal(response.status(), status, JSON.stringify(data));
+  return data;
+}
+
+async function schedule(value, status = 200) {
+  await page.getByLabel("Disruption", { exact: true }).selectOption(value);
+  return post("Schedule disruption", "disrupt", status);
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+try {
+  await page.addInitScript(({ first, second }) => {
+    if (!sessionStorage.getItem("groundtruth-session-id")) sessionStorage.setItem("groundtruth-session-id", first);
+    localStorage.setItem("groundtruth-theme", "light");
+    localStorage.setItem("groundtruth-chats-v1", JSON.stringify([
+      { id: first, title: "Warehouse demo", scenario: null, hasMessages: true },
+      { id: second, title: "Second chat", scenario: null, hasMessages: true },
+    ]));
+  }, { first: session, second: secondSession });
+  await page.goto(`${base}/simulation`);
+  await page.getByRole("heading", { name: "Warehouse inspection" }).waitFor();
+  await post("Load preset", "load");
+  await robot.waitFor();
+  assert.equal(await page.getByRole("complementary", { name: "Agent workspace" })
+    .getByRole("button", { name: "Reload preset" }).count(), 1);
+  assert.ok((await page.locator(".warehouse-floor").boundingBox()).height >= 500);
+  assert.equal(await robot.getAttribute("transform"), "translate(100,500)");
+  assert.equal(await robot.locator("path").getAttribute("transform"), "rotate(-90)");
+  assert.equal(await page.locator("[data-entity=parcel_03]").count(), 1);
+  const observations = page.getByRole("region", { name: "Robot observation" });
+  assert.equal(await observations.getByText("Parcel 03", { exact: true }).count(), 0);
+  const initialCapture = await observations.locator(".sim-time").first().innerText();
+
+  // An older server rejects 2×: explain how to update it instead of hiding the cause.
+  await page.route("**/api/simulation/control", (route) => route.fulfill({
+    status: 400, contentType: "application/json",
+    body: JSON.stringify({ code: "invalid_request", error: "Invalid simulation request." }),
+  }), { times: 1 });
+  await post("2×", "control", 400);
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(/Restart the backend/).waitFor();
+
+  for (const rate of ["0.25×", "1×", "2×", "0.5×"]) {
+    const data = await post(rate, "control");
+    assert.equal(data.snapshot_sequence, 0);
+    await eventually(async () => (await button(rate).getAttribute("aria-pressed")) === "true");
+    assert.equal(await clock.innerText(), "0.000 s");
+    assert.equal(await observations.locator(".sim-time").first().innerText(), initialCapture);
+  }
+
+  // Key activation on a paused run advances exactly one server tick.
+  await button("Play").focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await button("Step").evaluate((el) => document.activeElement === el), true);
+  const focusStyle = await button("Step").evaluate((el) => getComputedStyle(el).outlineStyle);
+  assert.notEqual(focusStyle, "none");
+  await page.keyboard.press("Enter");
+  await eventually(async () => (await clock.innerText()) === "0.100 s");
+  const previousPose = await robot.getAttribute("transform");
+  await post("Play", "control");
+  await eventually(async () => (await robot.getAttribute("transform")) !== previousPose);
+  const paused = await post("Pause", "control");
+  assert.equal(paused.playback_rate, 0.5);
+  assert.ok(paused.sim_time_ms > 100);
+
+  await page.locator(".sim-disrupt > summary").click();
+  await page.locator(".sim-disrupt[open]").waitFor();
+  await schedule("camera_off");
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(/Disruption scheduled for/).waitFor();
+  const conflict = await schedule("camera_off", 400);
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(conflict.error, { exact: true }).waitFor();
+  await post("Play", "control");
+  await observations.getByText("Camera unavailable", { exact: true }).waitFor();
+  await post("Pause", "control");
+  await schedule("camera_on");
+  await schedule("lidar_off");
+  await schedule("yellow");
+  await schedule("cart_block");
+  await schedule("relocate");
+  await post("Play", "control");
+  await observations.getByText("LiDAR unavailable", { exact: true }).waitFor();
+  await eventually(async () => Number((await clock.innerText()).split(" ")[0]) >= paused.sim_time_ms / 1000 + 2);
+  await post("Pause", "control");
+  await schedule("cart_clear");
+  await schedule("lidar_on");
+  await schedule("neutral");
+
+  // Hold a real older GET response across reset and assert no second poll starts.
+  const held = deferred();
+  const release = deferred();
+  let requests = 0;
+  const holdSnapshot = async (route) => {
+    requests++;
+    if (requests !== 1) return route.continue();
+    const response = await route.fetch();
+    held.resolve();
+    await release.promise;
+    await route.fulfill({ response }).catch(() => {});
+  };
+  await page.route(stateUrl, holdSnapshot);
+  await held.promise;
+  try {
+    await delay(450);
+    assert.equal(requests, 1);
+    await post("Reload preset", "load");
+    await eventually(async () => (await clock.innerText()) === "0.000 s");
+  } finally { release.resolve(); }
+  await delay(350);
+  assert.equal(await clock.innerText(), "0.000 s");
+  assert.equal(await robot.getAttribute("transform"), "translate(100,500)");
+  await page.unroute(stateUrl, holdSnapshot);
+
+  // Another controller replaces the run before the browser's Step reaches the server.
+  await page.route("**/api/simulation/control", async (route) => {
+    const body = route.request().postDataJSON();
+    const reset = await api("control", { method: "POST", data: { action: "reset", expected: body.expected } });
+    assert.equal(reset.status(), 200);
+    await route.continue();
+  }, { times: 1 });
+  const stale = await post("Step", "control", 409);
+  assert.equal(stale.code, "stale_run");
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(stale.error, { exact: true }).waitFor();
+
+  await post("Play", "control");
+  const offline = (route) => route.abort("internetdisconnected");
+  await page.route(stateUrl, offline);
+  await page.getByText("Backend disconnected", { exact: true }).waitFor();
+  await page.getByText("Stale snapshot", { exact: true }).waitFor();
+  const frozenPose = await robot.getAttribute("transform");
+  await delay(400);
+  assert.equal(await robot.getAttribute("transform"), frozenPose);
+  await page.unroute(stateUrl, offline);
+  await page.getByText("Running", { exact: true }).waitFor();
+  await eventually(async () => (await robot.getAttribute("transform")) !== frozenPose);
+  await post("Pause", "control");
+
+  // Simulate browser lifecycle visibility while preserving the real connection.
+  let polls = 0;
+  const onRequest = (request) => { if (request.url().endsWith("/api/simulation/state")) polls++; };
+  page.on("request", onRequest);
+  const visibility = (hidden) => page.evaluate((value) => {
+    Object.defineProperty(document, "hidden", { configurable: true, value });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+  await visibility(true);
+  await page.getByText("Updates suspended", { exact: true }).waitFor();
+  const suspendedCount = polls;
+  await delay(550);
+  assert.equal(polls, suspendedCount);
+  await visibility(false);
+  await page.getByText("Paused", { exact: true }).waitFor();
+  assert.ok(polls > suspendedCount);
+
+  // Layout, contrast, reduced motion and real-backend screenshots.
+  const contrast = await page.locator(".sim-heading h2").evaluate((el) => {
+    const luminance = (rgb) => rgb.match(/\d+/g).slice(0, 3).map(Number).map((v) => {
+      const c = v / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const values = [luminance(getComputedStyle(el).color),
+      luminance(getComputedStyle(el.closest(".simulation-workspace")).backgroundColor)].sort((a, b) => b - a);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  });
+  assert.ok(contrast >= 4.5);
+  if (output) {
+    await mkdir(output, { recursive: true });
+    await page.screenshot({ path: join(output, "simulation-workspace-desktop.png") });
+  }
+  async function dragTab(name, side = "right") {
+    const source = await button(name).boundingBox();
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(source.x + source.width / 2 + 16, source.y + source.height / 2, { steps: 4 });
+    const dropZone = page.locator(`.workspace-drop-zone.${side}`);
+    await dropZone.waitFor();
+    const destination = await dropZone.boundingBox();
+    await page.mouse.move(destination.x + destination.width / 2, destination.y + 80, { steps: 6 });
+    await page.mouse.move(destination.x + destination.width / 2, destination.y + 90);
+    await page.mouse.up();
+  }
+  async function assertAlignedHeaders() {
+    const primary = await page.locator(".workspace-heading h1").boundingBox();
+    const secondary = await page.locator(".workspace-dock-header h2").boundingBox();
+    const divider = await page.getByRole("separator", { name: "Resize split view" }).boundingBox();
+    assert.ok(Math.abs((primary.y + primary.height / 2) - (secondary.y + secondary.height / 2)) < 2);
+    assert.ok(primary.x < divider.x && secondary.x > divider.x);
+  }
+
+  const pausedTime = await clock.innerText();
+  const dock = page.locator(".workspace-dock");
+  await dragTab("Chat");
+  const composer = dock.getByRole("textbox", { name: "Ask the cognitive Agent" });
+  await composer.waitFor();
+  await assertAlignedHeaders();
+  assert.equal(await clock.innerText(), pausedTime);
+  assert.ok((await dock.boundingBox()).x > (await robot.boundingBox()).x);
+  const oneLine = (await composer.boundingBox()).height;
+  await composer.fill("First line\nSecond line");
+  assert.ok((await composer.boundingBox()).height > oneLine);
+  await composer.fill("A long line that wraps as the right pane grows narrower. ".repeat(4));
+  assert.ok((await composer.boundingBox()).height > oneLine);
+  await composer.fill("");
+  assert.equal((await composer.boundingBox()).height, oneLine);
+
+  const divider = page.getByRole("separator", { name: "Resize split view" });
+  const center = await divider.boundingBox();
+  assert.equal(center.width, 1);
+  await page.mouse.move(center.x + center.width / 2, center.y + 50);
+  await page.mouse.down();
+  await page.mouse.move(center.x + center.width / 2 - 100, center.y + 50, { steps: 8 });
+  await page.mouse.up();
+  assert.ok((await divider.boundingBox()).x < center.x - 80);
+  const afterDrag = (await divider.boundingBox()).x;
+  await divider.press("ArrowRight");
+  assert.ok((await divider.boundingBox()).x > afterDrag);
+  await assertAlignedHeaders();
+  if (output) await page.screenshot({ path: join(output, "simulation-workspace-split.png") });
+
+  await button("Second chat").click();
+  await page.getByText("No run loaded", { exact: true }).waitFor();
+  await composer.waitFor();
+  await button("Warehouse demo").click();
+  await robot.waitFor();
+  assert.equal(await clock.innerText(), pausedTime);
+
+  await dragTab("Chat", "left");
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  await assertAlignedHeaders();
+  assert.ok((await page.getByRole("textbox", { name: "Ask the cognitive Agent" }).boundingBox()).x < (await dock.boundingBox()).x);
+  await button("Second chat").waitFor();
+  assert.equal(await clock.innerText(), pausedTime);
+  await button("Close Chat pane").click();
+  assert.equal(await divider.count(), 0);
+  assert.equal(await clock.innerText(), pausedTime);
+  assert.equal(await page.getByRole("navigation", { name: "Workspace tabs" }).getByRole("button", { name: "Simulation" }).getAttribute("aria-current"), "page");
+  await dragTab("Chat", "left");
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  await dragTab("Chat");
+  await composer.waitFor();
+  await button("Second chat").waitFor();
+
+  const mapPane = page.getByRole("region", { name: "Warehouse simulation" });
+  const hiddenScrollbar = await mapPane.evaluate((el) => getComputedStyle(el).scrollbarColor);
+  await mapPane.evaluate((el) => { el.scrollTop = 100; });
+  await eventually(async () => (await mapPane.evaluate((el) => getComputedStyle(el).scrollbarColor)) !== hiddenScrollbar);
+  await eventually(async () => (await mapPane.evaluate((el) => getComputedStyle(el).scrollbarColor)) === hiddenScrollbar);
+  await mapPane.evaluate((el) => { el.scrollTop = 0; });
+
+  await dragTab("System inspector");
+  await dock.getByRole("region", { name: "System inspector", exact: true }).waitFor();
+  await assertAlignedHeaders();
+  await dock.getByRole("button", { name: "Tier 3 · physical environment" }).click();
+  await dock.getByText("Warehouse physical state (audience ground truth). Positions update as the simulation runs. Solid obstacles can block motion, including moving objects. The agent learns locations from observations.").waitFor();
+  await dock.getByText("Physical objects (6)", { exact: true }).waitFor();
+  await dock.getByText("Solid obstacles (3)", { exact: true }).waitFor();
+  await button("Belief graph").press("Shift+Enter");
+  await dock.getByRole("region", { name: "Belief network" }).waitFor();
+  await assertAlignedHeaders();
+  await button("Active beliefs").waitFor();
+  await dragTab("Simulation");
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  assert.equal(await clock.innerText(), pausedTime);
+  await button("Chat").click();
+  await page.locator(".workspace-pane:not(.workspace-dock)").getByRole("textbox", { name: "Ask the cognitive Agent" }).waitFor();
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  assert.equal(await clock.innerText(), pausedTime);
+  await button("Simulation").click();
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  await button("Belief graph").click();
+  await dragTab("Belief graph");
+  await dock.getByRole("region", { name: "Belief network" }).waitFor();
+
+  for (const width of [1440, 1024, 768, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const overflow = await page.locator(".simulation-workspace").evaluate((el) => el.scrollWidth > el.clientWidth);
+    assert.equal(overflow, false, `Horizontal overflow at ${width}px`);
+    assert.ok((await page.locator(".warehouse-map").boundingBox()).width > 240);
+    if (width <= 1024) await dock.waitFor({ state: "detached" });
+  }
+  await page.locator(".sim-presenter-inline > summary").click();
+  await page.locator(".sim-presenter-inline").getByRole("button", { name: "Reload preset" }).waitFor();
+  await page.locator(".sim-presenter-inline > summary").click();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  assert.equal(await button("Play").evaluate((el) => getComputedStyle(el).transitionDuration), "0s");
+  await button("Switch to dark theme").click();
+  if (output) await page.screenshot({ path: join(output, "simulation-workspace-mobile.png") });
+  await page.locator(".sim-presenter-inline > summary").click();
+  await page.locator(".sim-disrupt > summary").click();
+  const disruption = page.getByLabel("Disruption", { exact: true });
+  if (await page.evaluate(() => CSS.supports("appearance: base-select"))) {
+    await disruption.click();
+    assert.equal(await disruption.evaluate((el) => el.matches(":open")), true);
+    assert.equal(await disruption.evaluate((el) => getComputedStyle(el, "::picker(select)").backgroundColor),
+      await disruption.evaluate((el) => getComputedStyle(el).backgroundColor));
+    await page.keyboard.press("Escape");
+  }
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await button("Close docked Belief graph").click();
+  assert.equal(await dock.count(), 0);
+  const inFlight = deferred();
+  const endRequest = deferred();
+  const holdUntilNavigation = async (route) => {
+    inFlight.resolve();
+    await endRequest.promise;
+    await route.abort().catch(() => {});
+  };
+  await page.route(stateUrl, holdUntilNavigation, { times: 1 });
+  await inFlight.promise;
+  try {
+    await Promise.all([
+      page.waitForEvent("requestfailed", (request) => request.url().endsWith("/api/simulation/state")),
+      button("Chat").click(),
+    ]);
+  } finally { endRequest.resolve(); }
+  const unmountedCount = polls;
+  await delay(550);
+  assert.equal(polls, unmountedCount);
+  await button("System inspector").click();
+  await page.getByRole("heading", { name: "System inspector", exact: true }).first().waitFor();
+  await button("Belief graph").click();
+  await page.getByRole("heading", { name: "Belief graph", exact: true }).first().waitFor();
+  await button("Chat").click();
+  await button("Second chat").click();
+  await page.getByRole("heading", { name: "Second chat", exact: true }).waitFor();
+  await button("Simulation").click();
+  await page.getByText("No run loaded", { exact: true }).waitFor();
+  assert.equal(await robot.count(), 0);
+  await page.reload();
+  await page.getByRole("heading", { name: "Warehouse inspection" }).waitFor();
+  await page.getByText("Session · Second chat", { exact: true }).waitFor();
+  await post("Load preset", "load");
+  await post("2×", "control");
+  await post("Play", "control");
+  await page.getByText("Run finished. Reload the preset to schedule disruptions.", { exact: true })
+    .waitFor({ timeout: 22_000 });
+  assert.equal(await page.getByText("Completed", { exact: true }).count(), 0);
+  assert.equal(await page.locator(".sim-clock").getByText(/Reload preset/).count(), 0);
+  assert.equal(await clock.innerText(), "30.000 s");
+  await button("Chat").click();
+  await page.getByRole("textbox", { name: "Ask the cognitive Agent" }).fill("Where is parcel 01 now?");
+  await button("Send message").click();
+  const traceName = page.locator(".react-trace-tool-name").last();
+  await traceName.waitFor();
+  assert.equal(await traceName.innerText(), "object location query");
+  assert.equal(await traceName.evaluate((element) => getComputedStyle(element).fontFamily),
+    await traceName.evaluate((element) => getComputedStyle(element.parentElement).fontFamily));
+
+  console.log("Simulation browser checks passed on the real backend at 1440, 1024, 768 and 390px.");
+} finally {
+  await browser.close();
+}
