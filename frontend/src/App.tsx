@@ -872,6 +872,7 @@ function Inspector({ state }: { state: AppState | null }) {
           <div className="inspector-section-body">
             {state ? (
               <>
+                <p className="empty-detail">This is the conversation environment, separate from the warehouse simulation. See Robot observation in the Simulation view for its camera and LiDAR readings.</p>
                 {state.environment.scenario_name && <ValueCard label="Loaded scenario">{displayText(state.environment.scenario_name)}</ValueCard>}
                 <ValueCard label="World version">{state.environment.world_version}</ValueCard>
                 <ValueCard label="Robot pose"><StructuredValue value={state.environment.robot} /></ValueCard>

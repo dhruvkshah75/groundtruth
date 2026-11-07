@@ -152,6 +152,8 @@
 .sim-presenter .sim-disrupt { width: 100%; margin: 0; }
 .sim-disrupt label { min-width: 0; max-width: 100%; }
 .sim-disrupt select { max-width: 100%; }
+.sim-disrupt select { color-scheme: light; line-height: normal; }
+:root[data-theme="dark"] .sim-disrupt select { color-scheme: dark; }
 .workspace-presenter-target .sim-disrupt form { display: grid; }
 .workspace-presenter-target .sim-disrupt select { width: 100%; }
 .sim-presenter-inline { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
@@ -162,6 +164,7 @@
 
 @supports (appearance: base-select) {
   .sim-disrupt select, .sim-disrupt select::picker(select) { appearance: base-select; }
+  .sim-disrupt select { align-items: center; }
   .sim-disrupt select::picker(select) {
     margin-block: 4px;
     padding: 4px;
@@ -184,6 +187,9 @@
 /* Match the moving glass selection used by the belief graph. */
 .sim-heading { margin-bottom: 16px; }
 .sim-clock { font-size: .875rem; }
+.sim-clock-label { font-weight: 700; }
+.workspace-presenter-target .sim-presenter-message { margin: 0; color: var(--muted); font-size: .75rem; line-height: 1.5; }
+.workspace-presenter-target .sim-presenter-message.sim-warning { color: var(--warning-text); }
 .sim-rate-field { width: 100%; gap: 8px; font-size: .75rem; }
 .sim-presenter { gap: 14px; }
 .sim-rates {

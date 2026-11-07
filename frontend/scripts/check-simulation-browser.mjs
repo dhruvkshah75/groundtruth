@@ -105,8 +105,9 @@ try {
   await page.locator(".sim-disrupt > summary").click();
   await page.locator(".sim-disrupt[open]").waitFor();
   await schedule("camera_off");
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(/Disruption scheduled for/).waitFor();
   const conflict = await schedule("camera_off", 400);
-  await page.getByText(conflict.error, { exact: true }).waitFor();
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(conflict.error, { exact: true }).waitFor();
   await post("Play", "control");
   await observations.getByText("Camera unavailable", { exact: true }).waitFor();
   await post("Pause", "control");
@@ -157,7 +158,7 @@ try {
   }, { times: 1 });
   const stale = await post("Step", "control", 409);
   assert.equal(stale.code, "stale_run");
-  await page.getByText(stale.error, { exact: true }).waitFor();
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(stale.error, { exact: true }).waitFor();
 
   await post("Play", "control");
   const offline = (route) => route.abort("internetdisconnected");
@@ -344,6 +345,7 @@ try {
   await page.getByText("Run finished · Reload preset to start again", { exact: true })
     .waitFor({ timeout: 22_000 });
   assert.equal(await page.getByText("Completed", { exact: true }).count(), 0);
+  await page.getByText("Run finished. Reload the preset to schedule disruptions.").waitFor();
   assert.equal(await clock.innerText(), "30.000 s");
 
   console.log("Simulation browser checks passed on the real backend at 1440, 1024, 768 and 390px.");

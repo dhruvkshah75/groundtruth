@@ -194,7 +194,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
     const request_id = crypto.randomUUID();
     void run("Scheduling disruption…", async (expected, options) => {
       const receipt = await api.disruptSimulation({ expected, request_id, disruption }, options);
-      return { state: receipt.state, message: `Disruption scheduled for ${simTime(receipt.event.at_ms)}.` };
+      return { state: receipt.state, message: `Disruption scheduled for ${simTime(receipt.event.at_ms)}.${receipt.state.state === "paused" ? " Play or step to apply it." : ""}` };
     });
   }
 
@@ -219,6 +219,10 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
     </div>
     {loaded && state && <DisruptionControls key={state.run_id} state={state}
       disabled={!canAdjust || state.state === "completed"} submit={disrupt} />}
+    {state?.state === "completed" && <p className="sim-presenter-message">Run finished. Reload the preset to schedule disruptions.</p>}
+    {presenterTarget && (pending || notice) && <div className={`sim-presenter-message ${notice?.error ? "sim-warning" : ""}`} role="status">
+      {pending || notice?.text}
+    </div>}
   </section>;
 
   return <section className="simulation-workspace" aria-label="Warehouse simulation">
@@ -231,7 +235,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
       </div>
       <div className="sim-toolbar">
         <div className="sim-clock">
-          <span>Simulation time</span>
+          <span className="sim-clock-label">Simulation time</span>
           {state?.state === "completed" && <span role="status">Run finished · Reload preset to start again</span>}
           <strong>{state?.sim_time_ms == null ? "—" : simTime(state.sim_time_ms)}</strong>
         </div>
