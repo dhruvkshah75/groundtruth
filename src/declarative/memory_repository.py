@@ -560,6 +560,50 @@ class MemoryRepository:
             candidates=candidates,
         )
 
+    def get_latest_run_id(self) -> UUID | None:
+        """Return the most recently stored run ID from observation samples or facts."""
+        row = self._conn.execute(
+            """
+            SELECT run_id FROM observation_samples
+            ORDER BY rowid DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is not None and row["run_id"]:
+            try:
+                return UUID(row["run_id"])
+            except ValueError:
+                pass
+
+        row_fact = self._conn.execute(
+            "SELECT context_json, evidence_json FROM facts ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if row_fact is not None:
+            ctx = json.loads(row_fact["context_json"])
+            extra = ctx.get("extra_context", {})
+            if "run_id" in extra:
+                try:
+                    return UUID(str(extra["run_id"]))
+                except ValueError:
+                    pass
+            ev = json.loads(row_fact["evidence_json"])
+            if "run_id" in ev:
+                try:
+                    return UUID(str(ev["run_id"]))
+                except ValueError:
+                    pass
+        return None
+
+    def get_run_horizon_ms(self, run_id: UUID) -> int | None:
+        """Return the maximum simulation time recorded in observation_samples for a run."""
+        row = self._conn.execute(
+            "SELECT MAX(sim_time_ms) AS max_ms FROM observation_samples WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+        if row is not None and row["max_ms"] is not None:
+            return int(row["max_ms"])
+        return None
+
     # ------------------------------------------------------------------
     # private helpers
     # ------------------------------------------------------------------

@@ -6,16 +6,99 @@ enabling offline operation, continuous integration testing, and local demos.
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Any
 
 from src.procedural.intent_provider import IntentProvider
+
+WORD_NUMBERS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+
+
+def _parse_word_number(text: str) -> float | None:
+    """Parse single or compound number words (e.g. 'twenty five', 'one hundred') into a float."""
+    clean = text.lower().replace("-", " ").strip()
+    tokens = clean.split()
+    if not tokens:
+        return None
+
+    is_negative = False
+    if tokens[0] in ("minus", "negative"):
+        is_negative = True
+        tokens = tokens[1:]
+        if not tokens:
+            return None
+
+    valid_words = set(WORD_NUMBERS.keys()) | {"hundred", "thousand", "and"}
+    if any(t not in valid_words for t in tokens):
+        return None
+
+    total = 0
+    current = 0
+    for t in tokens:
+        if t == "and":
+            continue
+        if t in WORD_NUMBERS:
+            current += WORD_NUMBERS[t]
+        elif t == "hundred":
+            current = (current if current != 0 else 1) * 100
+        elif t == "thousand":
+            total += (current if current != 0 else 1) * 1000
+            current = 0
+    result = float(total + current)
+    return -result if is_negative else result
 
 
 class RuleBasedIntentProvider(IntentProvider):
     """Deterministic, rule-based provider for common epistemic scenarios."""
 
+    def __init__(self) -> None:
+        self.last_tool_name: str = ""
+        self.last_tool_call_id: str = ""
+        self.last_tool_args: dict[str, Any] = {}
+        self.last_error: str | None = None
+        self.model_name: str | None = "rule_based"
+
     def propose_intent(self, user_question: str) -> dict[str, Any]:
         """Classify user question into one of the supported GroundTruth intents."""
+        proposal = self._classify_intent(user_question)
+        self.last_tool_name = str(proposal.get("intent", ""))
+        if not getattr(self, "last_tool_call_id", None):
+            self.last_tool_call_id = "deterministic_0"
+        self.last_tool_args = dict(proposal)
+        return proposal
+
+    def _classify_intent(self, user_question: str) -> dict[str, Any]:
+        """Core rule-based classification."""
         q = user_question.lower().strip()
 
         # Combined user/camera/history questions need a live camera observation;
@@ -27,7 +110,231 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
-        # 1. Audit explanation queries
+        # 0. Reject unsupported future prediction or control action requests
+        if (
+            "predict" in q
+            or "tomorrow" in q
+            or "future" in q
+            or "navigate" in q
+            or "go to" in q
+            or "move to" in q
+            or "pick up" in q
+        ):
+            return {
+                "intent": "unsupported",
+                "entity_mentions": [],
+                "user_question": user_question,
+            }
+
+        # 1. Temporal object location queries (P2-08)
+        # Questions asking where an object is, was, when it was seen, its history, or what changed
+        is_obj = any(
+            t in q
+            for t in (
+                "parcel",
+                "box",
+                "package",
+                "item",
+                "object",
+            )
+        ) or bool(re.search(r"\bit\b", q))
+        is_loc_or_time = any(
+            term in q
+            for term in (
+                "where",
+                "when",
+                "last see",
+                "last seen",
+                "last saw",
+                "last observe",
+                "last sighting",
+                "what changed",
+                "before and what",
+                "location",
+                "position",
+                "moved",
+                "history",
+                "timeline",
+                "sightings",
+            )
+        ) or bool(re.search(r"\bat\s+-?\d+", q))
+
+        if (
+            is_obj
+            and is_loc_or_time
+            and not (
+                "where are you" in q
+                or "your position" in q
+                or "your location" in q
+                or "your pose" in q
+                or "route" in q
+            )
+        ):
+            entity = self._extract_entity(q, default=None)
+            mentions = [entity] if entity is not None else []
+
+            # A. changes mode: "what changed", "before and what changed", "moved", "previously"
+            if (
+                "what changed" in q
+                or "before and what" in q
+                or "did it change" in q
+                or "moved" in q
+                or "relocated" in q
+                or "previously" in q
+                or "earlier" in q
+                or "prior" in q
+            ):
+                return {
+                    "intent": "object_location_query",
+                    "mode": "changes",
+                    "entity_mentions": mentions,
+                    "user_question": user_question,
+                }
+
+            # B. last_seen mode: "when did you last see", "last seen", "last sighting"
+            if (
+                "last see" in q
+                or "last seen" in q
+                or "last saw" in q
+                or "last sighting" in q
+                or "last observe" in q
+                or "last observed" in q
+                or "when did you" in q
+                or "when was" in q
+            ):
+                return {
+                    "intent": "object_location_query",
+                    "mode": "last_seen",
+                    "entity_mentions": mentions,
+                    "user_question": user_question,
+                }
+
+            # C. at_time mode: "where was parcel_01 at 7 seconds", "at 7s", "at 7000ms",
+            # "at twenty five seconds", or malformed "at 7.2.3 seconds"
+            has_at_phrase = False
+            raw_expr = None
+            unit = ""
+
+            # Check 1: joined unit, e.g. "at 4s", "at 4000ms", "at 7.2.3s"
+            m_joined = re.search(
+                r"\bat\s+(-?[0-9a-zA-Z.]+?)(ms|milliseconds?|seconds?|secs?|s)\b", q
+            )
+            # Check 2: separate unit, e.g. "at twenty five seconds", "at 7.2.3 seconds"
+            m_sep = re.search(r"\bat\s+(.+?)\s+(seconds?|secs?|s|milliseconds?|ms)\b", q)
+            # Check 3: "at time <expr>" or "at second <expr>"
+            m_time = re.search(
+                r"\bat\s+(?:time|second|seconds)\s+(.+?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
+                q,
+            )
+            # Check 4: generic "at <expr>" followed by end of phrase/question
+            m_gen = re.search(
+                r"\bat\s+([^\s?.,;]+(?:\s+[^\s?.,;]+)*?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
+                q,
+            )
+
+            if m_joined:
+                has_at_phrase = True
+                raw_expr = m_joined.group(1)
+                unit = m_joined.group(2).lower()
+            elif m_sep:
+                has_at_phrase = True
+                raw_expr = m_sep.group(1)
+                unit = m_sep.group(2).lower()
+            elif m_time:
+                has_at_phrase = True
+                raw_expr = m_time.group(1)
+                unit = (m_time.group(2) or "").lower()
+            elif m_gen:
+                candidate = m_gen.group(1).strip()
+                if (
+                    any(c.isdigit() for c in candidate)
+                    or any(w in WORD_NUMBERS for w in candidate.lower().split())
+                    or "time" in q
+                    or "second" in q
+                ):
+                    has_at_phrase = True
+                    raw_expr = candidate
+                    unit = (m_gen.group(2) or "").lower()
+            elif bool(re.search(r"\bat\s+\S+", q)) and ("time" in q or "second" in q):
+                has_at_phrase = True
+                raw_expr = None
+                unit = ""
+
+            if has_at_phrase:
+                at_sim_time_ms = None
+                if raw_expr:
+                    raw_expr = raw_expr.strip()
+                    try:
+                        val = float(raw_expr)
+                        if not math.isfinite(val) or not math.isfinite(val * 1000):
+                            raise ValueError("Time must be finite")
+                        if val < 0:
+                            # Reject negative values before integer truncation
+                            at_sim_time_ms = (
+                                -1
+                                if -1 < val < 0
+                                else int(
+                                    val
+                                    if unit in ("ms", "millisecond", "milliseconds")
+                                    else val * 1000
+                                )
+                            )
+                        else:
+                            if unit in ("ms", "millisecond", "milliseconds"):
+                                at_sim_time_ms = int(val)
+                            else:
+                                at_sim_time_ms = int(val * 1000)
+                    except (ValueError, OverflowError):
+                        word_val = _parse_word_number(raw_expr)
+                        if word_val is not None:
+                            if word_val < 0:
+                                at_sim_time_ms = -1
+                            else:
+                                if unit in ("ms", "millisecond", "milliseconds"):
+                                    at_sim_time_ms = int(word_val)
+                                else:
+                                    at_sim_time_ms = int(word_val * 1000)
+                        else:
+                            # Unrecognized or malformed time phrase (e.g. '7.2.3 seconds');
+                            # keep at_sim_time_ms=None so it is rejected
+                            at_sim_time_ms = None
+
+                return {
+                    "intent": "object_location_query",
+                    "mode": "at_time",
+                    "at_sim_time_ms": at_sim_time_ms,
+                    "entity_mentions": mentions,
+                    "user_question": user_question,
+                }
+
+            # D. history mode: "sighting history", "history of parcel_01"
+            if "history" in q or "timeline" in q or "sightings" in q:
+                return {
+                    "intent": "object_location_query",
+                    "mode": "history",
+                    "entity_mentions": mentions,
+                    "user_question": user_question,
+                }
+
+            # Preserve historical intent: if past tense is used without explicit time,
+            # map to last_seen
+            if "was" in q or "were" in q or "did" in q or "before" in q:
+                return {
+                    "intent": "object_location_query",
+                    "mode": "last_seen",
+                    "entity_mentions": mentions,
+                    "user_question": user_question,
+                }
+
+            # E. current mode: "where is parcel_01 now", "location of parcel_01"
+            return {
+                "intent": "object_location_query",
+                "mode": "current",
+                "entity_mentions": mentions,
+                "user_question": user_question,
+            }
+
+        # 2. Audit explanation queries
         if "why" in q or "audit" in q or "replaced" in q or "superseded" in q:
             entity = self._extract_entity(q, default="route_A")
             return {
@@ -36,7 +343,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
-        # 2. Historical fact lookup queries
+        # 3. Historical fact lookup queries
         if (
             "history" in q
             or "what did the map say" in q
@@ -52,10 +359,9 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
-        # 3. Object perception & Perspective tracking queries
+        # 4. Object perception & Perspective tracking queries
         if (
             "color" in q
-            or "box" in q
             or "look like" in q
             or "see" in q
             or "camera" in q
@@ -69,7 +375,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
-        # 4. Route status queries (Scenario A)
+        # 5. Route status queries (Scenario A)
         if (
             "route" in q
             or "path" in q
@@ -87,7 +393,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
-        # 5. Robot pose queries
+        # 6. Robot pose queries
         if "where are you" in q or "pose" in q or "location" in q or "position" in q:
             return {
                 "intent": "current_robot_pose",
@@ -95,7 +401,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
-        # 6. Action queries (unsupported execution path)
+        # 7. Action queries (unsupported execution path)
         if "pick up" in q or "drive to" in q or "move to" in q or "push" in q:
             return {
                 "intent": "environment_action",
@@ -103,7 +409,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
-        # 7. Unsupported fallback
+        # 8. Unsupported fallback
         return {
             "intent": "unsupported",
             "entity_mentions": [],
@@ -131,8 +437,16 @@ class RuleBasedIntentProvider(IntentProvider):
             "user_question": user_question,
         }
 
-    def _extract_entity(self, text: str, default: str) -> str:
+    def _extract_entity(self, text: str, default: str | None = None) -> str | None:
         """Helper to extract common entity mentions from query string."""
+        # Check known color/article prefixes with parcel/box/route first
+        m_phrase = re.search(
+            r"\b((?:red|blue|green|yellow|brown|the|front)\s+(?:parcel|box|route|item|package))\b",
+            text,
+        )
+        if m_phrase:
+            return m_phrase.group(1)
+
         if "front route" in text:
             return "front route"
         if "route a" in text:
@@ -149,8 +463,38 @@ class RuleBasedIntentProvider(IntentProvider):
             return "brown box"
         if "the box" in text:
             return "the box"
-        if "box_01" in text or "box 01" in text or "box 1" in text:
-            return "box_01"
-        if "box_02" in text or "box 02" in text or "box 2" in text:
-            return "box_02"
+        if "the parcel" in text:
+            return "the parcel"
+        if "the item" in text:
+            return "the item"
+        if "the object" in text:
+            return "the object"
+        if "the package" in text:
+            return "the package"
+        if "parcel_handoff" in text or "parcel handoff" in text:
+            return "parcel_handoff"
+
+        # Regex for parcel_XX or box_XX with digits
+        m_digit = re.search(r"\b(parcel[_\s]?\d+|box[_\s]?\d+)\b", text)
+        if m_digit:
+            return m_digit.group(1).replace(" ", "_")
+
+        # Regex for parcel_XX or box_XX
+        m = re.search(r"\b(parcel[_\s]?\w+|box[_\s]?\w+)\b", text)
+        if m:
+            val = m.group(1).replace(" ", "_")
+            if val not in (
+                "parcel_now",
+                "parcel_before",
+                "parcel_located",
+                "parcel_right",
+                "parcel_right_now",
+            ):
+                return val
+
+        # Check for pronouns or generic references like "it"
+        m_it = re.search(r"\b(it)\b", text)
+        if m_it:
+            return "it"
+
         return default

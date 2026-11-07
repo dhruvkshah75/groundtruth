@@ -1,10 +1,16 @@
 """Typed data for work that a later executor may perform."""
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from src.contracts import FactQuery, IntentRequest, ObservationRequest
+from src.contracts import (
+    FactQuery,
+    IntentRequest,
+    ObservationRequest,
+    TemporalObservationQuery,
+)
 
 
 class MemoryQueryOperation(BaseModel):
@@ -35,6 +41,20 @@ class ObservationOperation(BaseModel):
     purpose: str = Field(min_length=1)
 
 
+class TemporalObservationOperation(BaseModel):
+    """One approved temporal query against Tier 1 Observation Ledger.
+
+    Fields:
+        query: The structured TemporalObservationQuery.
+        purpose: Why this query is needed for this plan.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: TemporalObservationQuery
+    purpose: str = Field(min_length=1)
+
+
 class AuditChainOperation(BaseModel):
     """One approved request for an audit history.
 
@@ -50,6 +70,7 @@ class AuditChainOperation(BaseModel):
     entity_id: str = Field(min_length=1)
     fact_ids_from_memory_operation: int = Field(ge=0)
     purpose: str = Field(min_length=1)
+    run_id: UUID | None = None
 
 
 class ActionPlaceholder(BaseModel):
@@ -75,6 +96,7 @@ class ExecutionPlan(BaseModel):
         resolved_entity_ids: Canonical entity IDs used by the operations.
         memory_operations: Approved Tier 1 fact queries.
         observation_operations: Approved Tier 3 sensor requests.
+        temporal_operations: Approved Tier 1 temporal observation queries.
         audit_operations: Approved audit-history requests.
         action_placeholder: A future action that is not executed here.
         current_state_verifiable: Whether the required live evidence exists.
@@ -88,6 +110,7 @@ class ExecutionPlan(BaseModel):
     resolved_entity_ids: list[str] = Field(default_factory=list)
     memory_operations: list[MemoryQueryOperation] = Field(default_factory=list)
     observation_operations: list[ObservationOperation] = Field(default_factory=list)
+    temporal_operations: list[TemporalObservationOperation] = Field(default_factory=list)
     audit_operations: list[AuditChainOperation] = Field(default_factory=list)
     action_placeholder: ActionPlaceholder | None = None
     current_state_verifiable: bool

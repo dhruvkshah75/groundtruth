@@ -190,6 +190,7 @@ class GroundedAgent:
         intent: IntentPlannerOutcome,
         *,
         sensors: EnvironmentInterface | None = None,
+        capture_time_ms: int | None = None,
     ) -> Callable[[], AgentResponse]:
         """Execute deterministic operations and prepare a detached provider-only continuation."""
         plan_result = self._composition.execute_intent(intent, sensors=sensors)
@@ -200,12 +201,23 @@ class GroundedAgent:
             last_err = getattr(self._provider, "last_error", None) or fallback.reason
             raise IntentProviderUnavailableError(f"Live intent provider failed: {last_err}")
 
+        sim_time = capture_time_ms
+        if sim_time is None and sensors is not None:
+            sim_time = getattr(sensors, "sim_time_ms", None)
+            if sim_time is None and hasattr(sensors, "read"):
+                try:
+                    sim_time = sensors.read().status.sim_time_ms
+                except Exception:
+                    pass
+
         # 2. Epistemically evaluate against memory and observations
         eval_outcome: EpistemicEvaluation = self._evaluator.evaluate(
             plan_result=plan_result,
             user_question=question,
             memory_repo=self._memory,
             revise_routes=sensors is None,
+            capture_time_ms=sim_time,
+            active_run_id=getattr(sensors, "run_id", None),
         )
 
         # 3. Pull current active projection and facts
@@ -246,6 +258,7 @@ class GroundedAgent:
         execution_summary = {
             "memory_queries_count": len(getattr(plan_result, "memory_results", [])),
             "observations_count": len(getattr(plan_result, "observation_results", [])),
+            "temporal_queries_count": len(getattr(plan_result, "temporal_results", [])),
             "audit_lookups_count": len(getattr(plan_result, "audit_results", [])),
             "plan_verifiable": plan_verifiable,
         }
@@ -310,6 +323,25 @@ class GroundedAgent:
                         "evidence_ids": obs_id,
                         "returned_values": measurements,
                         "summary": summary,
+                    }
+                )
+
+            for temp_res in plan_result.temporal_results:
+                sample_ids = [str(s.sample_id) for s in temp_res.samples]
+                operations_trace.append(
+                    {
+                        "name": f"temporal_query_{temp_res.mode}",
+                        "purpose": temp_res.purpose,
+                        "ran": True,
+                        "status": "completed",
+                        "evidence_ids": sample_ids,
+                        "returned_values": {
+                            "mode": temp_res.mode,
+                            "entity_id": temp_res.entity_id,
+                            "capability": temp_res.capability,
+                            "samples_count": len(temp_res.samples),
+                        },
+                        "summary": f"Retrieved {len(temp_res.samples)} sample(s)",
                     }
                 )
 

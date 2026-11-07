@@ -697,7 +697,10 @@ class AgentSession:
                         raise RuntimeError(self.load_error)
                     runtime = self.runtime
                     snapshot = runtime.read() if runtime else None
-                    capture = agent.capture(cleaned, intent, sensors=runtime)
+                    capture_time_ms = snapshot.status.sim_time_ms if snapshot else None
+                    capture = agent.capture(
+                        cleaned, intent, sensors=runtime, capture_time_ms=capture_time_ms
+                    )
                     self._dirty = True
                 item = _response_to_dict(capture())
                 if snapshot is not None:

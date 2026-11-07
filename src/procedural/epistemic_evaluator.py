@@ -22,6 +22,7 @@ from src.contracts import (
     ObservationUnavailable,
     SensorObservation,
     StoredFact,
+    StoredObservationSample,
 )
 from src.procedural.execution_results import PlanExecutionResult
 from src.procedural.fallback_results import PlanningOutcome
@@ -71,6 +72,8 @@ class EpistemicEvaluator:
         memory_repo: EpistemicMemoryInterface,
         *,
         revise_routes: bool = True,
+        capture_time_ms: int | None = None,
+        active_run_id: UUID | None = None,
     ) -> EpistemicEvaluation:
         """Perform epistemic evaluation of execution results against memory and sensors."""
         # 1. Handle planning-level fallbacks
@@ -106,7 +109,17 @@ class EpistemicEvaluator:
                 explanation=f"Request could not be planned: {reason}",
             )
 
-        # 2. Check for unverifiable sensor state
+        # 2. Handle temporal object location queries (Issue #32)
+        if getattr(plan_result, "temporal_results", None):
+            return self._evaluate_temporal_object_query(
+                plan_result=plan_result,
+                user_question=user_question,
+                memory_repo=memory_repo,
+                capture_time_ms=capture_time_ms,
+                active_run_id=active_run_id,
+            )
+
+        # 3. Check for unverifiable sensor state
         if not plan_result.plan_verifiable or any(
             isinstance(obs.result, ObservationUnavailable)
             for obs in plan_result.observation_results
@@ -527,6 +540,680 @@ class EpistemicEvaluator:
             explanation=explanation,
             perspectives=perspectives,
             memory_facts=historical_facts,
+            sensor_telemetry=telemetry,
+        )
+
+    def _evaluate_temporal_object_query(
+        self,
+        plan_result: PlanExecutionResult,
+        user_question: str,
+        memory_repo: EpistemicMemoryInterface,
+        capture_time_ms: int | None = None,
+        active_run_id: UUID | None = None,
+    ) -> EpistemicEvaluation:
+        """Evaluate observation ledger and temporal belief results for an object location query."""
+        temporal_results = plan_result.temporal_results
+        intent = plan_result.intent
+        mode = intent.mode if intent and intent.mode else None
+
+        canonical_entity_id = (
+            temporal_results[0].entity_id
+            if temporal_results and temporal_results[0].entity_id
+            else (intent.entity_mentions[0] if intent and intent.entity_mentions else "")
+        )
+        display_name = (
+            intent.entity_mentions[0] if intent and intent.entity_mentions else canonical_entity_id
+        )
+
+        selected_run_id = (
+            temporal_results[0].run_id if temporal_results and temporal_results[0].run_id else None
+        )
+        if selected_run_id is None and intent and intent.run_id:
+            selected_run_id = intent.run_id
+
+        if mode is None:
+            if any(tr.at_sim_time_ms is not None for tr in temporal_results):
+                mode = "at_time"
+            elif any(tr.mode == "history" for tr in temporal_results):
+                mode = "changes" if plan_result.audit_results else "history"
+            else:
+                lq = user_question.lower()
+                mode = "last_seen" if ("last" in lq or "when" in lq) else "current"
+
+        at_sim_time_ms = (
+            intent.at_sim_time_ms
+            if intent and intent.at_sim_time_ms is not None
+            else next(
+                (tr.at_sim_time_ms for tr in temporal_results if tr.at_sim_time_ms is not None),
+                None,
+            )
+        )
+
+        sighting_samples: list[StoredObservationSample] = []
+        latest_cam_samples: list[StoredObservationSample] = []
+        for tr in temporal_results:
+            if tr.mode in ("last_seen", "history"):
+                sighting_samples.extend(tr.samples)
+            elif tr.mode == "latest" and tr.capability == "camera_detect":
+                latest_cam_samples.extend(tr.samples)
+
+        all_samples = [s for tr in temporal_results for s in tr.samples]
+        telemetry: list[dict[str, Any]] = []
+        for s in all_samples:
+            if isinstance(s.result, SensorObservation):
+                obs_dict = s.result.model_dump(mode="json")
+                obs_dict["sample_id"] = str(s.sample_id)
+                obs_dict["run_id"] = str(s.run_id)
+                obs_dict["sim_time_ms"] = s.sim_time_ms
+                obs_dict["sample_sequence"] = s.sample_sequence
+                obs_dict["observer_pose"] = s.observer_pose.model_dump(mode="json")
+                telemetry.append(obs_dict)
+            else:
+                telemetry.append(
+                    {
+                        "sample_id": str(s.sample_id),
+                        "run_id": str(s.run_id),
+                        "sim_time_ms": s.sim_time_ms,
+                        "sample_sequence": s.sample_sequence,
+                        "capability": s.request.capability,
+                        "status": "unavailable",
+                        "reason": s.result.reason,
+                        "observer_pose": s.observer_pose.model_dump(mode="json"),
+                    }
+                )
+        memory_facts = [f for m in plan_result.memory_results for f in m.facts]
+        trails = [trail for ar in plan_result.audit_results for trail in ar.trails.values()]
+        events = [e for trail in trails for e in trail.events]
+
+        latest_camera = latest_cam_samples[0] if latest_cam_samples else None
+
+        def _fmt_coord(val: float | int | None) -> str:
+            if val is None:
+                return "0"
+            if isinstance(val, (int, float)) and float(val).is_integer():
+                return str(int(val))
+            return f"{val:.1f}"
+
+        def _find_det(
+            sample: StoredObservationSample, target: str
+        ) -> tuple[float, float, str, str] | None:
+            if (
+                not isinstance(sample.result, SensorObservation)
+                or sample.result.capability != "camera_detect"
+            ):
+                return None
+            measurements = sample.result.measurements
+            objects: list[Any] = []
+            if isinstance(measurements, dict):
+                objects = measurements.get("objects", [])
+            elif hasattr(measurements, "objects"):
+                objects = getattr(measurements, "objects", [])
+
+            targets = {target}
+            if canonical_entity_id:
+                targets.add(canonical_entity_id)
+            if display_name:
+                targets.add(display_name)
+
+            for obj in objects:
+                obj_id = (
+                    obj.get("object_id")
+                    if isinstance(obj, dict)
+                    else getattr(obj, "object_id", None)
+                )
+                if obj_id in targets:
+                    pos = (
+                        obj.get("position", {})
+                        if isinstance(obj, dict)
+                        else getattr(obj, "position")
+                    )
+                    x = pos.get("x_cm", 0.0) if isinstance(pos, dict) else getattr(pos, "x_cm", 0.0)
+                    y = pos.get("y_cm", 0.0) if isinstance(pos, dict) else getattr(pos, "y_cm", 0.0)
+                    color = (
+                        obj.get("apparent_color", "")
+                        if isinstance(obj, dict)
+                        else getattr(obj, "apparent_color", "")
+                    )
+                    frame = (
+                        obj.get("frame_of_reference", "")
+                        if isinstance(obj, dict)
+                        else getattr(obj, "frame_of_reference", "")
+                    )
+                    return (float(x), float(y), str(color), str(frame))
+            return None
+
+        def _is_strictly_later(a: StoredObservationSample, b: StoredObservationSample) -> bool:
+            if a.sim_time_ms != b.sim_time_ms:
+                return a.sim_time_ms > b.sim_time_ms
+            return a.sample_sequence > b.sample_sequence
+
+        valid_sightings = [
+            s for s in sighting_samples if _find_det(s, canonical_entity_id) is not None
+        ]
+
+        FRESHNESS_LIMIT_MS = 1000
+
+        # 1. Mode: current
+        if mode == "current":
+            if valid_sightings:
+                sighting = valid_sightings[0]
+                det = _find_det(sighting, canonical_entity_id)
+                assert det is not None
+                x_cm = _fmt_coord(det[0])
+                y_cm = _fmt_coord(det[1])
+                obs_pose = sighting.observer_pose
+
+                if latest_camera and _is_strictly_later(latest_camera, sighting):
+                    cam_ms = latest_camera.sim_time_ms
+                    if isinstance(latest_camera.result, ObservationUnavailable):
+                        reason = latest_camera.result.reason
+                        return EpistemicEvaluation(
+                            status="uncertain",
+                            explanation=(
+                                f"Current location of {display_name} cannot be freshly verified "
+                                f"because the camera reported an outage at simulation time "
+                                f"{cam_ms} ms ({reason}). Last confirmed sighting was at "
+                                f"simulation time {sighting.sim_time_ms} ms at x={x_cm} cm, "
+                                f"y={y_cm} cm in {obs_pose.location} by {obs_pose.robot_id} "
+                                f"(sample ID: {sighting.sample_id})."
+                            ),
+                            memory_facts=memory_facts,
+                            sensor_telemetry=telemetry,
+                        )
+                    else:
+                        later_det = _find_det(latest_camera, canonical_entity_id)
+                        if later_det is None:
+                            return EpistemicEvaluation(
+                                status="uncertain",
+                                explanation=(
+                                    f"Current location of {display_name} cannot be freshly "
+                                    f"verified because a subsequent camera scan at simulation "
+                                    f"time {cam_ms} ms did not detect it in "
+                                    f"{latest_camera.observer_pose.location}. Last confirmed "
+                                    f"sighting was at simulation time {sighting.sim_time_ms} ms "
+                                    f"at x={x_cm} cm, y={y_cm} cm in {obs_pose.location} "
+                                    f"by {obs_pose.robot_id} (sample ID: {sighting.sample_id})."
+                                ),
+                                memory_facts=memory_facts,
+                                sensor_telemetry=telemetry,
+                            )
+                        else:
+                            x_cm = _fmt_coord(later_det[0])
+                            y_cm = _fmt_coord(later_det[1])
+                            obs_pose = latest_camera.observer_pose
+                            sighting = latest_camera
+
+                if active_run_id is not None and selected_run_id != active_run_id:
+                    return EpistemicEvaluation(
+                        status="uncertain",
+                        explanation=(
+                            f"Current location of {display_name} cannot be verified from "
+                            f"a previous run. Its last sighting in run {selected_run_id} was at "
+                            f"{sighting.sim_time_ms} ms at x={x_cm} cm, y={y_cm} cm "
+                            f"(sample ID: {sighting.sample_id})."
+                        ),
+                        memory_facts=memory_facts,
+                        sensor_telemetry=telemetry,
+                    )
+
+                # Compare sighting timestamp with request's captured simulation time & freshness
+                ref_time_ms = (
+                    capture_time_ms
+                    if capture_time_ms is not None
+                    else (latest_camera.sim_time_ms if latest_camera else sighting.sim_time_ms)
+                )
+                age_ms = max(0, ref_time_ms - sighting.sim_time_ms)
+                if capture_time_ms is not None and age_ms > FRESHNESS_LIMIT_MS:
+                    return EpistemicEvaluation(
+                        status="uncertain",
+                        explanation=(
+                            f"Current location of {display_name} cannot be freshly verified "
+                            f"because the latest sighting at simulation time "
+                            f"{sighting.sim_time_ms} ms is stale (age: {age_ms} ms, "
+                            f"freshness threshold: {FRESHNESS_LIMIT_MS} ms). Last confirmed "
+                            f"sighting was at simulation time {sighting.sim_time_ms} ms "
+                            f"at x={x_cm} cm, y={y_cm} cm in {obs_pose.location} by "
+                            f"{obs_pose.robot_id} (sample ID: {sighting.sample_id})."
+                        ),
+                        memory_facts=memory_facts,
+                        sensor_telemetry=telemetry,
+                    )
+
+                return EpistemicEvaluation(
+                    status="verified",
+                    explanation=(
+                        f"{display_name} was observed at x={x_cm} cm, y={y_cm} cm in "
+                        f"{obs_pose.location} by {obs_pose.robot_id} at simulation time "
+                        f"{sighting.sim_time_ms} ms (sample ID: {sighting.sample_id})."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+            else:
+                selected_run_id = (
+                    temporal_results[0].run_id
+                    if temporal_results and temporal_results[0].run_id
+                    else None
+                )
+                if selected_run_id is None and intent and intent.run_id:
+                    selected_run_id = intent.run_id
+
+                matching_facts = [
+                    f
+                    for f in memory_facts
+                    if f.predicate == "located_at" and f.superseded_by is None
+                ]
+
+                loc_fact = None
+                different_run_fact = None
+                unscoped_fact = None
+
+                for f in matching_facts:
+                    f_run = f.context.extra_context.get("run_id") or f.evidence.get("run_id")
+                    if f_run is not None:
+                        if selected_run_id is not None and str(selected_run_id) != str(UUID(int=0)):
+                            if str(f_run) == str(selected_run_id):
+                                loc_fact = f
+                                break
+                            else:
+                                different_run_fact = f
+                        else:
+                            loc_fact = f
+                            break
+                    else:
+                        unscoped_fact = f
+
+                if loc_fact is None and (
+                    different_run_fact is not None
+                    or (
+                        unscoped_fact is not None
+                        and selected_run_id is not None
+                        and str(selected_run_id) != str(UUID(int=0))
+                    )
+                ):
+                    target_fact = different_run_fact or unscoped_fact
+                    assert target_fact is not None
+                    f_run = target_fact.context.extra_context.get(
+                        "run_id"
+                    ) or target_fact.evidence.get("run_id")
+                    prov_desc = f"from run {f_run}" if f_run else f"from {target_fact.source_agent}"
+                    return EpistemicEvaluation(
+                        status="uncertain",
+                        explanation=(
+                            f"No physical camera observations recorded for {display_name} in run "
+                            f"{selected_run_id}. Stored memory record ({prov_desc}) cannot "
+                            f"establish a location for run {selected_run_id}."
+                        ),
+                        memory_facts=memory_facts,
+                        sensor_telemetry=telemetry,
+                    )
+
+                if loc_fact is None and unscoped_fact is not None:
+                    loc_fact = unscoped_fact
+
+                if loc_fact:
+                    return EpistemicEvaluation(
+                        status="stored_belief",
+                        explanation=(
+                            f"No physical camera observations have been recorded for "
+                            f"{display_name} in this run. Stored memory record indicates "
+                            f"{display_name} is located at {loc_fact.object} "
+                            f"(source: {loc_fact.source_agent}), but current physical state "
+                            f"is unverified."
+                        ),
+                        memory_facts=memory_facts,
+                        sensor_telemetry=telemetry,
+                    )
+                return EpistemicEvaluation(
+                    status="no_data",
+                    explanation=f"No observations or memory records found for {display_name}.",
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+
+        # 2. Mode: last_seen
+        if mode == "last_seen":
+            if valid_sightings:
+                sighting = valid_sightings[0]
+                det = _find_det(sighting, canonical_entity_id)
+                assert det is not None
+                x_cm = _fmt_coord(det[0])
+                y_cm = _fmt_coord(det[1])
+                obs_pose = sighting.observer_pose
+
+                previous_run = active_run_id is not None and selected_run_id != active_run_id
+                if previous_run:
+                    horizon = (
+                        memory_repo.get_run_horizon_ms(selected_run_id)
+                        if selected_run_id is not None
+                        and hasattr(memory_repo, "get_run_horizon_ms")
+                        else None
+                    )
+                    ref_time_ms = (
+                        horizon
+                        if horizon is not None
+                        else (latest_camera.sim_time_ms if latest_camera else sighting.sim_time_ms)
+                    )
+                else:
+                    ref_time_ms = (
+                        capture_time_ms
+                        if capture_time_ms is not None
+                        else (latest_camera.sim_time_ms if latest_camera else sighting.sim_time_ms)
+                    )
+                age_ms = max(0, ref_time_ms - sighting.sim_time_ms)
+
+                subsequent_ctx = "No subsequent conflicting camera scans recorded."
+                if latest_camera and _is_strictly_later(latest_camera, sighting):
+                    if isinstance(latest_camera.result, ObservationUnavailable):
+                        subsequent_ctx = (
+                            f"Subsequent camera scan at {latest_camera.sim_time_ms} ms reported "
+                            f"outage ({latest_camera.result.reason})."
+                        )
+                    else:
+                        later_det = _find_det(latest_camera, canonical_entity_id)
+                        if later_det is None:
+                            subsequent_ctx = (
+                                f"Subsequent camera scan at {latest_camera.sim_time_ms} ms did not "
+                                f"detect {display_name}."
+                            )
+
+                if previous_run:
+                    subsequent_ctx += " Previous run evidence cannot verify the current location."
+                age_context = " at the end of the selected run" if previous_run else ""
+                return EpistemicEvaluation(
+                    status="verified",
+                    explanation=(
+                        f"{display_name} was last seen at simulation time "
+                        f"{sighting.sim_time_ms} ms at x={x_cm} cm, y={y_cm} cm in "
+                        f"{obs_pose.location} by {obs_pose.robot_id} "
+                        f"(sample ID: {sighting.sample_id}, age: {age_ms} ms{age_context}). "
+                        f"Current verification status: {subsequent_ctx}"
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+            return EpistemicEvaluation(
+                status="no_data",
+                explanation=(
+                    f"No positive sightings of {display_name} have been recorded in the "
+                    f"observation ledger."
+                ),
+                memory_facts=memory_facts,
+                sensor_telemetry=telemetry,
+            )
+
+        # 3. Mode: at_time
+        if mode == "at_time":
+            target_ms = at_sim_time_ms if at_sim_time_ms is not None else 0
+
+            # Determine whether capture_time_ms belongs to the selected run.
+            # The active request clock is applicable only when it belongs to the run being queried.
+            is_active_run = (
+                active_run_id is not None
+                and selected_run_id is not None
+                and str(active_run_id) == str(selected_run_id)
+            ) or (active_run_id is None and (intent is None or intent.run_id is None))
+
+            if is_active_run:
+                latest_run_ms = (
+                    capture_time_ms
+                    if capture_time_ms is not None
+                    else (latest_camera.sim_time_ms if latest_camera else None)
+                )
+            else:
+                # Explicit previous-run query: use the selected run's own horizon
+                run_horizon = None
+                if (
+                    memory_repo is not None
+                    and hasattr(memory_repo, "get_run_horizon_ms")
+                    and selected_run_id is not None
+                ):
+                    run_horizon = memory_repo.get_run_horizon_ms(selected_run_id)
+                if run_horizon is not None:
+                    latest_run_ms = run_horizon
+                elif latest_camera and (
+                    getattr(latest_camera, "run_id", None) is None
+                    or str(latest_camera.run_id) == str(selected_run_id)
+                ):
+                    latest_run_ms = latest_camera.sim_time_ms
+                elif valid_sightings:
+                    matching_sightings = [
+                        s for s in valid_sightings if str(s.run_id) == str(selected_run_id)
+                    ]
+                    latest_run_ms = (
+                        matching_sightings[0].sim_time_ms if matching_sightings else None
+                    )
+                else:
+                    latest_run_ms = None
+
+            if latest_run_ms is None and valid_sightings:
+                latest_run_ms = valid_sightings[0].sim_time_ms
+
+            if latest_run_ms is not None and target_ms > latest_run_ms:
+                return EpistemicEvaluation(
+                    status="uncertain",
+                    explanation=(
+                        f"The requested simulation time {target_ms} ms is in the future "
+                        f"relative to available observation ledger evidence "
+                        f"(latest recorded: {latest_run_ms} ms). Location cannot be verified."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+
+            valid_at_time = [s for s in valid_sightings if s.sim_time_ms <= target_ms]
+            if valid_at_time:
+                sighting = valid_at_time[0]
+                det = _find_det(sighting, canonical_entity_id)
+                assert det is not None
+                x_cm = _fmt_coord(det[0])
+                y_cm = _fmt_coord(det[1])
+                obs_pose = sighting.observer_pose
+                age_ms = target_ms - sighting.sim_time_ms
+
+                return EpistemicEvaluation(
+                    status="verified",
+                    explanation=(
+                        f"At simulation time {target_ms} ms, the latest applicable observation "
+                        f"of {display_name} was captured at {sighting.sim_time_ms} ms "
+                        f"(age: {age_ms} ms) at x={x_cm} cm, y={y_cm} cm in {obs_pose.location} "
+                        f"by {obs_pose.robot_id} (sample ID: {sighting.sample_id}). "
+                        f"Note: No intermediate position is interpolated at {target_ms} ms."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+
+            return EpistemicEvaluation(
+                status="no_data",
+                explanation=(
+                    f"No observations of {display_name} were recorded at or before simulation "
+                    f"time {target_ms} ms."
+                ),
+                memory_facts=memory_facts,
+                sensor_telemetry=telemetry,
+            )
+
+        # 4. Mode: history
+        if mode == "history":
+            if valid_sightings:
+                timeline = []
+                for s in valid_sightings:
+                    det = _find_det(s, canonical_entity_id)
+                    assert det is not None
+                    x_cm = _fmt_coord(det[0])
+                    y_cm = _fmt_coord(det[1])
+                    timeline.append(
+                        f"[{s.sim_time_ms} ms: at x={x_cm} cm, y={y_cm} cm in "
+                        f"{s.observer_pose.location} by {s.observer_pose.robot_id} "
+                        f"(sample ID: {s.sample_id})]"
+                    )
+                return EpistemicEvaluation(
+                    status="verified",
+                    explanation=(
+                        f"Sighting timeline for {display_name}: " + "; ".join(timeline) + "."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+            return EpistemicEvaluation(
+                status="no_data",
+                explanation=(
+                    f"No sighting history recorded for {display_name} in the observation ledger."
+                ),
+                memory_facts=memory_facts,
+                sensor_telemetry=telemetry,
+            )
+
+        # 5. Mode: changes
+        if mode == "changes":
+            if not valid_sightings:
+                return EpistemicEvaluation(
+                    status="no_data",
+                    explanation=(
+                        f"No sighting history or relocation changes found for {display_name}."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+
+            transitions = []
+            incompatible_frames: list[tuple[str, str]] = []
+            for i in range(len(valid_sightings) - 1):
+                s1 = valid_sightings[i]
+                s2 = valid_sightings[i + 1]
+                det1 = _find_det(s1, canonical_entity_id)
+                det2 = _find_det(s2, canonical_entity_id)
+                assert det1 is not None and det2 is not None
+                pos1 = (round(det1[0], 1), round(det1[1], 1))
+                pos2 = (round(det2[0], 1), round(det2[1], 1))
+                frame1 = det1[3]
+                frame2 = det2[3]
+                loc1 = s1.observer_pose.location
+                loc2 = s2.observer_pose.location
+                # Compare object positions in compatible frames. A change in the
+                # observer's location is NOT evidence that the object moved.
+                frames_compatible = (frame1 == frame2) or (not frame1 or not frame2)
+                if not frames_compatible:
+                    incompatible_frames.append((frame1, frame2))
+                    continue
+
+                if pos1 != pos2:
+                    transitions.append((s1, s2, loc1, loc2))
+
+            if incompatible_frames:
+                f1, f2 = incompatible_frames[0]
+                return EpistemicEvaluation(
+                    status="uncertain",
+                    explanation=(
+                        f"Location changes for {display_name} cannot be verified because "
+                        f"observations use incompatible reference frames ({f1} vs {f2}). "
+                        f"Movement cannot be determined from these observations."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+
+            if transitions:
+                # Scope revision evidence to selected_run_id and associate each
+                # revision with the relevant observed transition.
+                all_audit_facts: dict[UUID, StoredFact] = {}
+                for tr in trails:
+                    for f in tr.facts:
+                        all_audit_facts[f.fact_id] = f
+
+                run_scoped_events: list[tuple[AuditEvent, set[str]]] = []
+                for ev in events:
+                    output_facts = [
+                        all_audit_facts[fid] for fid in ev.output_fact_ids if fid in all_audit_facts
+                    ]
+                    event_facts = [
+                        all_audit_facts[fid]
+                        for fid in set(ev.input_fact_ids + ev.output_fact_ids)
+                        if fid in all_audit_facts
+                    ]
+                    if not event_facts or selected_run_id is None:
+                        continue
+                    # Every fact must have positive, consistent run provenance.
+                    fact_runs = [
+                        f.context.extra_context.get("run_id") or f.evidence.get("run_id")
+                        for f in event_facts
+                    ]
+                    if any(str(run) != str(selected_run_id) for run in fact_runs):
+                        continue
+                    # The successor's sample identifies the transition that caused the revision.
+                    sample_ids = {
+                        str(f.evidence["sample_id"])
+                        for f in output_facts
+                        if f.evidence.get("sample_id")
+                    }
+                    if sample_ids:
+                        run_scoped_events.append((ev, sample_ids))
+
+                trans_texts = []
+                associated_events: list[AuditEvent] = []
+                for s1, s2, loc1, loc2 in transitions:
+                    trans_desc = (
+                        f"sighted at {loc1} at {s1.sim_time_ms} ms (sample ID: {s1.sample_id}), "
+                        f"subsequently sighted at {loc2} at {s2.sim_time_ms} ms "
+                        f"(sample ID: {s2.sample_id})"
+                    )
+                    matching_revs = [
+                        ev
+                        for ev, sample_ids in run_scoped_events
+                        if str(s2.sample_id) in sample_ids
+                    ]
+                    if matching_revs:
+                        associated_events.extend(matching_revs)
+                        rev_str = " ".join(
+                            f"Revision record: {ev.reason} (Policy: {ev.policy_rule})."
+                            for ev in matching_revs
+                        )
+                        trans_texts.append(f"{trans_desc}. {rev_str}")
+                    else:
+                        trans_texts.append(trans_desc)
+
+                explanation = (
+                    f"Observed transition for {display_name}: " + "; ".join(trans_texts) + "."
+                )
+                explanation += (
+                    " Note: Two sightings at distinct locations demonstrate that a transition "
+                    "occurred, but do not prove continuous path, exact transit duration, or "
+                    "physical relocation cause."
+                )
+                return EpistemicEvaluation(
+                    status="verified",
+                    explanation=explanation,
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                    audit_trails=trails,
+                    audit_events=associated_events,
+                )
+            else:
+                s_first = valid_sightings[0]
+                s_last = valid_sightings[-1]
+                det = _find_det(s_first, canonical_entity_id)
+                assert det is not None
+                x_cm = _fmt_coord(det[0])
+                y_cm = _fmt_coord(det[1])
+                return EpistemicEvaluation(
+                    status="verified",
+                    explanation=(
+                        f"No location change observed for {display_name}. Sighted at x={x_cm} cm, "
+                        f"y={y_cm} cm in {s_first.observer_pose.location} across "
+                        f"{len(valid_sightings)} observation(s) from "
+                        f"{s_first.sim_time_ms} ms to {s_last.sim_time_ms} ms."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                    audit_trails=trails,
+                    audit_events=events,
+                )
+
+        return EpistemicEvaluation(
+            status="unsupported",
+            explanation=f"Unsupported temporal query mode: {mode}",
+            memory_facts=memory_facts,
             sensor_telemetry=telemetry,
         )
 

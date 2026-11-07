@@ -11,6 +11,7 @@ ALLOWED_INTENTS = (
     "audit_explanation",
     "current_robot_pose",
     "environment_action",
+    "object_location_query",
     "unsupported",
 )
 
@@ -164,6 +165,53 @@ INTENT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "object_location_query",
+            "description": (
+                "Query an object's location over time using the observation ledger and "
+                "temporal belief service. Supported modes: 'current' (current position/status), "
+                "'last_seen' (latest confirmed sighting even if later occluded or unavailable), "
+                "'at_time' (sighting at or before a specified simulation timestamp), "
+                "'history' (chronological timeline of sightings), and "
+                "'changes' (observed location transitions and revision reasons)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_mentions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "User-facing object mention(s) being queried, e.g. ['parcel_01']."
+                        ),
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["current", "last_seen", "at_time", "history", "changes"],
+                        "description": "Temporal query mode.",
+                    },
+                    "at_sim_time_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Simulation timestamp in milliseconds for 'at_time' mode.",
+                    },
+                    "run_id": {
+                        "type": "string",
+                        "description": "Optional simulation run ID UUID string to scope the query.",
+                    },
+                    "source_agent_mentions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional provenance sources to filter evidence.",
+                    },
+                },
+                "required": ["entity_mentions", "mode"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "unsupported",
             "description": (
                 "Select when the user question cannot be handled by the supported "
@@ -201,9 +249,14 @@ INTENT_PROPOSAL_SYSTEM_PROMPT = (
     "object ID returned by the camera to retrieve its stored history. Do not choose "
     "'historical_fact_lookup' alone for that comparison. Use 'historical_fact_lookup' only "
     "when the user asks about stored or past facts without asking for a current sensor view.\n"
-    "4. Do not author SQL queries, Python code, database commands, or direct "
+    "4. For questions about an object's location over time (e.g. 'Where is parcel_01 now?', "
+    "'When did you last see parcel_01?', 'Where was parcel_01 at 7 seconds?', "
+    "'Where was parcel_01 before, and what changed?'), call 'object_location_query' with the "
+    "appropriate mode ('current', 'last_seen', 'at_time', 'history', or 'changes'). If mode "
+    "is 'at_time', provide 'at_sim_time_ms' (e.g. 7 seconds = 7000).\n"
+    "5. Do not author SQL queries, Python code, database commands, or direct "
     "hardware sensor calls.\n"
-    "5. If the question does not match any capability or memory lookup, call 'unsupported'.\n"
+    "6. If the question does not match any capability or memory lookup, call 'unsupported'.\n"
 )
 
 GROUNDED_EXPLANATION_SYSTEM_PROMPT = (
