@@ -232,6 +232,12 @@ function App() {
     window.history.pushState({}, "", tab === "chat" ? "/" : `/${tab}`);
     if (window.innerWidth <= 760) setSidebarOpen(false);
   };
+  const selectNavigationTab = (tab: WorkspaceTab) => {
+    if (!visibleDock) { selectTab(tab); return; }
+    if (tab === visibleDock || tab === activeTab) return;
+    setActiveTab(tab);
+    window.history.pushState({}, "", tab === "chat" ? "/" : `/${tab}`);
+  };
   function openDock(pane: WorkspaceTab, side: SplitSide) {
     if (!canDock) return;
     setDraggedPane(null);
@@ -310,7 +316,7 @@ function App() {
       setState(next);
       setQuestion("");
       setLoadedScenario(chats.find((chat) => chat.id === id)?.scenario ?? null);
-      if (!chatVisible) selectTab("chat");
+      if (!chatVisible) selectNavigationTab("chat");
     } catch (cause) {
       setSessionId(previous);
       setError(cause instanceof Error ? cause.message : "Could not open this chat.");
@@ -347,7 +353,7 @@ function App() {
       setState(next);
       setQuestion("");
       setLoadedScenario(null);
-      if (!chatVisible) selectTab("chat");
+      if (!chatVisible) selectNavigationTab("chat");
       requestAnimationFrame(() => questionInput.current?.focus());
     } catch (cause) {
       setSessionId(previous);
@@ -381,7 +387,7 @@ function App() {
         setChats(remaining);
         try { setState(await api.state()); }
         catch (cause) { setError(cause instanceof Error ? cause.message : "Could not open the remaining chat."); }
-        if (!chatVisible) selectTab("chat");
+        if (!chatVisible) selectNavigationTab("chat");
       } else {
         setSessionId(previous);
         setChats(remaining);
@@ -444,7 +450,7 @@ function App() {
                   openDock(id, event.key === "ArrowLeft" ? "left" : "right");
                 }
               }}
-              onClick={() => selectTab(id)}>
+              onClick={() => selectNavigationTab(id)}>
               <Icon size={19} strokeWidth={1.6} /><span>{label}</span>
             </button>;
           })}
@@ -894,13 +900,14 @@ function Inspector({ state: initialState, sessionId }: { state: AppState | null;
           <div className="inspector-section-body">
             {state ? (
               <>
-                {state.environment_source === "warehouse_truth" && <p className="empty-detail">Warehouse physical state (audience ground truth). The agent's knowledge comes from its sensor observations.</p>}
+                {state.environment_source === "warehouse_truth" && <p className="empty-detail">Warehouse physical state (audience ground truth). Positions update as the simulation runs. Solid obstacles can block motion, including moving objects. The agent learns locations from observations.</p>}
+                {state.simulation_status && !state.environment_source && <p className="empty-detail">The running backend does not provide warehouse inspector data. Restart it to load the current version.</p>}
                 {state.environment.scenario_name && <ValueCard label="Loaded scenario">{displayText(state.environment.scenario_name)}</ValueCard>}
                 <ValueCard label="World version">{state.environment.world_version}</ValueCard>
                 <ValueCard label="Robot pose"><StructuredValue value={state.environment.robot} /></ValueCard>
                 <ValueCard label="Ambient lighting"><StructuredValue value={state.environment.light} /></ValueCard>
-                <InspectorCard label={`Obstacles (${Object.keys(state.environment.obstacles).length})`} className="table-card"><EnvironmentTable records={state.environment.obstacles} idField="obstacle_id" /></InspectorCard>
-                <InspectorCard label={`Objects (${Object.keys(state.environment.objects).length})`} className="table-card"><EnvironmentTable records={state.environment.objects} idField="object_id" /></InspectorCard>
+                <InspectorCard label={`${state.environment_source === "warehouse_truth" ? "Solid obstacles" : "Obstacles"} (${Object.keys(state.environment.obstacles).length})`} className="table-card"><EnvironmentTable records={state.environment.obstacles} idField="obstacle_id" /></InspectorCard>
+                <InspectorCard label={`${state.environment_source === "warehouse_truth" ? "Physical objects" : "Objects"} (${Object.keys(state.environment.objects).length})`} className="table-card"><EnvironmentTable records={state.environment.objects} idField="object_id" /></InspectorCard>
                 <ValueCard label="Advertised sensor capabilities">{state.capabilities.filter((item) => item.kind === "sensor").map((item) => displayText(item.name)).join(", ") || "No sensor capabilities are advertised."}</ValueCard>
               </>
             ) : <p className="empty-detail">Environment state has not been retrieved.</p>}

@@ -284,6 +284,14 @@ class AgentSession:
             self.agent.memory.add_alias(short, entity)
             self.agent.memory.add_alias(short.replace("_", " "), entity)
 
+    def _register_scenario_entities(self, runtime: SimulationRuntime) -> None:
+        """Register known names only; observations still establish physical claims."""
+        for entity in runtime.scenario.entities:
+            self.agent.memory.register_simulation_entity(runtime.run_id, entity.entity_id)
+            self._remember_simulation_entity(entity.entity_id)
+            self.agent.memory.add_alias(entity.kind, entity.entity_id)
+            self.agent.memory.add_alias(f"the {entity.kind}", entity.entity_id)
+
     def load_simulation(self, scenario: ScenarioDefinition, epoch_utc: datetime) -> None:
         self.touch()
         self._generation += 1
@@ -298,6 +306,7 @@ class AgentSession:
                 now=self.now,
                 id_factory=self.id_factory,
             )
+            self._register_scenario_entities(self.runtime)
         except Exception:
             self.load_error = "Warehouse initialization failed. Reload the run to recover."
             raise
@@ -342,6 +351,7 @@ class AgentSession:
                 id_factory=self.id_factory,
             )
             self.agent.memory.set_active_run(self.runtime.run_id)
+            self._register_scenario_entities(self.runtime)
             for entity in self.agent.memory.observed_entity_ids(self.runtime.run_id):
                 self._remember_simulation_entity(entity)
             # A recovered checkpoint can be behind the last observed live tick.
@@ -775,6 +785,10 @@ class AgentSession:
             with self.lock:
                 self._validate_request(identity)
                 agent = self.agent
+                if self.runtime is None:
+                    world = agent.environment.get_world_state()
+                    for entity_id in {*world.objects, *world.obstacles}:
+                        self._remember_simulation_entity(entity_id)
             try:
                 intent = agent.interpret(cleaned)
                 with self.lock:
@@ -944,7 +958,7 @@ class AgentSession:
                         },
                     )
                     for entity in physical.entities
-                    if entity.kind in {"parcel", "shelf", "cart"}
+                    if entity.kind != "station"
                 },
                 obstacles={
                     entity.entity_id: Obstacle(

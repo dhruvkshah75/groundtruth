@@ -572,6 +572,14 @@ class MemoryRepository:
         ).fetchall()
         return [row["entity_id"] for row in rows]
 
+    def register_simulation_entity(self, run_id: UUID, entity_id: str) -> None:
+        """Register a scenario identity without asserting its position or visibility."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO simulation_entities (run_id, entity_id) VALUES (?, ?)",
+            (str(run_id), entity_id),
+        )
+        self._conn.commit()
+
     def resolve_entity(self, mention: str) -> EntityResolution:
         """Resolve a user-friendly entity name to canonical ID(s).
 
@@ -592,10 +600,12 @@ class MemoryRepository:
                 for entity in candidates
                 if self._conn.execute(
                     "SELECT 1 FROM observation_detections WHERE run_id = ? AND entity_id = ? "
+                    "UNION ALL SELECT 1 FROM simulation_entities "
+                    "WHERE run_id = ? AND entity_id = ? "
                     "UNION ALL SELECT 1 FROM facts WHERE "
                     "json_extract(context_json, '$.extra_context.run_id') = ? "
                     "AND (subject = ? OR object = ?) LIMIT 1",
-                    (run_id, entity, run_id, entity, entity),
+                    (run_id, entity, run_id, entity, run_id, entity, entity),
                 ).fetchone()
                 is not None
             ]

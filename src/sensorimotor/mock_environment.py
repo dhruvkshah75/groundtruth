@@ -276,6 +276,8 @@ class MockEnvironment:
                         "object_id": obj.object_id,
                         "apparent_color": get_apparent_color(obj),
                         "bounding_box": obj.bounding_box,
+                        "position": {"x_cm": obj.x_cm, "y_cm": obj.y_cm},
+                        "frame_of_reference": self._world.robot.frame_of_reference,
                     }
                     for obj in visible_objs
                 ]
@@ -300,6 +302,8 @@ class MockEnvironment:
             "object_id": obj.object_id,
             "apparent_color": get_apparent_color(obj),
             "bounding_box": obj.bounding_box,
+            "position": {"x_cm": obj.x_cm, "y_cm": obj.y_cm},
+            "frame_of_reference": self._world.robot.frame_of_reference,
         }
 
         return SensorObservation(

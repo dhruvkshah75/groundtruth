@@ -297,9 +297,9 @@ try {
   await dock.getByRole("region", { name: "System inspector", exact: true }).waitFor();
   await assertAlignedHeaders();
   await dock.getByRole("button", { name: "Tier 3 · physical environment" }).click();
-  await dock.getByText("Warehouse physical state (audience ground truth). The agent's knowledge comes from its sensor observations.").waitFor();
-  await dock.getByText("Objects (6)", { exact: true }).waitFor();
-  await dock.getByText("Obstacles (3)", { exact: true }).waitFor();
+  await dock.getByText("Warehouse physical state (audience ground truth). Positions update as the simulation runs. Solid obstacles can block motion, including moving objects. The agent learns locations from observations.").waitFor();
+  await dock.getByText("Physical objects (6)", { exact: true }).waitFor();
+  await dock.getByText("Solid obstacles (3)", { exact: true }).waitFor();
   await button("Belief graph").press("Shift+Enter");
   await dock.getByRole("region", { name: "Belief network" }).waitFor();
   await assertAlignedHeaders();
@@ -307,6 +307,13 @@ try {
   await dragTab("Simulation");
   await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
   assert.equal(await clock.innerText(), pausedTime);
+  await button("Chat").click();
+  await page.locator(".workspace-pane:not(.workspace-dock)").getByRole("textbox", { name: "Ask the cognitive Agent" }).waitFor();
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  assert.equal(await clock.innerText(), pausedTime);
+  await button("Simulation").click();
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  await button("Belief graph").click();
   await dragTab("Belief graph");
   await dock.getByRole("region", { name: "Belief network" }).waitFor();
 

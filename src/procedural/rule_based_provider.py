@@ -128,18 +128,23 @@ class RuleBasedIntentProvider(IntentProvider):
 
         # 1. Temporal object location queries (P2-08)
         # Questions asking where an object is, was, when it was seen, its history, or what changed
-        is_obj = any(
-            t in q
-            for t in (
-                "parcel",
-                "box",
-                "shelf",
-                "cart",
-                "package",
-                "item",
-                "object",
+        is_obj = (
+            any(
+                t in q
+                for t in (
+                    "parcel",
+                    "box",
+                    "shelf",
+                    "cart",
+                    "package",
+                    "item",
+                    "object",
+                )
             )
-        ) or bool(re.search(r"\bit\b", q))
+            or bool(re.search(r"\bit\b", q))
+            or bool(re.search(r"\b[a-z][a-z0-9]*(?:[_-][a-z0-9]+|\s+\d+)\b", q))
+            or bool(re.search(r"\bwhere\s+(?:is|was)\s+(?:the\s+)?[a-z]", q))
+        )
         is_loc_or_time = any(
             term in q
             for term in (
@@ -441,6 +446,11 @@ class RuleBasedIntentProvider(IntentProvider):
 
     def _extract_entity(self, text: str, default: str | None = None) -> str | None:
         """Helper to extract common entity mentions from query string."""
+        # Explicit numbered identities take precedence over generic phrases like "the parcel".
+        for numbered in re.finditer(r"\b([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*[_\s-]?\d+)\b", text):
+            candidate = numbered.group(1)
+            if not re.match(r"^(?:route|robot|at|in|after|before|time)[_\s-]", candidate):
+                return candidate.replace(" ", "_")
         # Check known color/article prefixes with parcel/box/route first
         m_phrase = re.search(
             r"\b((?:red|blue|green|yellow|brown|the|front)\s+(?:parcel|box|route|item|package))\b",
@@ -493,6 +503,10 @@ class RuleBasedIntentProvider(IntentProvider):
                 "parcel_right_now",
             ):
                 return val
+
+        named = re.search(r"\bwhere\s+(?:is|was)\s+(?:the\s+)?([a-z][a-z0-9_-]*)", text)
+        if named and named.group(1) not in {"robot", "route", "it"}:
+            return named.group(1)
 
         # Check for pronouns or generic references like "it"
         m_it = re.search(r"\b(it)\b", text)

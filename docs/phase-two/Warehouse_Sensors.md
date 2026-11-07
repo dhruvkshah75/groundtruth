@@ -64,8 +64,8 @@ agent; keep its snapshot supplier in simulator-side composition only.
 
 ## Geometry and measurements
 
-The camera detects visible parcels, shelves, and carts. Stations and routes are
-annotations, not camera detections. Targeted
+The camera detects visible physical entities, including types introduced by a
+scenario. Stations and routes are annotations, not camera detections. Targeted
 and broad successes use CameraScan's sorted unique `objects` array; a targeted
 success contains exactly the requested ID. Detection fields are ID, apparent color,
 map-frame position estimate and existing width/height bounding-box fields only.

@@ -95,7 +95,7 @@ class SceneEntity(Contract):
     """Simulator truth only; never a camera detection."""
 
     entity_id: Identifier
-    kind: Literal["parcel", "station", "shelf", "cart"]
+    kind: Identifier
     location: Identifier
     footprint: Rectangle
     intrinsic_color: Identifier
@@ -221,8 +221,8 @@ class ScenarioDefinition(Contract):
                 if event.entity_id not in by_id:
                     raise ValueError("unknown motion entity")
                 entity = by_id[event.entity_id]
-                if entity.kind not in ("parcel", "cart"):
-                    raise ValueError("only parcels and carts have scripted motion")
+                if entity.kind == "station":
+                    raise ValueError("station annotations cannot have scripted motion")
                 if event.at_ms < move_ends.get(event.entity_id, 0):
                     raise ValueError("overlapping motion for entity")
                 end_ms += event.duration_ms

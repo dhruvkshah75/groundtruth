@@ -8,6 +8,7 @@ Evaluates execution results against long-term memory and physical observations t
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -797,6 +798,36 @@ class EpistemicEvaluator:
                 )
                 if selected_run_id is None and intent and intent.run_id:
                     selected_run_id = intent.run_id
+
+                if selected_run_id == UUID(int=0):
+                    for operation in plan_result.observation_results:
+                        observation = operation.result
+                        if not isinstance(observation, SensorObservation):
+                            continue
+                        measurement = observation.measurements
+                        position = measurement.get("position")
+                        if (
+                            observation.capability == "camera_detect"
+                            and measurement.get("object_id") == canonical_entity_id
+                            and isinstance(position, dict)
+                            and type(position.get("x_cm")) in (int, float)
+                            and type(position.get("y_cm")) in (int, float)
+                            and math.isfinite(position["x_cm"])
+                            and math.isfinite(position["y_cm"])
+                        ):
+                            telemetry.append(observation.model_dump(mode="json"))
+                            return EpistemicEvaluation(
+                                status="verified",
+                                explanation=(
+                                    f"{display_name} was observed at "
+                                    f"x={_fmt_coord(position['x_cm'])} cm, "
+                                    f"y={_fmt_coord(position['y_cm'])} cm in "
+                                    f"{observation.context.location} "
+                                    f"(observation ID: {observation.observation_id})."
+                                ),
+                                memory_facts=memory_facts,
+                                sensor_telemetry=telemetry,
+                            )
 
                 matching_facts = [
                     f

@@ -412,6 +412,15 @@ class PlanBuilder:
             )
 
         audit_ops: list[AuditChainOperation] = []
+        observations: list[ObservationOperation] = []
+        if mode == "current" and sensors is None and run_id == UUID(int=0):
+            if self._sensor_status("camera_detect") is True:
+                observations.append(
+                    ObservationOperation(
+                        request=ObservationRequest(capability="camera_detect", target=entity),
+                        purpose=f"Observe {entity}'s current position in the mock environment.",
+                    )
+                )
         if mode == "changes":
             audit_ops.append(
                 AuditChainOperation(
@@ -426,6 +435,7 @@ class PlanBuilder:
             intent=intent,
             entity_ids=[entity],
             memory_operations=memory_ops,
+            observation_operations=observations,
             temporal_operations=temporal_ops,
             audit_operations=audit_ops,
             current_state_verifiable=True,

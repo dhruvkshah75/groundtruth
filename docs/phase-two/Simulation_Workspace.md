@@ -42,7 +42,8 @@ a navigation tab to the left or right drop area. Shift+Left Arrow places it
 on the left, and Shift+Enter places it on the right. Drag the center divider
 or use its arrow keys to adjust the widths. The right pane can be closed or
 opened full screen. The sidebar shows saved chats whenever Chat is visible
-and graph controls whenever Belief graph is visible. Switching saved chats
+and graph controls whenever Belief graph is visible. Clicking a different tab
+replaces the left pane and keeps the right pane open. Switching saved chats
 keeps the split and loads the selected session in both panes. The layout
 returns to one pane as the window narrows.
 
@@ -63,7 +64,7 @@ events, so a repeated or overlapping disruption can return a validation error.
   list gives object coordinates and the robot's authoritative pose.
 - **Robot observation** reads the backend's latest camera and front LiDAR
   attempts. Each has its original simulation capture time. Camera rows show
-  detected parcels, shelves, and carts and their apparent color. An empty capture, an unavailable
+  detected objects and their apparent color. An empty capture, an unavailable
   sensor, and an old sample have separate labels. A LiDAR obstacle measurement
   and the controller's patrol state are shown separately.
 - **Agent belief** displays bounded fact and revision references supplied by
@@ -71,9 +72,10 @@ events, so a repeated or overlapping disruption can return a validation error.
   owns the richer timeline, graph and answer coupling.
 
 The inspector's Tier 3 section displays the warehouse's audience-only physical
-state, including its objects and solid obstacles. This physical state is not sent
-to the agent as observation evidence. The active belief graph and entity resolver
-are scoped to the current run; prior mock and simulation evidence remains stored.
+state, including its objects and solid obstacles. The scenario supplies entity
+names to the resolver, but their positions are not sent to the agent as observation
+evidence. The active belief graph and entity resolver are scoped to the current
+run; prior mock and simulation evidence remains stored.
 
 The [workspace](../../frontend/src/SimulationWorkspace.tsx) calls the shared
 [client](../../frontend/src/api.ts) through [useSimulation](../../frontend/src/useSimulation.ts).

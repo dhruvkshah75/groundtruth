@@ -5,6 +5,7 @@ from uuid import uuid4
 from src.contracts import FactQuery
 from src.declarative.memory_repository import MemoryRepository
 from src.providers import ProviderConfig
+from src.sensorimotor.world_models import SimulatedObject
 from src.web.service import AgentService
 from src.web.simulation_presets import warehouse_preset
 
@@ -31,14 +32,16 @@ def test_warehouse_camera_detections_can_be_queried():
         assert "parcel_01" not in state["environment"]["obstacles"]
         assert state["environment"]["robot"]["location"] == "warehouse"
         assert session.agent.memory.resolve_entity("parcel_01").canonical_entity_id == "parcel_01"
-        assert session.agent.memory.resolve_entity("parcel_03").status == "missing"
+        assert session.agent.memory.resolve_entity("parcel_03").canonical_entity_id == "parcel_03"
+        assert "No" in session.ask("Where is parcel 03 now?")["answer"]
         assert session.agent.memory.resolve_entity("shelf_01").canonical_entity_id == "shelf_01"
         shelf_answer = session.ask("Where is shelf 01 now?")["answer"]
         assert "shelf_01 was observed at x=300 cm, y=300 cm" in shelf_answer
         assert (
             "was observed at x=300 cm, y=300 cm" in session.ask("Where is shelf 1 now?")["answer"]
         )
-        assert session.agent.memory.resolve_entity("cart_01").status == "missing"
+        assert session.agent.memory.resolve_entity("cart_01").canonical_entity_id == "cart_01"
+        assert "No" in session.ask("Where is cart 01 now?")["answer"]
         answer = session.ask("Where is parcel 01 now?")["answer"]
         assert "parcel_01 was observed at x=80 cm, y=350 cm" in answer
         for _ in range(75):
@@ -48,6 +51,12 @@ def test_warehouse_camera_detections_can_be_queried():
         answer = session.ask("Where was parcel 01 before, and what changed?")["answer"]
         assert "Observed transition for parcel_01" in answer
         assert "inspection_station" in answer and "packing_station" in answer
+        state = session.snapshot()["environment"]
+        assert state["objects"]["parcel_01"]["x_cm"] == 150
+        assert state["obstacles"]["cart_01"]["x_cm"] == 180
+        for _ in range(35):
+            session.runtime.step()
+        assert session.snapshot()["environment"]["obstacles"]["cart_01"]["x_cm"] == 100
         first_run = session.runtime.run_id
         # Simulate a checkpoint written before observed identities were registered.
         session.agent.memory._conn.execute(
@@ -57,7 +66,8 @@ def test_warehouse_camera_detections_can_be_queried():
         saved, image = session.persisted_state(), session.agent.memory.export_snapshot()
         session.restore(saved, image)
         assert not any(f["subject"] == "building_1" for f in session.snapshot()["active_facts"])
-        assert "parcel_01 was observed" in session.ask("Where is parcel 01 now?")["answer"]
+        assert session.agent.memory.resolve_entity("parcel_01").canonical_entity_id == "parcel_01"
+        assert "Last confirmed sighting" in session.ask("Where is parcel 01 now?")["answer"]
         service.load_simulation(key, warehouse_preset())
         assert session.runtime.run_id != first_run
         assert all(
@@ -79,5 +89,77 @@ def test_visible_cart_resolves_from_camera_evidence():
         session = service.get_session(key)
         answer = session.ask("Where is cart 01 now?")["answer"]
         assert "cart_01 was observed at x=100 cm, y=300 cm" in answer
+    finally:
+        service.shutdown()
+
+
+def test_new_scenario_types_and_names_need_no_hard_coded_registration():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    scenario = warehouse_preset().model_copy(deep=True)
+    cart = next(entity for entity in scenario.entities if entity.entity_id == "cart_01")
+    cart.entity_id, cart.kind = "forklift_07", "forklift"
+    cart.footprint.x_cm, cart.footprint.y_cm = 100, 300
+    for event in scenario.events:
+        if getattr(event, "entity_id", None) == "cart_01":
+            event.entity_id = "forklift_07"
+    try:
+        service.load_simulation(key, scenario)
+        session = service.get_session(key)
+        assert "forklift_07" in session.snapshot()["environment"]["objects"]
+        answer = session.ask("Where is forklift 07 now?")["answer"]
+        assert "was observed at x=100 cm, y=300 cm" in answer
+        assert (
+            "was observed at x=100 cm, y=300 cm" in session.ask("Where is the forklift?")["answer"]
+        )
+        saved, image = session.persisted_state(), session.agent.memory.export_snapshot()
+        session.restore(saved, image)
+        assert (
+            "was observed at x=100 cm, y=300 cm" in session.ask("Where is forklift 07?")["answer"]
+        )
+    finally:
+        service.shutdown()
+
+
+def test_mock_environment_registers_new_object_names_before_perception():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    session = service.get_session(str(uuid4()))
+    try:
+        session.agent.environment.configure_object_for_test(
+            SimulatedObject(
+                object_id="forklift_07",
+                x_cm=30,
+                y_cm=30,
+                location="room_101",
+                intrinsic_color="blue",
+            )
+        )
+        answer = session.ask("What color is forklift 07?")["answer"]
+        assert "Blue" in answer
+        answer = session.ask("Where is forklift 07 now?")["answer"]
+        assert "was observed at x=30 cm, y=30 cm in room_101" in answer
+        session.agent.environment.configure_object_for_test(
+            SimulatedObject(
+                object_id="forklift_07",
+                x_cm=50,
+                y_cm=40,
+                location="room_101",
+                intrinsic_color="blue",
+            )
+        )
+        answer = session.ask("Where is forklift 07 now?")["answer"]
+        assert "was observed at x=50 cm, y=40 cm in room_101" in answer
+        session.agent.environment.configure_object_for_test(
+            SimulatedObject(
+                object_id="forklift_07",
+                x_cm=60,
+                y_cm=40,
+                location="room_101",
+                intrinsic_color="blue",
+                visible=False,
+            )
+        )
+        answer = session.ask("Where is forklift 07 now?")["answer"]
+        assert "x=60 cm" not in answer
     finally:
         service.shutdown()

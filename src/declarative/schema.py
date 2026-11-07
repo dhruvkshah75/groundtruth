@@ -50,6 +50,12 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(alias, canonical_entity_id)
         );
 
+        CREATE TABLE IF NOT EXISTS simulation_entities (
+            run_id TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            PRIMARY KEY (run_id, entity_id)
+        );
+
         CREATE TABLE IF NOT EXISTS observation_samples (
             sample_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL CHECK(run_id != ''),

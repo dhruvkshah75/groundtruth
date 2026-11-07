@@ -139,7 +139,7 @@ export type ScenarioDefinition = {
 
 export type SceneEntity = {
   "entity_id": string;
-  "kind": "parcel" | "station" | "shelf" | "cart";
+  "kind": string;
   "location": string;
   "footprint": Rectangle;
   "intrinsic_color": string;

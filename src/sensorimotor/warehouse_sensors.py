@@ -186,7 +186,7 @@ class WarehouseSensors:
         objects = []
         for entity in sorted(snap.entities, key=lambda e: e.entity_id):
             if (
-                entity.kind not in {"parcel", "shelf", "cart"}
+                entity.kind == "station"
                 or not entity.visible
                 or entity.location != pose.location
                 or request.target is not None
