@@ -1,7 +1,7 @@
 # Simulation workspace (P2-10)
 
 [Issue #34](https://github.com/dhruvkshah75/groundtruth/issues/34) ·
-[Implementation PR](https://github.com/dhruvkshah75/groundtruth/pulls?q=is%3Apr+head%3Acodex%2Fp2-10-simulation-workspace)
+[Implementation PR #46](https://github.com/dhruvkshah75/groundtruth/pull/46)
 
 The Simulation tab opens `/simulation` in the existing GroundTruth app.
 The active chat's session owns the warehouse run. The same route works on a
