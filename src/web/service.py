@@ -198,6 +198,8 @@ class AgentSession:
     _last_view: float = field(init=False, default=0)
     _save_revision: int = field(init=False, default=0)
     _pending_save: Future | None = field(init=False, default=None)
+    _pending_tick: Future | None = field(init=False, default=None)
+    _ticker: ThreadPoolExecutor | None = field(init=False, default=None)
     _writer: ThreadPoolExecutor | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
@@ -797,7 +799,7 @@ class AgentService:
         self._lock = threading.Lock()
         self._lifecycle = threading.Condition()
         self._changing_ids: set[str] = set()
-        self._initializing = 0
+        self._reserved_slots = 0
         self._shutdown_lock = threading.Lock()
         self._config = config or get_provider_config()
         self._now = now
@@ -832,17 +834,17 @@ class AgentService:
             with self._lock:
                 if canonical_id in self._sessions:
                     return self._sessions[canonical_id]
-                if len(self._sessions) + self._initializing >= 128:
+                if len(self._sessions) + self._reserved_slots >= 128:
                     raise RuntimeError("The local demo has reached its 128-session limit.")
-                self._initializing += 1
+                self._reserved_slots += 1
             try:
                 session = self._restore_session(canonical_id)
             except BaseException:
                 with self._lock:
-                    self._initializing -= 1
+                    self._reserved_slots -= 1
                 raise
             with self._lock:
-                self._initializing -= 1
+                self._reserved_slots -= 1
                 self._sessions[canonical_id] = session
             if session.runtime is not None:
                 self._ensure_runner()
@@ -877,40 +879,76 @@ class AgentService:
 
     def _run(self) -> None:
         while not self._stop.wait(0.05):
-            self.pump()
+            self._dispatch_ticks()
 
-    def pump(self) -> None:
-        """Advance due runs once. Never wait for persistence or provider work."""
+    def _session_entries(self) -> tuple[tuple[str, AgentSession], ...]:
         with self._lock:
-            sessions = tuple(self._sessions.items())
-        for key, session in sessions:
+            return tuple(self._sessions.items())
+
+    def _dispatch_ticks(self) -> None:
+        """Schedule at most one outstanding tick batch per session."""
+        for key, session in self._session_entries():
             if not session.lock.acquire(blocking=False):
                 continue
             try:
                 runtime = session.runtime
-                if session._retired or runtime is None or runtime.error:
+                if (
+                    self._stop.is_set()
+                    or session._retired
+                    or runtime is None
+                    or runtime.error
+                    or not (runtime.clock.running or (session._dirty and session._writer))
+                    or (session._pending_tick is not None and not session._pending_tick.done())
+                ):
                     continue
-                try:
-                    now = self._now()
-                    idle = runtime.clock.running and now - session._last_view >= 60
-                    if idle:
-                        runtime.pause()
-                        session._dirty = True
-                    elif runtime.pump():
-                        session._dirty = True
-                    if session._dirty and (
-                        idle
-                        or (
-                            now - session._last_save >= 1
-                            and (session._pending_save is None or session._pending_save.done())
-                        )
-                    ):
-                        self._queue_save(key, session, defer_capture=True)
-                except Exception:
-                    runtime.fail(runtime.error or "Simulation scheduler failed.")
-                    LOGGER.warning("Warehouse scheduler paused a failed run")
+                if session._ticker is None:
+                    session._ticker = ThreadPoolExecutor(
+                        max_workers=1, thread_name_prefix="groundtruth-tick"
+                    )
+                session._pending_tick = session._ticker.submit(
+                    self._tick_session, key, session, runtime
+                )
             finally:
                 session.lock.release()
+
+    def _tick_session(self, key: str, session: AgentSession, runtime: SimulationRuntime) -> None:
+        with session.lock:
+            if session.runtime is runtime:
+                self._pump_locked(key, session)
+
+    def pump(self) -> None:
+        """Run one deterministic scheduling pass for headless use."""
+        for key, session in self._session_entries():
+            if not session.lock.acquire(blocking=False):
+                continue
+            try:
+                self._pump_locked(key, session)
+            finally:
+                session.lock.release()
+
+    def _pump_locked(self, key: str, session: AgentSession) -> None:
+        runtime = session.runtime
+        if self._stop.is_set() or session._retired or runtime is None or runtime.error:
+            return
+        try:
+            now = self._now()
+            idle = runtime.clock.running and now - session._last_view >= 60
+            if idle:
+                runtime.pause()
+                session._dirty = True
+            elif runtime.pump():
+                session._dirty = True
+            if session._dirty and (
+                idle
+                or (
+                    now - session._last_save >= 1
+                    and (session._pending_save is None or session._pending_save.done())
+                )
+            ):
+                self._queue_save(key, session, defer_capture=True)
+        except Exception:
+            runtime.fail(runtime.error or "Simulation scheduler failed.")
+            LOGGER.warning("Warehouse scheduler paused a failed run")
 
     def _queue_save(
         self, key: str, session: AgentSession, *, defer_capture: bool = False
@@ -1035,19 +1073,30 @@ class AgentService:
         with self._change_session(key):
             with self._lock:
                 session = self._sessions.pop(key, None)
-            if session is not None:
-                with session.lock:
-                    session._retired = True
-                    session.runtime = None
-                    session.agent.close()
-            if self._store is not None:
-                if session is not None and session._writer is not None:
-                    try:
-                        session._writer.submit(self._store.delete, key).result()
-                    finally:
-                        session._writer.shutdown()
-                else:
-                    self._store.delete(key)
+                if session is not None:
+                    # Count workers that are still draining against the session limit.
+                    self._reserved_slots += 1
+            try:
+                if session is not None:
+                    with session.lock:
+                        session._retired = True
+                        session.runtime = None
+                    if session._ticker is not None:
+                        session._ticker.shutdown(cancel_futures=True)
+                    with session.lock:
+                        session.agent.close()
+                if self._store is not None:
+                    if session is not None and session._writer is not None:
+                        try:
+                            session._writer.submit(self._store.delete, key).result()
+                        finally:
+                            session._writer.shutdown()
+                    else:
+                        self._store.delete(key)
+            finally:
+                if session is not None:
+                    with self._lock:
+                        self._reserved_slots -= 1
 
     def shutdown(self) -> None:
         with self._shutdown_lock:
@@ -1063,6 +1112,9 @@ class AgentService:
                 runner = self._runner
             if runner is not None:
                 runner.join()
+            for _, session in sessions:
+                if session._ticker is not None:
+                    session._ticker.shutdown(cancel_futures=True)
             for key, session in sessions:
                 with session.lock:
                     if session.runtime is not None:

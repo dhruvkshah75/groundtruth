@@ -16,9 +16,11 @@
 `AgentService(config=None, store=None, *, now=monotonic, background=True)` owns one
 warehouse runtime per loaded session. The service starts one scheduler when the first
 warehouse is loaded or restored. Legacy A/B sessions retain their static behavior.
-The scheduler wakes every 50 wall milliseconds and only pumps due simulation work.
-It skips busy session locks and catches up on subsequent pumps, subject to the
-per-pump tick limit, so another session can continue advancing.
+The scheduler wakes every 50 wall milliseconds and dispatches at most one outstanding
+tick batch per session. Each active session has its own tick worker. Physics, sensor
+acquisition, and ingestion run under that session's state lock. If a worker stalls,
+the dispatcher skips that session and keeps scheduling the others. Workers are created
+lazily and count against the 128-session limit until deletion finishes.
 
 - `load_simulation(session_id, scenario, *, epoch_utc=None) -> SessionSimulationStatus`
   starts a new paused run, with one initial sensor batch and a fresh run ID.
@@ -28,10 +30,11 @@ per-pump tick limit, so another session can continue advancing.
 - `read_simulation(session_id) -> SessionSimulationRead` returns typed status, a detached
   audience snapshot, and provider readiness. A read records viewer activity and does
   not advance simulation time.
-- `pump()` runs one scheduling pass. Use `background=False` and a fake monotonic
-  clock for deterministic tests.
-- `shutdown()` stops the scheduler, drains pending checkpoint work, and closes the
-  owned agent repositories. The server closes its session store after service shutdown.
+- `pump()` runs one synchronous scheduling pass for headless use. Use
+  `background=False` and a fake monotonic clock for deterministic tests.
+- `shutdown()` stops the scheduler, joins in-flight tick workers, drains checkpoint
+  work, and closes the owned agent repositories. A synchronous acquisition must return
+  before its worker can be joined. The server closes its store after service shutdown.
 
 ```python
 import json
@@ -107,9 +110,8 @@ capture. The current service snapshot can advance while explanation is in progre
 
 Registry lookup copies references under the registry lock and releases it before
 acquiring a session lock. Creation and deletion reserve only the affected UUID and
-release the lifecycle condition while doing work. The scheduler skips a busy session
-and revisits it on a later pass. Shutdown joins the scheduler and writers without the
-registry or session locks. Shutdown and deletion retire the session so a provider that
+release the lifecycle condition while doing work. Shutdown joins the scheduler,
+tick workers, and writers without the registry or session locks. Shutdown and deletion retire the session so a provider that
 returns late cannot touch its ledger.
 
 New chat invalidates the conversation and preserves the warehouse. Preset replacement,
@@ -131,7 +133,7 @@ are copied to the per-session databases and cleared from the legacy table after 
 copies commit. A retry keeps any already committed destination rows.
 
 Each session has a FIFO writer. Dirty runs request a checkpoint at one wall second
-intervals. The scheduler only queues the request. The writer captures state and ledger
+intervals. The tick worker queues the request. The writer captures state and ledger
 together under that session's lock, then releases it before encoding or writing.
 Controls and lifecycle changes capture their boundary immediately. A deferred capture
 skips itself when a newer capture or generation supersedes it. Deletion drains the
@@ -152,11 +154,13 @@ An internal ingestion or tick failure pauses the run and requires a reload or re
 
 - Clock and runtime checkpoints are exercised by
   `uv run --locked pytest -q tests/unit/test_simulation_clock.py tests/integration/test_simulation_runtime.py tests/integration/test_session_simulation.py`.
-- The focused suite passed 40 tests across the clock, runtime, session, store and
+- The focused suite passed 41 tests across the clock, runtime, session, store and
   legacy scenario suites. Regression tests block a ledger export and a real SQLite
   transaction, verify checkpoint ordering across reset, exercise migration, and check
-  that conflicting previous-run route facts cannot override a fresh LiDAR scan.
-- The locked full suite passed 583 tests with localhost access. The test process
+  that conflicting previous-run route facts cannot override a fresh LiDAR scan. A live
+  scheduler test blocks one session's ingestion and verifies that another session
+  advances and records its next periodic camera sample in its observation ledger.
+- The locked full suite passed 584 tests with localhost access. The test process
   bypassed the repository's default developer `.env` loading so tests could
   select their own provider configuration. The headless example above also ran successfully.
 - Repository-wide Ruff lint and formatting checks passed.

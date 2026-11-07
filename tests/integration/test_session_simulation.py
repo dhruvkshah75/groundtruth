@@ -441,26 +441,29 @@ def test_managed_scheduler_is_single_and_joins_on_shutdown(clock, warehouse, mon
     key = str(uuid4())
     session = service.get_session(key)
     assert service._runner is None
+    assert session._ticker is None
     progressed = Event()
-    real_pump = service.pump
+    tick_session = service._tick_session
 
-    def pump():
-        real_pump()
-        with session.lock:
-            if session.runtime and session.runtime.read().status.sim_time_ms >= 500:
-                progressed.set()
+    def observe_tick(key, session, runtime):
+        tick_session(key, session, runtime)
+        if runtime.read().status.sim_time_ms >= 500:
+            progressed.set()
 
-    monkeypatch.setattr(service, "pump", pump)
+    monkeypatch.setattr(service, "_tick_session", observe_tick)
     try:
         load(service, key, warehouse)
-        worker = service._runner
+        runner = service._runner
         service.control_simulation(key, SimulationControl(action="play"))
-        assert service._runner is worker
+        assert service._runner is runner
         clock[0] = 1
         assert progressed.wait(5)
+        ticker = session._ticker
     finally:
         service.shutdown()
-    assert not worker.is_alive()
+    assert not runner.is_alive()
+    with pytest.raises(RuntimeError, match="after shutdown"):
+        ticker.submit(lambda: None)
 
 
 def test_slow_ledger_export_does_not_stall_scheduler(clock, warehouse, tmp_path, monkeypatch):
@@ -626,3 +629,47 @@ def test_deferred_capture_cannot_overtake_reset_checkpoint(clock, warehouse, tmp
         release.set()
         service.shutdown()
         store.close()
+
+
+def test_blocked_ingestion_does_not_stall_another_live_session(clock, warehouse, monkeypatch):
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), now=lambda: clock[0])
+    first, second = str(uuid4()), str(uuid4())
+    blocked, release, sampled = Event(), Event(), Event()
+    try:
+        load(service, first, warehouse)
+        load(service, second, warehouse)
+        first_session = service.get_session(first)
+        second_session = service.get_session(second)
+        first_ingest = first_session.runtime._ingest
+        second_ingest = second_session.runtime._ingest
+
+        def stall(sample):
+            blocked.set()
+            release.wait()
+            return first_ingest(sample)
+
+        def observe_progress(sample):
+            result = second_ingest(sample)
+            if sample.sim_time_ms == 500 and sample.request.capability == "camera_detect":
+                sampled.set()
+            return result
+
+        monkeypatch.setattr(first_session.runtime, "_ingest", stall)
+        monkeypatch.setattr(second_session.runtime, "_ingest", observe_progress)
+
+        clock[0] = 0.2
+        assert blocked.wait(5)
+        blocked_batch = first_session._pending_tick
+        clock[0] = 1.0
+        assert sampled.wait(2), "Session B did not ingest a camera sample while A was blocked"
+        assert service.read_simulation(second)["status"]["sim_time_ms"] == 500
+        sample = second_session.agent.memory.get_latest_sample(
+            second_session.runtime.run_id, "camera_detect"
+        )
+        assert sample.sim_time_ms == 500
+        assert first_session._pending_tick is blocked_batch
+        assert not blocked_batch.done()
+        assert not release.is_set()
+    finally:
+        release.set()
+        service.shutdown()
