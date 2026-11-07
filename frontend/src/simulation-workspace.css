@@ -1,0 +1,149 @@
+.simulation-workspace {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface-raised);
+  container-type: inline-size;
+}
+
+.sim-content {
+  width: min(100%, 1480px);
+  margin-inline: auto;
+  padding: 24px;
+  color: var(--text);
+}
+
+.sim-heading, .sim-toolbar, .sim-panel-heading, .sim-map-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sim-heading { margin-bottom: 16px; }
+.sim-heading h2 { margin: 0; font-size: 1.5rem; font-weight: 550; letter-spacing: -.03em; }
+.sim-heading p { margin: 3px 0 0; color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
+.sim-toolbar { padding: 12px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 9px; }
+.sim-clock { display: grid; gap: 2px; color: var(--muted); font-size: .75rem; }
+.sim-clock strong { color: var(--text); font: 500 1.25rem var(--font-mono); font-variant-numeric: tabular-nums; }
+.sim-actions, .sim-rates { display: flex; gap: 6px; flex-wrap: wrap; }
+.sim-button, .sim-disrupt select {
+  min-height: 40px;
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: .8125rem;
+}
+
+.sim-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: background 160ms ease, border-color 160ms ease; }
+.sim-button:hover:not(:disabled) { background: var(--surface-raised); border-color: var(--accent); }
+.sim-button[aria-pressed="true"] { background: var(--selection); border-color: var(--accent); }
+.sim-button.primary { background: var(--accent); color: var(--primary-foreground, white); border-color: var(--accent); }
+.sim-button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.sim-button:disabled, .sim-disrupt select:disabled { opacity: .55; }
+.sim-disrupt select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.sim-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 27px;
+  padding: 3px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: .75rem;
+}
+.sim-chip.success { color: var(--success-text); background: var(--success-surface); border-color: var(--success-line); }
+.sim-chip.warn { color: var(--warning-text); background: var(--warning-surface); border-color: var(--warning-line); }
+
+.sim-disrupt { margin-top: 8px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
+.sim-disrupt summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: .8125rem;
+  min-height: 40px;
+  cursor: pointer;
+}
+.sim-disrupt summary::after { content: "+"; margin-left: auto; }
+.sim-disrupt[open] summary::after { content: "−"; }
+.sim-disrupt form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; padding: 0 12px 12px; }
+.sim-disrupt label { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }
+.sim-feedback { display: flex; align-items: center; min-height: 32px; color: var(--muted); font-size: .8125rem; }
+.sim-feedback > span, .sim-warning { display: inline-flex; align-items: center; gap: 6px; }
+.sim-warning { color: var(--warning-text); }
+.sim-banner { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; color: var(--danger); background: var(--error-surface); font-size: .8125rem; }
+
+.sim-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(224px, 28%); gap: 16px; align-items: start; }
+.sim-evidence { display: grid; gap: 16px; min-width: 0; }
+.sim-panel { min-width: 0; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
+.sim-panel-heading { min-height: 46px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.sim-panel-heading h2 { display: inline-flex; align-items: center; gap: 7px; margin: 0; font-size: .875rem; font-weight: 600; }
+.sim-panel-heading h2 svg { color: var(--accent); }
+.sim-map-status { gap: 6px; }
+.sim-map-empty { display: grid; min-height: clamp(220px, 49cqw, 460px); align-content: center; justify-items: center; gap: 10px; padding: 16px; color: var(--muted); text-align: center; }
+.sim-map-empty p { margin: 0; font-size: .875rem; }
+
+.warehouse-stage { background: var(--surface-raised); }
+.warehouse-map { display: block; width: 100%; max-height: clamp(300px, calc(100dvh - 460px), 630px); }
+.warehouse-floor { fill: var(--surface); }
+.warehouse-grid-line, .warehouse-outline { fill: none; stroke: var(--line-strong); vector-effect: non-scaling-stroke; }
+.warehouse-route { fill: none; stroke: var(--muted); stroke-dasharray: 8 6; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.warehouse-sector { fill: color-mix(in srgb, var(--accent) 13%, transparent); stroke: var(--accent); stroke-dasharray: 5 5; vector-effect: non-scaling-stroke; }
+.warehouse-object rect { stroke: var(--muted); vector-effect: non-scaling-stroke; }
+.warehouse-station rect { fill: var(--success-surface); stroke-dasharray: 3 3; }
+.warehouse-shelf rect { fill: color-mix(in srgb, var(--muted) 30%, var(--surface)); }
+.warehouse-shelf line { stroke: var(--quiet); vector-effect: non-scaling-stroke; }
+.warehouse-cart rect { fill: var(--warning-surface); stroke: var(--warning-text); }
+.warehouse-parcel rect { fill: #b34b54; stroke: var(--text); }
+.warehouse-parcel[data-color="green"] rect { fill: #4a9777; }
+.warehouse-robot { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.warehouse-heading { fill: var(--primary-foreground, white); }
+.warehouse-object-label { fill: var(--text); stroke: var(--surface); stroke-width: 4; paint-order: stroke; font-size: 19px; font-weight: 600; }
+.warehouse-axis { fill: var(--muted); font: 18px var(--font-mono); }
+.warehouse-north { fill: var(--muted); }
+.warehouse-legend { display: flex; gap: 6px 14px; flex-wrap: wrap; padding: 10px 12px; font-size: .75rem; color: var(--muted); }
+.warehouse-legend span { display: flex; align-items: center; gap: 6px; }
+.warehouse-legend i { display: inline-block; width: 11px; height: 11px; }
+.key-robot { border-radius: 50%; background: var(--accent); }
+.key-sector { border: 1px dashed var(--accent); background: var(--selection); }
+.key-station { border: 1px dashed var(--muted); background: var(--success-surface); }
+.warehouse-legend .key-route { height: 0; border-top: 1px dashed var(--muted); }
+
+.sim-observation { padding: 10px 12px; }
+.sim-observation + .sim-observation, .sim-details { border-top: 1px solid var(--line); }
+.sim-observation h3, .sim-observation p { margin: 0; font-size: .8125rem; }
+.sim-observation h3 { display: flex; gap: 6px; align-items: center; font-weight: 600; }
+.sim-observation p + p, .sim-observation h3 + p { margin-top: 4px; }
+.sim-observation .sim-subtle { color: var(--muted); }
+.sim-time { font-variant-numeric: tabular-nums; }
+.sim-count { min-width: 18px; text-align: center; background: var(--selection); border-radius: 8px; color: var(--muted); font: .75rem var(--font-mono); }
+.sim-details > summary { padding: 9px 12px; min-height: 36px; font-size: .8125rem; color: var(--muted); cursor: pointer; }
+.sim-list { display: grid; gap: 7px; list-style: none; padding: 0; margin: 8px 0 0; }
+.sim-list li { display: grid; gap: 1px; font-size: .8125rem; }
+.sim-list strong { font-weight: 550; }
+.sim-list span { color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+.sim-details .sim-list { margin: 0; padding: 0 12px 12px; }
+
+@container (max-width: 750px) {
+  .sim-layout { grid-template-columns: minmax(0, 1fr); }
+  .sim-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (max-width: 540px) {
+  .sim-content { padding: 16px; }
+  .sim-toolbar { align-items: start; flex-direction: column; }
+  .sim-button, .sim-disrupt select { min-height: 44px; }
+  .sim-evidence { grid-template-columns: minmax(0, 1fr); }
+  .warehouse-object-label { font-size: 25px; }
+  .warehouse-axis { font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sim-button { transition: none; }
+}

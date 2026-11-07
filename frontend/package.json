@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:graph": "node --experimental-strip-types scripts/check-belief-graph.mjs && node --experimental-strip-types scripts/check-belief-appearance.mjs && node --experimental-strip-types scripts/check-belief-labels.mjs",
-    "test:display": "node --experimental-strip-types scripts/check-inspector-display.mjs"
+    "test:display": "node --experimental-strip-types scripts/check-inspector-display.mjs",
+    "test:simulation": "node scripts/check-simulation-browser.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -22,6 +23,7 @@
     "@types/react-dom": "^18.3.1",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "playwright": "^1.65.0",
     "typescript": "~5.6.2",
     "vite": "^8.3.1"
   }

@@ -43,10 +43,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       cache: "no-store",
     });
   } catch {
+    init.signal?.throwIfAborted();
     throw new Error("Cannot reach the Python Agent API. Start the GroundTruth backend and retry.");
   }
 
   const payload: unknown = await response.json().catch(() => null);
+  init.signal?.throwIfAborted();
   if (!response.ok) {
     const detail = payload as Partial<ApiErrorPayload> | null;
     if (path === "/api/new-chat" && response.status === 404 && detail?.code === "not_found") {
@@ -59,8 +61,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return payload as T;
 }
 
-function postSimulation<T>(action: "load" | "control" | "disrupt", payload: object): Promise<T> {
-  return request<T>(`/api/simulation/${action}`, { method: "POST", body: JSON.stringify(payload) });
+type SimulationRequestOptions = { sessionId: string; signal: AbortSignal };
+
+function simulationOptions(options?: SimulationRequestOptions): RequestInit {
+  return options ? { headers: { "X-Session-ID": options.sessionId }, signal: options.signal } : {};
+}
+
+function postSimulation<T>(
+  action: "load" | "control" | "disrupt", payload: object, options?: SimulationRequestOptions,
+): Promise<T> {
+  return request<T>(`/api/simulation/${action}`, {
+    ...simulationOptions(options), method: "POST", body: JSON.stringify(payload),
+  });
 }
 
 export const api = {
@@ -91,9 +103,9 @@ export const api = {
     }
   },
   reset: () => request<AppState>("/api/reset", { method: "POST", body: "{}" }),
-  simulationState: () => request<SimulationStateResponse>("/api/simulation/state"),
-  loadSimulation: (payload: SimulationLoadRequest) => postSimulation<SimulationStateResponse>("load", payload),
-  controlSimulation: (payload: SimulationControlRequest) => postSimulation<SimulationStateResponse>("control", payload),
-  disruptSimulation: (payload: SimulationDisruptRequest) => postSimulation<SimulationDisruptResponse>("disrupt", payload),
+  simulationState: (options?: SimulationRequestOptions) => request<SimulationStateResponse>("/api/simulation/state", simulationOptions(options)),
+  loadSimulation: (payload: SimulationLoadRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("load", payload, options),
+  controlSimulation: (payload: SimulationControlRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("control", payload, options),
+  disruptSimulation: (payload: SimulationDisruptRequest, options?: SimulationRequestOptions) => postSimulation<SimulationDisruptResponse>("disrupt", payload, options),
   exportSimulation: () => request<SimulationExportBundle>("/api/simulation/export"),
 };

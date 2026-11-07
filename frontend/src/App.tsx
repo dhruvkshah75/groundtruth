@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
-  ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database,
+  ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database, Map as MapIcon,
   FlaskConical, LoaderCircle, MessageSquareText, MoreHorizontal, Network, PanelLeftClose,
   PanelLeftOpen, Pencil, Plus, RotateCcw, ScanLine, Sparkles, Sun, Moon, Trash2, X,
 } from "lucide-react";
@@ -11,7 +11,8 @@ import { displayText, environmentTableData, fieldLabel, formatTimestamp, isInter
 import type { AgentResponse, ApiHealth, AppState, Fact } from "./types";
 
 const BeliefGraphPage = lazy(() => import("./BeliefGraphPage"));
-type WorkspaceTab = "chat" | "inspector" | "graph";
+const SimulationWorkspace = lazy(() => import("./SimulationWorkspace"));
+type WorkspaceTab = "chat" | "inspector" | "graph" | "simulation";
 type Action = "ask" | "scenario-a" | "scenario-b" | "reset" | "new-chat" | "switch-chat" | "delete-chat" | null;
 type Chat = { id: string; title: string | null; scenario: "scenario-a" | "scenario-b" | null; customTitle?: boolean; hasMessages?: boolean };
 type ChatDialog = { kind: "limit" } | { kind: "delete"; chat: Chat } | { kind: "scenario"; scenario: "scenario-a" | "scenario-b" };
@@ -39,9 +40,10 @@ const tabs = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "inspector", label: "System inspector", icon: ScanLine },
   { id: "graph", label: "Belief graph", icon: Network },
+  { id: "simulation", label: "Simulation", icon: MapIcon },
 ] as const;
-const tabFromPath = (): WorkspaceTab => window.location.pathname === "/graph"
-  ? "graph" : window.location.pathname === "/inspector" ? "inspector" : "chat";
+const tabFromPath = (): WorkspaceTab =>
+  tabs.find(({ id }) => `/${id}` === window.location.pathname.replace(/\/$/, ""))?.id ?? "chat";
 
 const PERSPECTIVE_LABELS: Record<string, string> = {
   user_perspective: "User expectation",
@@ -406,6 +408,9 @@ function App() {
         </section>}
         {activeTab === "inspector" && <Inspector state={state} />}
         {activeTab === "graph" && <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}><BeliefGraphPage embedded workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} /></Suspense>}
+        {activeTab === "simulation" && <Suspense fallback={<div className="route-loading">Loading simulation…</div>}>
+          <SimulationWorkspace key={activeChatId} sessionId={activeChatId} chatName={activeChat ? chatLabel(activeChat) : "Current chat"} />
+        </Suspense>}
       </main>
       {chatDialog && <ChatActionDialog dialog={chatDialog} onClose={() => setChatDialog(null)} onDelete={(chat) => void deleteChat(chat)} onLoadScenario={(scenario) => void loadScenario(scenario, true)} />}
     </div>
