@@ -95,7 +95,7 @@ components:
   composer:
     backgroundColor: "{colors.surface}"
     rounded: "{rounded.composer}"
-    padding: "8px"
+    padding: "6px"
   perspective-card:
     backgroundColor: "{colors.surface}"
     rounded: "{rounded.card}"
@@ -169,13 +169,15 @@ Use rounded controls within a restrained, line-based interface: 8px icon control
 
 ### Navigation and scenario controls
 
-Navigation is a quiet, icon-led list with 40px minimum item height, 12px corners, 9px by 12px padding, and 14px text. Hover uses the raised surface; the active page uses the user-bubble surface and weight 500. Keep Chat, System inspector, and Belief graph in the same left navigation. Scenario buttons remain simple action labels and show a check for the loaded preset. Retain existing BrainCircuit/Lucide icons. The visible assistant name is lowercase `agent` in the header, response identity, and document title.
+Navigation is a quiet, icon-led list with 40px minimum item height, 12px corners, 9px by 12px padding, and 14px text. Hover uses the raised surface; the active page uses the user-bubble surface and weight 500. Chat, System inspector, Belief graph, and Simulation share the same left navigation. When space allows, drag a tab to the right or press Shift+Enter on it to open it beside the current view. A center divider adjusts both pane widths and supports arrow keys. Scenario buttons remain simple action labels and show a check for the loaded preset. Retain existing BrainCircuit/Lucide icons. The visible assistant name is lowercase `agent` in the header, response identity, and document title.
 
 ### Buttons and composer
 
 The icon button is 32px square with an 8px radius and transparent background, gaining the raised surface on hover. The send action is 32px square with 12px corners, purple background, white icon, and a deeper purple hover. Disabled controls visibly reduce emphasis; the send button has a separate pale disabled state.
 
-The composer has a one-pixel strong border, 20px corners, and 8px internal padding. Its border turns purple on focus within. The textarea grows between 48px and 160px and retains a programmatically associated label for assistive technology. Enter submits; Shift+Enter adds a line. Other focusable controls use a 2px purple outline with 3px offset. API problems remain visible with retry/dismiss controls.
+The composer has a one-pixel strong border, 20px corners, and 6px internal padding. Its border turns purple on focus within. The textarea starts at one line, grows as text wraps or gains line breaks, and scrolls beyond 160px. It retains a programmatically associated label for assistive technology. Enter submits; Shift+Enter adds a line. Other focusable controls use a 2px purple outline with 3px offset. API problems remain visible with retry/dismiss controls.
+
+Simulation dropdowns use the current theme surface, text, border, and selection colors. Browsers that support styling native pickers apply those colors to the open menu and its selected option.
 
 ### Evidence cards and badges
 

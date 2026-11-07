@@ -140,7 +140,7 @@ try {
   try {
     await delay(450);
     assert.equal(requests, 1);
-    await post("Reset", "control");
+    await post("Reload preset", "load");
     await eventually(async () => (await clock.innerText()) === "0.000 s");
   } finally { release.resolve(); }
   await delay(350);
@@ -204,37 +204,64 @@ try {
     await mkdir(output, { recursive: true });
     await page.screenshot({ path: join(output, "simulation-workspace-desktop.png") });
   }
-  const chatNav = button("Chat");
-  const source = await chatNav.boundingBox();
+  async function dragTab(name) {
+    const source = await button(name).boundingBox();
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(source.x + source.width / 2 + 16, source.y + source.height / 2, { steps: 4 });
+    const dropZone = page.locator(".workspace-drop-zone");
+    await dropZone.waitFor();
+    const destination = await dropZone.boundingBox();
+    await page.mouse.move(destination.x + destination.width / 2, destination.y + 80, { steps: 6 });
+    await page.mouse.move(destination.x + destination.width / 2, destination.y + 90);
+    await page.mouse.up();
+  }
+
   const pausedTime = await clock.innerText();
-  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(source.x + source.width / 2 + 16, source.y + source.height / 2, { steps: 4 });
-  const dropZone = page.locator(".workspace-drop-zone");
-  await dropZone.waitFor();
-  const destination = await dropZone.boundingBox();
-  await page.mouse.move(destination.x + destination.width / 2, destination.y + 80, { steps: 6 });
-  await page.mouse.move(destination.x + destination.width / 2, destination.y + 90);
-  await page.mouse.up();
   const dock = page.locator(".workspace-dock");
-  await dock.getByRole("textbox", { name: "Ask the cognitive Agent" }).waitFor();
+  await dragTab("Chat");
+  const composer = dock.getByRole("textbox", { name: "Ask the cognitive Agent" });
+  await composer.waitFor();
   assert.equal(await clock.innerText(), pausedTime);
   assert.ok((await dock.boundingBox()).x > (await robot.boundingBox()).x);
+  const oneLine = (await composer.boundingBox()).height;
+  await composer.fill("First line\nSecond line");
+  assert.ok((await composer.boundingBox()).height > oneLine);
+  await composer.fill("A long line that wraps as the right pane grows narrower. ".repeat(4));
+  assert.ok((await composer.boundingBox()).height > oneLine);
+  await composer.fill("");
+  assert.equal((await composer.boundingBox()).height, oneLine);
+
+  const divider = page.getByRole("separator", { name: "Resize split view" });
+  const center = await divider.boundingBox();
+  await page.mouse.move(center.x + center.width / 2, center.y + 50);
+  await page.mouse.down();
+  await page.mouse.move(center.x + center.width / 2 - 100, center.y + 50, { steps: 8 });
+  await page.mouse.up();
+  assert.ok((await divider.boundingBox()).x < center.x - 80);
+  const afterDrag = (await divider.boundingBox()).x;
+  await divider.press("ArrowRight");
+  assert.ok((await divider.boundingBox()).x > afterDrag);
   if (output) await page.screenshot({ path: join(output, "simulation-workspace-split.png") });
 
-  await button("Open Belief graph beside Simulation").focus();
-  await page.keyboard.press("Enter");
+  await dragTab("System inspector");
+  await dock.getByRole("region", { name: "System inspector", exact: true }).waitFor();
+  await button("Belief graph").press("Shift+Enter");
   await dock.getByRole("region", { name: "Belief network" }).waitFor();
   await page.getByText("Belief graph options", { exact: true }).click();
   await button("Active beliefs").waitFor();
+  await dragTab("Simulation");
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
   assert.equal(await clock.innerText(), pausedTime);
+  await dragTab("Belief graph");
+  await dock.getByRole("region", { name: "Belief network" }).waitFor();
 
   for (const width of [1440, 1024, 768, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const overflow = await page.locator(".simulation-workspace").evaluate((el) => el.scrollWidth > el.clientWidth);
     assert.equal(overflow, false, `Horizontal overflow at ${width}px`);
     assert.ok((await page.locator(".warehouse-map").boundingBox()).width > 240);
-    if (width <= 1024) assert.equal(await dock.count(), 0);
+    if (width <= 1024) await dock.waitFor({ state: "detached" });
   }
   await page.locator(".sim-presenter-inline > summary").click();
   await page.locator(".sim-presenter-inline").getByRole("button", { name: "Reload preset" }).waitFor();
@@ -243,6 +270,16 @@ try {
   assert.equal(await button("Play").evaluate((el) => getComputedStyle(el).transitionDuration), "0s");
   await button("Switch to dark theme").click();
   if (output) await page.screenshot({ path: join(output, "simulation-workspace-mobile.png") });
+  await page.locator(".sim-presenter-inline > summary").click();
+  await page.locator(".sim-disrupt > summary").click();
+  const disruption = page.getByLabel("Disruption", { exact: true });
+  if (await page.evaluate(() => CSS.supports("appearance: base-select"))) {
+    await disruption.click();
+    assert.equal(await disruption.evaluate((el) => el.matches(":open")), true);
+    assert.equal(await disruption.evaluate((el) => getComputedStyle(el, "::picker(select)").backgroundColor),
+      await disruption.evaluate((el) => getComputedStyle(el).backgroundColor));
+    await page.keyboard.press("Escape");
+  }
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await button("Close docked Belief graph").click();

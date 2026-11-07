@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { createPortal } from "react-dom";
-import { Activity, Camera, Check, CircleAlert, Map, Pause, Play, RotateCcw, SkipForward, SlidersHorizontal, WifiOff } from "lucide-react";
+import { Activity, Camera, Check, CircleAlert, Map, Pause, Play, SkipForward, SlidersHorizontal, WifiOff } from "lucide-react";
 import { api } from "./api";
 import type {
   CameraDetection, SimulationControlRequest, SimulationDisruptRequest,
@@ -173,9 +173,9 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
     : active ? "Running" : state?.state === "paused" ? "Paused"
     : state?.state === "completed" ? "Completed" : "No run loaded";
 
-  function control(action: SimulationControlRequest["action"], rate?: typeof rates[number]) {
+  function control(action: Exclude<SimulationControlRequest["action"], "reset">, rate?: typeof rates[number]) {
     const messages = { play: "Playback started.", pause: "Playback paused.", step: "Step confirmed.",
-      reset: "Run reset.", set_rate: `Rate set to ${rate}×.` };
+      set_rate: `Rate set to ${rate}×.` };
     void run("Applying control…", async (expected, options) => ({
       state: await api.controlSimulation({ action, expected, playback_rate: rate }, options),
       message: messages[action],
@@ -206,16 +206,16 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
   </div>;
 
   const presenter = <section className="sim-presenter" aria-label="Presenter controls">
-    <div className="sim-preset">
-      <button type="button" className="sim-button" onClick={load} disabled={blocked || active}>
-        <Map size={16} />{loaded ? "Reload preset" : "Load preset"}
-      </button>
-      <button type="button" className="sim-button" onClick={() => control("reset")} disabled={blocked || !loaded}><RotateCcw size={16} />Reset</button>
-    </div>
-    <div className="sim-rates" role="group" aria-label="Playback rate">
-      {rates.map((rate) => <button type="button" key={rate} className="sim-button"
-        aria-pressed={(state?.playback_rate ?? 0.5) === rate}
-        onClick={() => control("set_rate", rate)} disabled={!canAdjust}>{rate}×</button>)}
+    <button type="button" className="sim-button" onClick={load} disabled={blocked || active}>
+      <Map size={16} />{loaded ? "Reload preset" : "Load preset"}
+    </button>
+    <div className="sim-rate-field" role="group" aria-label="Playback speed">
+      <span>Playback speed</span>
+      <div className="sim-rates">
+        {rates.map((rate) => <button type="button" key={rate} className="sim-button"
+          aria-pressed={(state?.playback_rate ?? 0.5) === rate}
+          onClick={() => control("set_rate", rate)} disabled={!canAdjust}>{rate}×</button>)}
+      </div>
     </div>
     {loaded && state && <DisruptionControls key={state.run_id} state={state}
       disabled={!canAdjust || state.state === "completed"} submit={disrupt} />}

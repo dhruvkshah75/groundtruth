@@ -149,8 +149,6 @@
 .workspace-presenter-target p, .sim-presenter-inline p { margin: 5px 0 10px; color: var(--muted); font-size: .75rem; }
 .sim-presenter { display: flex; flex-wrap: wrap; gap: 8px; align-items: start; min-width: 0; }
 .workspace-presenter-target .sim-presenter { flex-direction: column; }
-.sim-preset { display: flex; flex-wrap: wrap; gap: 6px; }
-.workspace-presenter-target .sim-preset .sim-button { padding-inline: 8px; }
 .sim-presenter .sim-disrupt { width: 100%; margin: 0; }
 .sim-disrupt label { min-width: 0; max-width: 100%; }
 .sim-disrupt select { max-width: 100%; }
@@ -158,3 +156,27 @@
 .workspace-presenter-target .sim-disrupt select { width: 100%; }
 .sim-presenter-inline { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
 .sim-presenter-inline > summary { cursor: pointer; color: var(--text); font-size: .8125rem; }
+
+.sim-rate-field { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }
+.sim-disrupt option { background: var(--surface); color: var(--text); }
+
+@supports (appearance: base-select) {
+  .sim-disrupt select, .sim-disrupt select::picker(select) { appearance: base-select; }
+  .sim-disrupt select::picker(select) {
+    margin-block: 4px;
+    padding: 4px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+  }
+  .sim-disrupt select::picker-icon { color: var(--muted); }
+  .sim-disrupt option { min-height: 34px; padding: 6px 8px; border-radius: 6px; }
+  .sim-disrupt option:checked { background: var(--selection); color: var(--text); }
+  .sim-disrupt option:hover, .sim-disrupt option:focus-visible {
+    background: var(--surface-raised);
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .sim-disrupt option::checkmark { color: var(--accent); }
+}

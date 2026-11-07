@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database, Map as MapIcon,
@@ -13,8 +13,6 @@ import type { AgentResponse, ApiHealth, AppState, Fact } from "./types";
 const BeliefGraphPage = lazy(() => import("./BeliefGraphPage"));
 const SimulationWorkspace = lazy(() => import("./SimulationWorkspace"));
 type WorkspaceTab = "chat" | "inspector" | "graph" | "simulation";
-type DockPane = "chat" | "graph";
-const dockLabel = { chat: "Chat", graph: "Belief graph" };
 type Action = "ask" | "scenario-a" | "scenario-b" | "reset" | "new-chat" | "switch-chat" | "delete-chat" | null;
 type Chat = { id: string; title: string | null; scenario: "scenario-a" | "scenario-b" | null; customTitle?: boolean; hasMessages?: boolean };
 type ChatDialog = { kind: "limit" } | { kind: "delete"; chat: Chat } | { kind: "scenario"; scenario: "scenario-a" | "scenario-b" };
@@ -44,6 +42,9 @@ const tabs = [
   { id: "graph", label: "Belief graph", icon: Network },
   { id: "simulation", label: "Simulation", icon: MapIcon },
 ] as const;
+const tabLabel = (tab: WorkspaceTab) => tabs.find(({ id }) => id === tab)?.label ?? "";
+const MIN_PANE_WIDTH = 320;
+const SPLIT_DIVIDER_WIDTH = 10;
 const tabFromPath = (): WorkspaceTab =>
   tabs.find(({ id }) => `/${id}` === window.location.pathname.replace(/\/$/, ""))?.id ?? "chat";
 
@@ -82,8 +83,8 @@ function App() {
   const [chatDialog, setChatDialog] = useState<ChatDialog | null>(null);
   const chatMenuTrigger = useRef<HTMLButtonElement | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(tabFromPath);
-  const [dock, setDock] = useState<DockPane | null>(null);
-  const [draggedPane, setDraggedPane] = useState<DockPane | null>(null);
+  const [dock, setDock] = useState<WorkspaceTab | null>(null);
+  const [draggedPane, setDraggedPane] = useState<WorkspaceTab | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [presenterTarget, setPresenterTarget] = useState<HTMLDivElement | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
@@ -91,8 +92,21 @@ function App() {
     const saved = Number(window.localStorage.getItem("groundtruth-sidebar-width"));
     return Number.isFinite(saved) && saved >= 200 && saved <= 400 ? saved : 232;
   });
-  const canDock = viewportWidth - (sidebarOpen ? sidebarWidth : 0) >= 900;
-  const visibleDock = canDock && activeTab === "simulation" ? dock : null;
+  const [splitRatio, setSplitRatio] = useState(0.62);
+  const stageWidth = viewportWidth - (sidebarOpen ? sidebarWidth : 0);
+  const canDock = stageWidth >= 900;
+  const visibleDock = canDock && dock !== activeTab ? dock : null;
+  const splitWidth = stageWidth - SPLIT_DIVIDER_WIDTH;
+  const maxPaneWidth = splitWidth - MIN_PANE_WIDTH;
+  const primaryWidth = Math.round(Math.max(MIN_PANE_WIDTH, Math.min(maxPaneWidth, splitRatio * splitWidth)));
+  const visibleTabs = visibleDock ? [activeTab, visibleDock] : [activeTab];
+  const chatVisible = activeTab === "chat" || visibleDock === "chat";
+  const simulationVisible = activeTab === "simulation" || visibleDock === "simulation";
+  const stageRef = useRef<HTMLDivElement>(null);
+
+  function resizeSplit(width: number) {
+    setSplitRatio(Math.max(MIN_PANE_WIDTH, Math.min(maxPaneWidth, width)) / splitWidth);
+  }
   const presenterInSidebar = sidebarOpen && viewportWidth > 760;
   useEffect(() => {
     const resize = () => setViewportWidth(window.innerWidth);
@@ -148,7 +162,7 @@ function App() {
   }, [openChatMenu]);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
-    const onPopState = () => setActiveTab(tabFromPath());
+    const onPopState = () => { setActiveTab(tabFromPath()); setDock(null); };
     const onEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && window.innerWidth <= 760) {
         setSidebarOpen(false);
@@ -167,31 +181,53 @@ function App() {
     };
   }, []);
   useEffect(() => {
-    if (activeTab === "chat" || visibleDock === "chat") conversationEnd.current?.scrollIntoView({ block: "end" });
-  }, [state?.history.length, activeTab, visibleDock, action]);
+    if (chatVisible) conversationEnd.current?.scrollIntoView({ block: "end" });
+  }, [state?.history.length, chatVisible, action]);
+
+  useLayoutEffect(() => {
+    const input = questionInput.current;
+    if (!input) return;
+    const fit = () => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+    };
+    fit();
+    let width = input.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (input.clientWidth === width) return;
+      width = input.clientWidth;
+      fit();
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, [chatVisible, question]);
 
   const selectTab = (tab: WorkspaceTab) => {
+    setDock(null);
     setActiveTab(tab);
     window.history.pushState({}, "", tab === "chat" ? "/" : `/${tab}`);
     if (window.innerWidth <= 760) setSidebarOpen(false);
   };
-  function openDock(pane: DockPane) {
+  function openDock(pane: WorkspaceTab) {
     if (!canDock) return;
-    setDock(pane);
     setDraggedPane(null);
-    if (activeTab !== "simulation") selectTab("simulation");
+    if (pane === activeTab) {
+      if (!visibleDock) return;
+      selectTab(visibleDock);
+    }
+    setDock(pane);
   }
 
-  function dockHeader(pane: DockPane) {
+  function dockHeader(pane: WorkspaceTab) {
+    const label = tabLabel(pane);
     return <header className="workspace-dock-header">
-      <h2>{dockLabel[pane]}</h2>
-      <button type="button" className="icon-button" aria-label={`Open ${dockLabel[pane]} full screen`}
-        title="Open full screen" onClick={() => { setDock(null); selectTab(pane); }}><Maximize2 size={16} /></button>
-      <button type="button" className="icon-button" aria-label={`Close docked ${dockLabel[pane]}`}
+      <h2>{label}</h2>
+      <button type="button" className="icon-button" aria-label={`Open ${label} full screen`}
+        title="Open full screen" onClick={() => selectTab(pane)}><Maximize2 size={16} /></button>
+      <button type="button" className="icon-button" aria-label={`Close docked ${label}`}
         title="Close pane" onClick={() => {
           setDock(null);
-          const target = document.getElementById(`dock-${pane}`);
-          (sidebarOpen ? target : sidebarToggle.current)?.focus();
+          (sidebarOpen ? document.getElementById(`workspace-tab-${pane}`) : sidebarToggle.current)?.focus();
         }}><X size={17} /></button>
     </header>;
   }
@@ -360,28 +396,28 @@ function App() {
         </div>
         <nav className="workspace-nav" aria-label="Workspace tabs">
           {tabs.map(({ id, label, icon: Icon }) => {
-            const pane = canDock && (id === "chat" || id === "graph") ? id : null;
-            return <div className="workspace-nav-row" key={id}>
-              <button type="button" className={`workspace-nav-item ${activeTab === id ? "active" : ""}`}
-                draggable={!!pane} aria-current={activeTab === id ? "page" : undefined}
-                title={pane ? `Drag ${label} to the right to open beside Simulation` : undefined}
-                onDragStart={pane ? (event) => {
-                  event.dataTransfer.setData("text/plain", pane);
-                  event.dataTransfer.effectAllowed = "move";
-                  setDraggedPane(pane);
-                } : undefined}
-                onDragEnd={() => setDraggedPane(null)}
-                onClick={() => selectTab(id)}>
-                <Icon size={19} strokeWidth={1.6} /><span>{label}</span>
-              </button>
-              {pane && <button id={`dock-${pane}`} type="button" className="icon-button workspace-dock-button"
-                title={`Open ${label} beside Simulation`} aria-label={`Open ${label} beside Simulation`}
-                aria-pressed={visibleDock === pane} onClick={() => openDock(pane)}><PanelRightOpen size={16} /></button>}
-            </div>;
+            const draggable = canDock && (id !== activeTab || !!visibleDock);
+            return <button key={id} id={`workspace-tab-${id}`} type="button"
+              className={`workspace-nav-item ${activeTab === id ? "active" : ""}`}
+              draggable={draggable} aria-current={activeTab === id ? "page" : undefined}
+              aria-keyshortcuts={draggable ? "Shift+Enter" : undefined}
+              title={draggable ? `Drag ${label} to the right or press Shift+Enter to split` : undefined}
+              onDragStart={draggable ? (event) => {
+                event.dataTransfer.setData("text/plain", id);
+                event.dataTransfer.effectAllowed = "move";
+                setDraggedPane(id);
+              } : undefined}
+              onDragEnd={() => setDraggedPane(null)}
+              onKeyDown={(event) => {
+                if (draggable && event.shiftKey && event.key === "Enter") {
+                  event.preventDefault();
+                  openDock(id);
+                }
+              }}
+              onClick={() => selectTab(id)}>
+              <Icon size={19} strokeWidth={1.6} /><span>{label}</span>
+            </button>;
           })}
-          {activeTab === "simulation" && canDock && <p className="workspace-dock-hint">
-            Drag Chat or Belief graph to the right, or use its dock button.
-          </p>}
         </nav>
         {activeTab === "chat" && <div className="workspace-scenarios" role="group" aria-label="Scenario presets">
           {(["scenario-a", "scenario-b"] as const).map((scenario, index) => (
@@ -408,7 +444,7 @@ function App() {
             </>}
           </div>)}
         </section>}
-        {activeTab === "simulation" && presenterInSidebar && <div ref={setPresenterTarget} className="workspace-presenter-target" />}
+        {simulationVisible && presenterInSidebar && <div ref={setPresenterTarget} className="workspace-presenter-target" />}
         {visibleDock === "graph" && <details className="workspace-docked-graph-options">
           <summary>Belief graph options</summary><div ref={setGraphSidebarTarget} className="workspace-graph-controls" />
         </details>}
@@ -436,57 +472,76 @@ function App() {
         </header>
         {health?.status === "degraded" && health.error && <div className="error-banner" role="status"><CircleAlert size={17} /><span>{health.error}</span></div>}
         {error && <div className="error-banner" role="alert"><CircleAlert size={17} /><span>{error}</span><button type="button" onClick={() => void refresh()}>Retry connection</button><button type="button" aria-label="Dismiss error" onClick={() => setError(null)}><X size={16} /></button></div>}
-        <div className={`workspace-stage ${visibleDock ? "with-dock" : ""}`}>
-        {activeTab === "simulation" && <Suspense fallback={<div className="route-loading">Loading simulation…</div>}>
-          <SimulationWorkspace key={activeChatId} sessionId={activeChatId} chatName={activeChat ? chatLabel(activeChat) : "Current chat"}
-            presenterTarget={presenterInSidebar ? presenterTarget : null} />
-        </Suspense>}
-        {(activeTab === "chat" || visibleDock === "chat") && <div className={`workspace-pane ${visibleDock === "chat" ? "workspace-dock" : ""}`}>
-        {visibleDock === "chat" && dockHeader("chat")}
-        <section className="chat-workspace" aria-label="Chat">
-          <div className="conversation" role="log" aria-label="Conversation" aria-busy={action === "ask"}>
-            <div className={`conversation-inner ${!state?.history.length ? "is-empty" : ""}`}>
-              {state?.history.length ? state.history.map((response, index) => <ConversationTurn key={`${displayText(response.question)}-${index}`} response={response} />) : (
-                <div className="empty-conversation">
-                  <div className="welcome-mark"><BrainCircuit size={34} strokeWidth={1.4} /></div>
-                  <h2>What would you like to know?</h2>
-                  <p>Ask about the current world.<br />Explore the evidence behind every answer.</p>
+        <div ref={stageRef} className={`workspace-stage ${visibleDock ? "with-dock" : ""}`}
+          style={visibleDock ? { "--primary-pane-width": `${primaryWidth}px` } as React.CSSProperties : undefined}>
+          {visibleTabs.map((tab) => <Fragment key={tab}>
+            {tab === visibleDock && <div className="workspace-split-divider" role="separator" tabIndex={0}
+              aria-label="Resize split view" aria-orientation="vertical" aria-valuemin={MIN_PANE_WIDTH}
+              aria-valuemax={maxPaneWidth} aria-valuenow={primaryWidth}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.currentTarget.focus();
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (!event.currentTarget.hasPointerCapture(event.pointerId) || !stageRef.current) return;
+                resizeSplit(event.clientX - stageRef.current.getBoundingClientRect().left - SPLIT_DIVIDER_WIDTH / 2);
+              }}
+              onKeyDown={(event) => {
+                const change = event.shiftKey ? 64 : 24;
+                const widths: Record<string, number> = {
+                  ArrowLeft: primaryWidth - change, ArrowRight: primaryWidth + change,
+                  Home: MIN_PANE_WIDTH, End: maxPaneWidth,
+                };
+                if (!(event.key in widths)) return;
+                event.preventDefault();
+                resizeSplit(widths[event.key]);
+              }} />}
+            <div className={`workspace-pane ${tab === visibleDock ? "workspace-dock" : ""}`}>
+              {tab === visibleDock && dockHeader(tab)}
+              {tab === "simulation" && <Suspense fallback={<div className="route-loading">Loading simulation…</div>}>
+                <SimulationWorkspace key={activeChatId} sessionId={activeChatId} chatName={activeChat ? chatLabel(activeChat) : "Current chat"}
+                  presenterTarget={presenterInSidebar ? presenterTarget : null} />
+              </Suspense>}
+              {tab === "chat" && <section className="chat-workspace" aria-label="Chat">
+                <div className="conversation" role="log" aria-label="Conversation" aria-busy={action === "ask"}>
+                  <div className={`conversation-inner ${!state?.history.length ? "is-empty" : ""}`}>
+                    {state?.history.length ? state.history.map((response, index) => <ConversationTurn key={`${displayText(response.question)}-${index}`} response={response} />) : (
+                      <div className="empty-conversation">
+                        <div className="welcome-mark"><BrainCircuit size={34} strokeWidth={1.4} /></div>
+                        <h2>What would you like to know?</h2>
+                        <p>Ask about the current world.<br />Explore the evidence behind every answer.</p>
+                      </div>
+                    )}
+                    {action === "ask" && <div className="working-indicator" role="status"><LoaderCircle size={16} className="spin" />Running the Agent cycle…</div>}
+                    <div ref={conversationEnd} />
+                  </div>
                 </div>
-              )}
-              {action === "ask" && <div className="working-indicator" role="status"><LoaderCircle size={16} className="spin" />Running the Agent cycle…</div>}
-              <div ref={conversationEnd} />
+                <form className="composer-wrap" onSubmit={(event) => void runQuestion(event)}>
+                  <label className="sr-only" htmlFor="agent-question">Ask the cognitive Agent</label>
+                  <div className="composer">
+                    <textarea ref={questionInput} id="agent-question" rows={1} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+                    }} placeholder="Ask anything about the current world…" disabled={!providerAvailable || busy} />
+                    <button className="send-button" type="submit" aria-label="Send message" disabled={!providerAvailable || busy || !question.trim()}>{action === "ask" ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>
+                  </div>
+                  <p className="composer-hint">Enter to send <span>·</span> Shift + Enter for a new line</p>
+                </form>
+              </section>}
+              {tab === "inspector" && <Inspector state={state} />}
+              {tab === "graph" && <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}>
+                <BeliefGraphPage embedded workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} />
+              </Suspense>}
             </div>
-          </div>
-          <form className="composer-wrap" onSubmit={(event) => void runQuestion(event)}>
-            <label className="sr-only" htmlFor="agent-question">Ask the cognitive Agent</label>
-            <div className="composer">
-              <textarea ref={questionInput} id="agent-question" rows={2} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
-              }} placeholder="Ask anything about the current world…" disabled={!providerAvailable || busy} />
-              <div className="composer-footer">
-                <button className="send-button" type="submit" aria-label="Send message" disabled={!providerAvailable || busy || !question.trim()}>{action === "ask" ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>
-              </div>
-            </div>
-            <p className="composer-hint">Enter to send <span>·</span> Shift + Enter for a new line</p>
-          </form>
-        </section></div>}
-        {activeTab === "inspector" && <Inspector state={state} />}
-        {(activeTab === "graph" || visibleDock === "graph") &&
-          <div className={`workspace-pane ${visibleDock === "graph" ? "workspace-dock" : ""}`}>
-            {visibleDock === "graph" && dockHeader("graph")}
-            <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}>
-              <BeliefGraphPage embedded workspaceState={state} workspaceHealth={health}
-                sidebarTarget={graphSidebarTarget} />
-            </Suspense>
+          </Fragment>)}
+          {canDock && draggedPane && <div className="workspace-drop-zone" aria-hidden="true"
+            onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (event.dataTransfer.getData("text/plain") === draggedPane) openDock(draggedPane);
+            }}>
+            <div><PanelRightOpen size={23} /><strong>Drop {tabLabel(draggedPane)} here</strong></div>
           </div>}
-        {canDock && draggedPane && <div className="workspace-drop-zone" aria-hidden="true"
-          onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-          onDrop={(event) => {
-            event.preventDefault();
-            if (event.dataTransfer.getData("text/plain") === draggedPane) openDock(draggedPane);
-          }}>
-          <div><PanelRightOpen size={23} /><strong>Drop {dockLabel[draggedPane]} here</strong><span>Open beside Simulation</span></div>
-        </div>}
         </div>
       </main>
       {chatDialog && <ChatActionDialog dialog={chatDialog} onClose={() => setChatDialog(null)} onDelete={(chat) => void deleteChat(chat)} onLoadScenario={(scenario) => void loadScenario(scenario, true)} />}
