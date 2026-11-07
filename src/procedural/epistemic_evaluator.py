@@ -756,14 +756,67 @@ class EpistemicEvaluator:
                     sensor_telemetry=telemetry,
                 )
             else:
-                loc_fact = next(
-                    (
-                        f
-                        for f in memory_facts
-                        if f.predicate == "located_at" and f.superseded_by is None
-                    ),
-                    None,
+                selected_run_id = (
+                    temporal_results[0].run_id
+                    if temporal_results and temporal_results[0].run_id
+                    else None
                 )
+                if selected_run_id is None and intent and intent.run_id:
+                    selected_run_id = intent.run_id
+
+                matching_facts = [
+                    f
+                    for f in memory_facts
+                    if f.predicate == "located_at" and f.superseded_by is None
+                ]
+
+                loc_fact = None
+                different_run_fact = None
+                unscoped_fact = None
+
+                for f in matching_facts:
+                    f_run = f.context.extra_context.get("run_id") or f.evidence.get("run_id")
+                    if f_run is not None:
+                        if selected_run_id is not None and str(selected_run_id) != str(UUID(int=0)):
+                            if str(f_run) == str(selected_run_id):
+                                loc_fact = f
+                                break
+                            else:
+                                different_run_fact = f
+                        else:
+                            loc_fact = f
+                            break
+                    else:
+                        unscoped_fact = f
+
+                if loc_fact is None and (
+                    different_run_fact is not None
+                    or (
+                        unscoped_fact is not None
+                        and selected_run_id is not None
+                        and str(selected_run_id) != str(UUID(int=0))
+                    )
+                ):
+                    target_fact = different_run_fact or unscoped_fact
+                    assert target_fact is not None
+                    f_run = target_fact.context.extra_context.get(
+                        "run_id"
+                    ) or target_fact.evidence.get("run_id")
+                    prov_desc = f"from run {f_run}" if f_run else f"from {target_fact.source_agent}"
+                    return EpistemicEvaluation(
+                        status="uncertain",
+                        explanation=(
+                            f"No physical camera observations recorded for {display_name} in run "
+                            f"{selected_run_id}. Stored memory record ({prov_desc}) cannot "
+                            f"establish a location for run {selected_run_id}."
+                        ),
+                        memory_facts=memory_facts,
+                        sensor_telemetry=telemetry,
+                    )
+
+                if loc_fact is None and unscoped_fact is not None:
+                    loc_fact = unscoped_fact
+
                 if loc_fact:
                     return EpistemicEvaluation(
                         status="stored_belief",
@@ -946,9 +999,14 @@ class EpistemicEvaluator:
                 assert det1 is not None and det2 is not None
                 pos1 = (round(det1[0], 1), round(det1[1], 1))
                 pos2 = (round(det2[0], 1), round(det2[1], 1))
+                frame1 = det1[3]
+                frame2 = det2[3]
                 loc1 = s1.observer_pose.location
                 loc2 = s2.observer_pose.location
-                if loc1 != loc2 or pos1 != pos2:
+                # Compare object positions in compatible frames. A change in the
+                # observer's location is NOT evidence that the object moved.
+                frames_compatible = (frame1 == frame2) or (not frame1 or not frame2)
+                if frames_compatible and pos1 != pos2:
                     transitions.append((s1, s2, loc1, loc2))
 
             if transitions:

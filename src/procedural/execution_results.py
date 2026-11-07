@@ -39,6 +39,7 @@ class TemporalObservationExecutionResult(BaseModel):
     operation_index: int = Field(ge=0)
     purpose: str
     mode: str
+    run_id: UUID | None = None
     entity_id: str | None = None
     capability: str | None = None
     at_sim_time_ms: int | None = None

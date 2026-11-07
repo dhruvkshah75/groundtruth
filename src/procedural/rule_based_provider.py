@@ -11,6 +11,37 @@ from typing import Any
 
 from src.procedural.intent_provider import IntentProvider
 
+WORD_NUMBERS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+
 
 class RuleBasedIntentProvider(IntentProvider):
     """Deterministic, rule-based provider for common epistemic scenarios."""
@@ -107,13 +138,16 @@ class RuleBasedIntentProvider(IntentProvider):
             entity = self._extract_entity(q, default=None)
             mentions = [entity] if entity is not None else []
 
-            # A. changes mode: "what changed", "before and what changed", "moved"
+            # A. changes mode: "what changed", "before and what changed", "moved", "previously"
             if (
                 "what changed" in q
                 or "before and what" in q
                 or "did it change" in q
                 or "moved" in q
                 or "relocated" in q
+                or "previously" in q
+                or "earlier" in q
+                or "prior" in q
             ):
                 return {
                     "intent": "object_location_query",
@@ -140,22 +174,58 @@ class RuleBasedIntentProvider(IntentProvider):
                     "user_question": user_question,
                 }
 
-            # C. at_time mode: "where was parcel_01 at 7 seconds", "at 7s", "at 7000ms"
+            # C. at_time mode: "where was parcel_01 at 7 seconds", "at 7s", "at 7000ms",
+            # or "at seven seconds"
             time_match = re.search(
                 r"\bat\s+(-?\d+(?:\.\d+)?)\s*(seconds?|secs?|s|milliseconds?|ms)?\b", q
             )
-            if time_match or "at time" in q or "at second" in q:
+            time_word_match = re.search(
+                r"\bat\s+([a-zA-Z]+)\s*(seconds?|secs?|s|milliseconds?|ms)?\b", q
+            )
+            has_at_phrase = bool(
+                time_match
+                or time_word_match
+                or "at time" in q
+                or "at second" in q
+                or bool(re.search(r"\bat\s+\S+", q))
+            )
+
+            if has_at_phrase:
                 at_sim_time_ms = None
                 if time_match:
                     val_str = time_match.group(1)
                     unit = (time_match.group(2) or "").lower()
                     try:
                         val = float(val_str)
+                        if val < 0:
+                            # Reject negative values before integer truncation
+                            at_sim_time_ms = (
+                                -1
+                                if -1 < val < 0
+                                else int(
+                                    val
+                                    if unit in ("ms", "millisecond", "milliseconds")
+                                    else val * 1000
+                                )
+                            )
+                        else:
+                            if unit in ("ms", "millisecond", "milliseconds"):
+                                at_sim_time_ms = int(val)
+                            else:
+                                at_sim_time_ms = int(val * 1000)
+                    except ValueError:
+                        at_sim_time_ms = None
+                elif time_word_match:
+                    word = time_word_match.group(1).lower()
+                    if word in WORD_NUMBERS:
+                        val = float(WORD_NUMBERS[word])
+                        unit = (time_word_match.group(2) or "").lower()
                         if unit in ("ms", "millisecond", "milliseconds"):
                             at_sim_time_ms = int(val)
                         else:
                             at_sim_time_ms = int(val * 1000)
-                    except ValueError:
+                    else:
+                        # Unrecognized word time phrase; keep at_sim_time_ms=None so it is rejected
                         at_sim_time_ms = None
 
                 return {
@@ -171,6 +241,16 @@ class RuleBasedIntentProvider(IntentProvider):
                 return {
                     "intent": "object_location_query",
                     "mode": "history",
+                    "entity_mentions": mentions,
+                    "user_question": user_question,
+                }
+
+            # Preserve historical intent: if past tense is used without explicit time,
+            # map to last_seen
+            if "was" in q or "were" in q or "did" in q or "before" in q:
+                return {
+                    "intent": "object_location_query",
+                    "mode": "last_seen",
                     "entity_mentions": mentions,
                     "user_question": user_question,
                 }

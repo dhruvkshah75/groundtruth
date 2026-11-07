@@ -979,3 +979,112 @@ def test_legacy_robot_pose_questions_not_classified_as_object_queries() -> None:
     assert r.status == "verified"
     assert r.react_trace is not None
     assert r.react_trace.arguments.get("intent") == "current_robot_pose"
+
+
+def test_observer_location_change_does_not_invent_object_movement() -> None:
+    """Robot moving between stations observing same coordinates does not trigger transition."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Sample 1: Robot at dock, parcel at (100, 200)
+    s1 = make_sample(
+        run_id=run_id,
+        sim_time_ms=1000,
+        sample_sequence=1,
+        observer_pose=make_pose(location="dock"),
+        detections=[make_detection("parcel_01", 100.0, 200.0)],
+    )
+    # Sample 2: Robot at station_B, parcel still at (100, 200)
+    s2 = make_sample(
+        run_id=run_id,
+        sim_time_ms=3000,
+        sample_sequence=2,
+        observer_pose=make_pose(location="station_B"),
+        detections=[make_detection("parcel_01", 100.0, 200.0)],
+    )
+    agent.memory.record_observation_sample(s1)
+    agent.memory.record_observation_sample(s2)
+
+    response = agent.ask("Has parcel_01 moved?")
+    assert response.status == "verified"
+    assert "No location change observed" in response.answer
+    assert "Observed transition" not in response.answer
+
+
+def test_stored_belief_scoped_to_run_earlier_run_cannot_establish_location() -> None:
+    """Stored belief from earlier run cannot establish location for a new run without sightings."""
+    agent = setup_agent()
+    run_1 = uuid4()
+    run_2 = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Stored fact explicitly tagged with run_1
+    agent.memory.record_fact(
+        FactAssertion(
+            subject="parcel_01",
+            predicate="located_at",
+            object="shelf_A1",
+            source_agent="inventory_system",
+            confidence_score=0.9,
+            observed_at=EPOCH,
+            context=SpatialContext(location="shelf_A1", extra_context={"run_id": str(run_1)}),
+        )
+    )
+
+    class MockRun2Sensors:
+        run_id = run_2
+        sim_time_ms = 100
+
+        def observe(self, req: Any) -> Any:
+            return ObservationUnavailable(
+                capability=req.capability,
+                reason="sensor_unavailable",
+                message="Mock offline",
+                reported_at=datetime.now(UTC),
+            )
+
+    intent = agent.interpret("Where is parcel_01 now?")
+    response = agent.capture("Where is parcel_01 now?", intent, sensors=MockRun2Sensors())()
+
+    # Must report uncertainty about provenance, not verified/stored_belief for run 2
+    assert response.status in ("uncertain", "no_data")
+    assert (
+        "cannot establish a location for run" in response.answer
+        or "shelf_A1" not in response.answer
+    )
+
+
+def test_time_words_and_historical_intent_preserved() -> None:
+    """Word numbers parse in at_time, 'previously' maps to changes, and unparseable times reject."""
+    from src.procedural.rule_based_provider import RuleBasedIntentProvider
+
+    provider = RuleBasedIntentProvider()
+
+    # 1. Word number in at_time mode
+    p1 = provider.propose_intent("Where was parcel_01 at seven seconds?")
+    assert p1["intent"] == "object_location_query"
+    assert p1["mode"] == "at_time"
+    assert p1["at_sim_time_ms"] == 7000
+
+    # 2. 'previously' maps to changes
+    p2 = provider.propose_intent("Where was parcel_01 previously?")
+    assert p2["intent"] == "object_location_query"
+    assert p2["mode"] == "changes"
+
+    # 3. Unparseable time phrase rejects rather than falling through to current
+    p3 = provider.propose_intent("Where was parcel_01 at unknown_time seconds?")
+    assert p3["intent"] == "object_location_query"
+    assert p3["mode"] == "at_time"
+    assert p3["at_sim_time_ms"] is None
+
+
+def test_negative_fractional_time_rejected() -> None:
+    """Negative fractional simulation time (-0.1 ms) is rejected before integer truncation."""
+    agent = setup_agent()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    response = agent.ask("Where was parcel_01 at -0.1 ms?")
+    assert response.status == "unsupported"
+    assert response.react_trace is not None
+    assert response.react_trace.execution_summary["temporal_queries_count"] == 0

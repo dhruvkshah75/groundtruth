@@ -159,12 +159,15 @@ Following the completion of Issue [#43 / P2-07](https://github.com/dhruvkshah75/
 - **Sequence and Timestamp Tie-Breaking:** When comparing sightings against camera scans or outages, the evaluator applies `_is_strictly_later(a, b)` using both `sim_time_ms` and `sample_sequence`. An equal-time non-detection or outage correctly supersedes an earlier sighting at the same timestamp.
 - **Cross-Run Reset Isolation:** `MemoryRepository.get_latest_run_id()` orders by insertion order (`rowid DESC LIMIT 1`) rather than simulation time, and implicit queries prioritize the request's active `sensors.run_id`, preventing resets from exposing previous run data.
 - **Canonical Alias Resolution:** Canonical entity IDs resolved from the execution result are used across all 5 temporal modes to match detections. Missing detections yield uncertainty/error instead of fabricating `(0, 0)` coordinates. Pronouns such as `it` are matched strictly with word boundaries so legacy robot pose questions (e.g. `What is your position?`) are not misclassified as object queries.
+- **Physical Position Changes vs. Observer Movement:** In `changes` mode, object positions are compared across compatible reference frames (`pos1 != pos2`). Movement of the observer robot between stations alone does not invent object relocation. Observer location is preserved solely as provenance.
+- **Stored Belief Run Provenance:** Stored location beliefs without matching run provenance cannot establish current position for a run lacking sightings, preventing cross-run belief leakage.
+- **Robust Temporal Parsing:** Natural language word numbers (e.g., "seven seconds") are parsed into exact milliseconds. Unrecognized time phrases are rejected at planning rather than falling through to current mode, and relative terms (e.g., "previously", "earlier") correctly route to `changes`/`history`. Negative values (including fractional values like `-0.1 ms`) are rejected before integer truncation.
 
 ---
 
 ## 5. Verification and Test Results
 
-The implementation is verified by 40 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite (624 tests).
+The implementation is verified by 44 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite (628 tests).
 
 ### Test Categories
 1. **Mode-Specific Grounding Tests:**
@@ -193,14 +196,18 @@ The implementation is verified by 40 targeted unit and integration tests in [`te
    - `test_capture_time_stale_evidence_marks_current_uncertain_and_advances_last_seen_age`: Verifies 1,000 ms freshness threshold and capture time reference.
    - `test_cross_run_reset_isolation`: Verifies that resetting at 20s followed by a new run at 0s does not leak evidence across runs.
    - `test_legacy_robot_pose_questions_not_classified_as_object_queries`: Verifies word-boundary matching for `it` so robot pose questions like "What is your position?" preserve `current_robot_pose`.
+   - `test_observer_location_change_does_not_invent_object_movement`: Verifies observer movement between stations does not invent object movement when coordinates are identical.
+   - `test_stored_belief_scoped_to_run_earlier_run_cannot_establish_location`: Verifies stored beliefs from older runs cannot establish current location for a new run.
+   - `test_time_words_and_historical_intent_preserved`: Verifies parsing of word numbers (e.g., "seven seconds"), mapping "previously" to changes, and rejecting unparseable times.
+   - `test_negative_fractional_time_rejected`: Verifies negative fractional times (e.g., `-0.1 ms`) are rejected before integer truncation.
 
 ### Verification Run
 ```text
 uv run --locked pytest tests/unit/procedural/test_temporal_questions.py -v
-40 passed in 1.82s
+44 passed in 1.94s
 
 uv run --locked pytest -q
-624 passed in 17.79s
+628 passed in 17.87s
 
 uv run --locked ruff check .
 All checks passed!

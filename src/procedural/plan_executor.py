@@ -81,6 +81,7 @@ class PlanExecutor:
                     operation_index=idx,
                     purpose=temp_op.purpose,
                     mode=temp_op.query.mode,
+                    run_id=temp_op.query.run_id,
                     entity_id=temp_op.query.entity_id,
                     capability=temp_op.query.capability,
                     at_sim_time_ms=temp_op.query.end_ms,
