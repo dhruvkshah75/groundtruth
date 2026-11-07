@@ -22,6 +22,8 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import { useMotionPresence } from "./useMotionPresence";
+import { displayText, formatTimestamp } from "./display";
 import { BeliefGraphCanvas, type CameraAction } from "./BeliefGraphCanvas";
 import type { ApiHealth, AppState, AuditEvent, Fact, GraphEdge, SpatialContext } from "./types";
 import "./belief-graph.css";
@@ -75,15 +77,7 @@ function ledgerFact(fact: Fact): DisplayFact {
   };
 }
 
-function formatTime(value: string | null | undefined): string {
-  if (!value) return "Not recorded";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
-
-function shortId(value: string): string {
-  return value.length > 18 ? `${value.slice(0, 9)}…${value.slice(-5)}` : value;
-}
+const formatTime = formatTimestamp;
 
 function relevantAuditEvent(factId: string, events: AuditEvent[]): AuditEvent | null {
   return events.find((event) => event.input_fact_ids.includes(factId) || event.output_fact_ids.includes(factId)) ?? null;
@@ -147,7 +141,8 @@ function FactDetails({
   onSelectFact: (factId: string) => void;
 }) {
   return (
-    <aside className={`belief-details ${open ? "open" : ""}`} aria-label="Selected belief details">
+    <aside className={`belief-details ${open ? "open" : ""}`} aria-label="Selected belief details" aria-hidden={!open} ref={(element) => { if (element) element.inert = !open; }}>
+      <div className="belief-panel-content t-panel-slide" data-open={open}>
       <header>
         <div><p>Details inspector</p><small>{fact ? "Selected stored fact" : nodeId ? "Selected graph node" : "Select a graph node or edge"}</small></div>
         <button type="button" onClick={onClose} aria-label="Close details"><X size={17} /></button>
@@ -155,22 +150,21 @@ function FactDetails({
       {fact ? (
         <div className="belief-details-body">
           <div className="belief-detail-title">
-            <div><span className={`belief-state ${fact.active ? "active" : "superseded"}`}>{fact.active ? "Active fact" : "Superseded fact"}</span><h2>{fact.predicate.replaceAll("_", " ")}</h2></div>
+            <div><span className={`belief-state ${fact.active ? "active" : "superseded"}`}>{fact.active ? "Active fact" : "Superseded fact"}</span><h2>{displayText(fact.predicate)}</h2></div>
             <GitCommitHorizontal size={22} aria-hidden="true" />
           </div>
           <p className="belief-detail-note">This is a persisted belief with source and observation provenance. It does not expose hidden model reasoning.</p>
 
           <dl className="belief-claim">
-            <div><dt>Subject</dt><dd>{fact.source}</dd></div>
-            <div><dt>Predicate</dt><dd>{fact.predicate}</dd></div>
-            <div><dt>Object</dt><dd>{fact.target}</dd></div>
+            <div><dt>Subject</dt><dd>{displayText(fact.source)}</dd></div>
+            <div><dt>Predicate</dt><dd>{displayText(fact.predicate)}</dd></div>
+            <div><dt>Object</dt><dd>{displayText(fact.target)}</dd></div>
           </dl>
 
           <section className="belief-detail-section">
             <h3>Provenance</h3>
             <dl className="belief-provenance">
-              <div><dt>Fact ID</dt><dd title={fact.factId}>{shortId(fact.factId)}</dd></div>
-              <div><dt>Source Agent</dt><dd>{fact.sourceAgent}</dd></div>
+              <div><dt>Source Agent</dt><dd>{displayText(fact.sourceAgent)}</dd></div>
               <div><dt>Confidence</dt><dd><span className="belief-confidence"><i style={{ width: `${Math.round(fact.confidence * 100)}%` }} /></span>{Math.round(fact.confidence * 100)}%</dd></div>
               <div><dt>Observed</dt><dd>{formatTime(fact.observedAt)}</dd></div>
             </dl>
@@ -179,9 +173,9 @@ function FactDetails({
           <section className="belief-detail-section">
             <h3>Spatial context</h3>
             <div className="belief-context-grid">
-              <div><span>Location</span><strong>{fact.context?.location ?? "Not recorded"}</strong></div>
-              <div><span>Reference frame</span><strong>{fact.context?.frame_of_reference ?? "Not recorded"}</strong></div>
-              <div><span>Observer</span><strong>{fact.context?.observer ?? "Not recorded"}</strong></div>
+              <div><span>Location</span><strong>{displayText(fact.context?.location ?? "Not recorded")}</strong></div>
+              <div><span>Reference frame</span><strong>{displayText(fact.context?.frame_of_reference ?? "Not recorded")}</strong></div>
+              <div><span>Observer</span><strong>{displayText(fact.context?.observer ?? "Not recorded")}</strong></div>
               <div><span>World version</span><strong>{fact.context?.world_version ?? "Not recorded"}</strong></div>
             </div>
           </section>
@@ -191,8 +185,8 @@ function FactDetails({
               <h3>Revision</h3>
               <div>
                 <History size={15} aria-hidden="true" />
-                <p>{auditEvent?.reason ?? `Superseded by ${shortId(fact.supersededBy ?? "")}`}</p>
-                {auditEvent && <small>Policy: {auditEvent.policy_rule}</small>}
+                <p>{displayText(auditEvent?.reason ?? "This belief has been superseded.")}</p>
+                {auditEvent && <small>Policy: {displayText(auditEvent.policy_rule)}</small>}
               </div>
             </section>
           )}
@@ -202,7 +196,7 @@ function FactDetails({
       ) : nodeId ? (
         <div className="belief-details-body">
           <div className="belief-detail-title">
-            <div><span className="belief-state active">Graph node</span><h2>{nodeId}</h2></div>
+            <div><span className="belief-state active">Graph node</span><h2>{displayText(nodeId)}</h2></div>
             <Network size={22} aria-hidden="true" />
           </div>
           <p className="belief-detail-note">
@@ -213,9 +207,9 @@ function FactDetails({
             <div className="belief-node-facts">
               {nodeFacts.map((connectedFact) => (
                 <button key={connectedFact.factId} type="button" onClick={() => onSelectFact(connectedFact.factId)}>
-                  <strong>{connectedFact.source === nodeId ? connectedFact.predicate : `is ${connectedFact.predicate} of`}</strong>
-                  <span>{connectedFact.source === nodeId ? connectedFact.target : connectedFact.source}</span>
-                  <small>{connectedFact.sourceAgent} · {Math.round(connectedFact.confidence * 100)}%</small>
+                  <strong>{displayText(connectedFact.source === nodeId ? connectedFact.predicate : `is ${connectedFact.predicate} of`)}</strong>
+                  <span>{displayText(connectedFact.source === nodeId ? connectedFact.target : connectedFact.source)}</span>
+                  <small>{displayText(connectedFact.sourceAgent)} · {Math.round(connectedFact.confidence * 100)}%</small>
                   <ChevronRight size={14} aria-hidden="true" />
                 </button>
               ))}
@@ -229,6 +223,7 @@ function FactDetails({
           <p>Select a graph node or edge, or use the fact list to inspect stored evidence.</p>
         </div>
       )}
+      </div>
     </aside>
   );
 }
@@ -248,9 +243,10 @@ function AccessibleFactList({
 }) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const { present, phase } = useMotionPresence(open, "--modal-close-dur");
 
   useEffect(() => {
-    if (!open) return;
+    if (!present) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
@@ -259,9 +255,9 @@ function AccessibleFactList({
     return () => {
       if (previouslyFocused?.isConnected) previouslyFocused.focus();
     };
-  }, [open]);
+  }, [present]);
 
-  if (!open) return null;
+  if (!present) return null;
   const keepFocusInDialog = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "Tab") return;
     const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
@@ -280,7 +276,7 @@ function AccessibleFactList({
   };
   return (
     <div className="belief-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section ref={dialogRef} className="belief-dialog" role="dialog" aria-modal="true" aria-labelledby="fact-list-title" onKeyDown={keepFocusInDialog}>
+      <section ref={dialogRef} className={`belief-dialog t-modal ${phase === "open" ? "is-open" : phase === "exit" ? "is-closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="fact-list-title" onKeyDown={keepFocusInDialog}>
         <header><div><h2 id="fact-list-title">Stored belief facts</h2><p>Keyboard-accessible view of the facts currently shown in the graph.</p></div><button ref={closeButtonRef} type="button" onClick={onClose} aria-label="Close fact list"><X size={18} /></button></header>
         <div className="belief-fact-list">
           {facts.length ? facts.map((fact) => (
@@ -291,8 +287,8 @@ function AccessibleFactList({
               onClick={() => { onSelect(fact.factId); onClose(); }}
             >
               <span className={`belief-state ${fact.active ? "active" : "superseded"}`}>{fact.active ? "Active" : "Superseded"}</span>
-              <strong>{fact.source} <em>{fact.predicate}</em> {fact.target}</strong>
-              <small>{fact.sourceAgent} · {Math.round(fact.confidence * 100)}% · {formatTime(fact.observedAt)}</small>
+              <strong>{displayText(fact.source)} <em>{displayText(fact.predicate)}</em> {displayText(fact.target)}</strong>
+              <small>{displayText(fact.sourceAgent)} · {Math.round(fact.confidence * 100)}% · {formatTime(fact.observedAt)}</small>
               <ChevronRight size={16} aria-hidden="true" />
             </button>
           )) : <p className="belief-dialog-empty">No facts in the current view.</p>}
@@ -313,7 +309,7 @@ function RecentChanges({ events, open, onClose }: { events: AuditEvent[]; open: 
   const recent = [...events].sort((a, b) => b.created_at.localeCompare(a.created_at));
   return <dialog ref={dialogRef} className="belief-dialog belief-recent-dialog" aria-labelledby="recent-changes-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <header><div><h2 id="recent-changes-title">Recent changes</h2><p>Recorded belief revisions and audit events.</p></div><button type="button" onClick={onClose} aria-label="Close recent changes"><X size={18} /></button></header>
-    <div className="belief-recent-body">{recent.length ? <ol className="belief-change-list">{recent.map((event) => <li key={event.event_id}><i aria-hidden="true" /><div><p>{event.reason}</p><small>{event.policy_rule} · {formatTime(event.created_at)}</small></div></li>)}</ol> : <p className="belief-dialog-empty">No belief revisions have been recorded.</p>}</div>
+    <div className="belief-recent-body">{recent.length ? <ol className="belief-change-list">{recent.map((event) => <li key={event.event_id}><i aria-hidden="true" /><div><p>{displayText(event.reason)}</p><small>{displayText(event.policy_rule)} · {formatTime(event.created_at)}</small></div></li>)}</ol> : <p className="belief-dialog-empty">No belief revisions have been recorded.</p>}</div>
   </dialog>;
 }
 
@@ -335,6 +331,7 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [factListOpen, setFactListOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsPresence = useMotionPresence(detailsOpen, "--panel-close-dur");
   const [interactionMode, setInteractionMode] = useState<"orbit" | "pan">("orbit");
   const [demoAction, setDemoAction] = useState<DemoAction>(null);
   const [cameraAction, setCameraAction] = useState<CameraAction>({ id: 0, type: "reset" });
@@ -493,7 +490,7 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
   };
 
   return (
-    <div className={`belief-shell ${embedded ? "belief-embedded" : ""} ${detailsOpen ? "details-visible" : ""}`}>
+    <div className={`belief-shell ${embedded ? "belief-embedded" : ""} ${detailsPresence.present ? "details-visible" : ""} ${detailsOpen ? "details-open" : ""}`}>
       {!embedded && <GraphRail />}
       {embedded && sidebarTarget && createPortal(<GraphControls state={state} scope={scope} onScopeChange={setScope} />, sidebarTarget)}
       {!embedded && <aside className="belief-sidebar"><GraphControls state={state} scope={scope} onScopeChange={setScope} /></aside>}
@@ -574,8 +571,8 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
         auditEvent={selectedAuditEvent}
         nodeId={selectedNodeId}
         nodeFacts={selectedNodeFacts}
-        open={detailsOpen}
-        onClose={() => { setDetailsOpen(false); setSelectedFactId(null); setSelectedNodeId(null); }}
+        open={detailsOpen && detailsPresence.phase === "open"}
+        onClose={() => setDetailsOpen(false)}
         onOpenList={() => setFactListOpen(true)}
         onSelectFact={selectFact}
       />
