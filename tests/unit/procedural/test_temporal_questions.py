@@ -952,4 +952,30 @@ def test_cross_run_reset_isolation() -> None:
 
     assert response.status == "verified"
     assert "x=111 cm, y=222 cm" in response.answer
-    assert "888" not in response.answer
+    assert "888 cm" not in response.answer
+
+
+def test_legacy_robot_pose_questions_not_classified_as_object_queries() -> None:
+    """Robot pose questions (e.g. 'What is your position?') preserve current_robot_pose intent."""
+    from src.procedural.rule_based_provider import RuleBasedIntentProvider
+
+    provider = RuleBasedIntentProvider()
+
+    pose_queries = [
+        "What is your position?",
+        "What is your current position?",
+        "Where are you?",
+        "Where are you located?",
+        "What is your location?",
+        "Give me your pose",
+    ]
+    for q in pose_queries:
+        proposal = provider.propose_intent(q)
+        assert proposal["intent"] == "current_robot_pose", f"Failed for query '{q}': got {proposal}"
+        assert proposal["entity_mentions"] == ["robot_1"]
+
+    agent = setup_agent()
+    r = agent.ask("What is your position?")
+    assert r.status == "verified"
+    assert r.react_trace is not None
+    assert r.react_trace.arguments.get("intent") == "current_robot_pose"

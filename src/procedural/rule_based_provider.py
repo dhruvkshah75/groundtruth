@@ -70,9 +70,8 @@ class RuleBasedIntentProvider(IntentProvider):
                 "package",
                 "item",
                 "object",
-                "it",
             )
-        )
+        ) or bool(re.search(r"\bit\b", q))
         is_loc_or_time = any(
             term in q
             for term in (
@@ -94,7 +93,17 @@ class RuleBasedIntentProvider(IntentProvider):
             )
         ) or bool(re.search(r"\bat\s+-?\d+", q))
 
-        if is_obj and is_loc_or_time and not ("where are you" in q or "route" in q):
+        if (
+            is_obj
+            and is_loc_or_time
+            and not (
+                "where are you" in q
+                or "your position" in q
+                or "your location" in q
+                or "your pose" in q
+                or "route" in q
+            )
+        ):
             entity = self._extract_entity(q, default=None)
             mentions = [entity] if entity is not None else []
 

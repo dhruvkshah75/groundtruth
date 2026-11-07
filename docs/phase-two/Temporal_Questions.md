@@ -158,13 +158,13 @@ Following the completion of Issue [#43 / P2-07](https://github.com/dhruvkshah75/
 - **Freshness Threshold (1,000 ms):** In `current` mode, sightings are validated against `capture_time_ms`. Sightings older than 1,000 ms are marked `uncertain` rather than verified.
 - **Sequence and Timestamp Tie-Breaking:** When comparing sightings against camera scans or outages, the evaluator applies `_is_strictly_later(a, b)` using both `sim_time_ms` and `sample_sequence`. An equal-time non-detection or outage correctly supersedes an earlier sighting at the same timestamp.
 - **Cross-Run Reset Isolation:** `MemoryRepository.get_latest_run_id()` orders by insertion order (`rowid DESC LIMIT 1`) rather than simulation time, and implicit queries prioritize the request's active `sensors.run_id`, preventing resets from exposing previous run data.
-- **Canonical Alias Resolution:** Canonical entity IDs resolved from the execution result are used across all 5 temporal modes to match detections. Missing detections yield uncertainty/error instead of fabricating `(0, 0)` coordinates. Unspecified or ambiguous pronouns (`it`, `where is it?`) do not default to `parcel_01`.
+- **Canonical Alias Resolution:** Canonical entity IDs resolved from the execution result are used across all 5 temporal modes to match detections. Missing detections yield uncertainty/error instead of fabricating `(0, 0)` coordinates. Pronouns such as `it` are matched strictly with word boundaries so legacy robot pose questions (e.g. `What is your position?`) are not misclassified as object queries.
 
 ---
 
 ## 5. Verification and Test Results
 
-The implementation is verified by 39 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite (623 tests).
+The implementation is verified by 40 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite (624 tests).
 
 ### Test Categories
 1. **Mode-Specific Grounding Tests:**
@@ -192,14 +192,15 @@ The implementation is verified by 39 targeted unit and integration tests in [`te
    - `test_equal_time_sequence_tie_outage_or_non_detection_marks_uncertain`: Verifies tie-breaking on same timestamp using `sample_sequence`.
    - `test_capture_time_stale_evidence_marks_current_uncertain_and_advances_last_seen_age`: Verifies 1,000 ms freshness threshold and capture time reference.
    - `test_cross_run_reset_isolation`: Verifies that resetting at 20s followed by a new run at 0s does not leak evidence across runs.
+   - `test_legacy_robot_pose_questions_not_classified_as_object_queries`: Verifies word-boundary matching for `it` so robot pose questions like "What is your position?" preserve `current_robot_pose`.
 
 ### Verification Run
 ```text
 uv run --locked pytest tests/unit/procedural/test_temporal_questions.py -v
-39 passed in 1.73s
+40 passed in 1.82s
 
 uv run --locked pytest -q
-623 passed in 17.74s
+624 passed in 17.79s
 
 uv run --locked ruff check .
 All checks passed!
