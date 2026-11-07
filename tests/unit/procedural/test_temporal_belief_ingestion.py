@@ -16,6 +16,7 @@ Verifies all acceptance criteria using protocol fakes and deterministic fixtures
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -54,8 +55,12 @@ class FakeMemoryRepository:
     """Protocol-compliant fake for FactRepositoryProtocol."""
 
     def __init__(self) -> None:
+        self._ingestion_lock = threading.RLock()
         self.facts: list[StoredFact] = []
         self.audit_events: list[AuditEvent] = []
+
+    def observation_ingestion_lock(self):
+        return self._ingestion_lock
 
     def record_fact(self, assertion: FactAssertion) -> StoredFact:
         fact = StoredFact(
@@ -207,6 +212,23 @@ class FakeObservationLedger:
             return None
         candidates.sort(key=lambda s: (s.sim_time_ms, s.sample_sequence), reverse=True)
         return candidates[0]
+
+    def get_latest_camera_attempt(self, run_id, entity_id, observer_pose, at_sim_time_ms):
+        candidates = [
+            s
+            for s in self.samples.values()
+            if s.run_id == run_id
+            and s.request.capability == "camera_detect"
+            and s.request.target in (None, entity_id)
+            and s.sim_time_ms <= at_sim_time_ms
+            and (
+                s.observer_pose.robot_id,
+                s.observer_pose.location,
+                s.observer_pose.frame_of_reference,
+            )
+            == (observer_pose.robot_id, observer_pose.location, observer_pose.frame_of_reference)
+        ]
+        return max(candidates, key=lambda s: (s.sim_time_ms, s.sample_sequence), default=None)
 
     def get_last_sighting(
         self,

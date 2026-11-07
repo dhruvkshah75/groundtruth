@@ -514,6 +514,12 @@ class ObservationLedgerReader(Protocol):
         """Return the latest sample for a capability at or before simulation time."""
         ...
 
+    def get_latest_camera_attempt(
+        self, run_id: UUID, entity_id: str, observer_pose: Pose, at_sim_time_ms: int
+    ) -> StoredObservationSample | None:
+        """Latest broad or matching targeted camera attempt in this observer context."""
+        ...
+
     def get_last_sighting(
         self,
         run_id: UUID,

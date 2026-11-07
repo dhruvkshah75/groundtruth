@@ -107,7 +107,7 @@ The ingestion lifecycle enforces belief-level atomicity:
    - Once all effects are complete, subsequent duplicate ingestion requests return `status="duplicate_ignored"`.
 
 ### Thread Synchronization
-All ingestion and summary queries are synchronized via an internal re-entrant lock (`threading.RLock()`), guaranteeing multi-threaded execution safety and preventing SQLite interface misuse during concurrent sample processing.
+All ingestion and summary queries use `FactRepositoryProtocol.observation_ingestion_lock()`. `MemoryRepository` owns this reentrant lock and `GraphSyncedRepository` delegates to it. Every ingestion service sharing that repository therefore serializes the complete effect lookup and write sequence. Persisted fact/sample links retain per-effect retry identity across snapshot restore. The runtime must also hold its session lock around other repository operations and snapshot capture/restore. Separate connections to the same database file require external serialization.
 
 ---
 
@@ -159,93 +159,48 @@ class TemporalBeliefIngestionService:
 This complete, runnable script demonstrates the full pipeline from `WarehouseSensors` acquisition to Tier 1 persistence, belief ingestion, epistemic queries, and active graph synchronization:
 
 ```python
-"""Complete runnable example of WarehouseSensors to Tier 1 belief ingestion."""
-
 from datetime import UTC, datetime
-from uuid import uuid4
+import json
+from pathlib import Path
+from uuid import UUID
 
-from src.contracts import (
-    ObservationRequest,
-    Point,
-    Pose,
-    RobotStatus,
-    SensorAvailability,
-    SimulationSnapshot,
-    WorldEntity,
-)
+from src.contracts import ObservationRequest, ScenarioDefinition
 from src.declarative.active_graph import GraphSyncedRepository
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.temporal_belief_ingestion import TemporalBeliefIngestionService
+from src.sensorimotor.simulation_engine import SimulationEngine
 from src.sensorimotor.warehouse_sensors import WarehouseSensors
 
-# 1. Construct simulation snapshot state
-run_id = uuid4()
-epoch = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
-snapshot = SimulationSnapshot(
-    status=RobotStatus(
-        epoch_utc=epoch,
-        sim_time_ms=500,
-        run_id=run_id,
-        state="running",
-    ),
-    robot_pose=Pose(
-        x_cm=100.0,
-        y_cm=350.0,
-        robot_id="robot_01",
-        direction="west",
-        location="warehouse",
-        frame_of_reference="warehouse_map",
-    ),
-    entities=[
-        WorldEntity(
-            entity_id="parcel_01",
-            color="red",
-            shape="cube",
-            position=Point(x_cm=80.0, y_cm=350.0),
-            frame_of_reference="warehouse_map",
-        )
-    ],
-    color_cast="neutral",
-    sensor_availability=SensorAvailability(
-        camera_detect=True,
-        lidar_scan=True,
-        robot_pose=True,
-        ambient_light=True,
-    ),
-    world_version=1,
+fixtures = json.loads(Path("tests/fixtures/phase_two/contracts.json").read_text())
+scenario = ScenarioDefinition.model_validate(fixtures["valid"]["scenario"])
+engine = SimulationEngine(
+    scenario,
+    epoch_utc=datetime(2026, 1, 1, tzinfo=UTC),
+    id_factory=lambda: UUID(int=1),
 )
-
-# 2. Instantiate WarehouseSensors adapter
-sensors = WarehouseSensors(lambda: snapshot)
-
-# 3. Wire Tier 1 SQLite and synchronized graph repository
-repo = MemoryRepository(":memory:")
-synced_repo = GraphSyncedRepository.create(repo)
-service = TemporalBeliefIngestionService(synced_repo, repo)
-
-# 4. Acquire camera sample via WarehouseSensors
-camera_sample = sensors.sample(ObservationRequest(capability="camera_detect"))
-
-# 5. Ingest sample into Tier 2 temporal belief service
-result = service.ingest_sample(camera_sample)
-print(f"Ingestion Status: {result.status}")
-print(f"Facts Created: {len(result.facts_created)} -> {result.facts_created[0].object}")
-
-# 6. Query epistemic summary at simulation time 500 ms
-summary = service.get_entity_belief_summary(
-    run_id=run_id,
-    entity_id="parcel_01",
-    current_sim_time_ms=500,
-)
-print(f"Entity: {summary.entity_id}")
-print(f"Location: {summary.supported_location}")
-print(f"Verification: {summary.verification_status}, Visibility: {summary.visibility}")
-print(f"Freshness: {summary.freshness} (Age: {summary.age_ms} ms)")
-
-# 7. Inspect Active Knowledge Graph
-graph = synced_repo.get_graph()
-print(f"Active Graph Nodes: {list(graph.nodes())}")
-print(f"Active Graph Edges: {list(graph.edges(data=True))}")
+sensors = WarehouseSensors(engine.snapshot)
+with MemoryRepository() as repo:
+    graph_repo = GraphSyncedRepository.create(repo)
+    service = TemporalBeliefIngestionService(graph_repo, repo)
+    first = sensors.sample(ObservationRequest(capability="camera_detect"))
+    result = service.ingest_sample(first, current_sim_time_ms=0)
+    assert result.status == "applied"
+    assert any(
+        f.subject == "parcel_01" and f.object == "packing_station" for f in result.facts_created
+    )
+    # Keep the observer at its reference pose while the scripted parcel moves.
+    for _ in range(70):
+        engine.step()
+    later = sensors.sample(ObservationRequest(capability="camera_detect"))
+    result = service.ingest_sample(later, current_sim_time_ms=7000)
+    assert len(result.revisions_created) == 1
+    summary = service.get_entity_belief_summary(first.run_id, "parcel_01", 7000)
+    assert summary.supported_location == "inspection_station"
+    assert summary.verification_status == "verified"
+    assert repo.get_observation_sample(later.sample_id) is not None
+    graph = graph_repo.graph.get_graph()
+    assert graph.has_edge("parcel_01", "inspection_station")
+    print(summary.supported_location, summary.verification_status)
 ```
 
 ---
@@ -266,15 +221,15 @@ All acceptance criteria and PR #40 regression cases are covered by automated uni
 
 # 3. Integration tests with SQLite, NetworkX, WarehouseSensors, and Phase 2 fixtures
 .venv/bin/pytest tests/integration/test_temporal_belief_ingestion.py -v
-# Outcome: 9 passed in 0.52s
+# Outcome: 17 passed
 
 # 4. Combined P2-05 verification
 .venv/bin/pytest tests/unit/procedural/test_temporal_belief_ingestion.py tests/integration/test_temporal_belief_ingestion.py
-# Outcome: 27 passed in 0.50s
+# Outcome: 35 passed
 
 # 5. Code quality and formatting checks
 .venv/bin/ruff format --check .
-# Outcome: 124 files already formatted
+# Outcome: 125 files already formatted
 .venv/bin/ruff check .
 # Outcome: All checks passed!
 ```
@@ -283,7 +238,13 @@ All acceptance criteria and PR #40 regression cases are covered by automated uni
 
 ## 7. Downstream Integration
 
-- **P2-06 (Patrol and Safety):** Consumes `RouteBeliefSummary` to gate motion and stopping logic on route availability.
+- **P2-06 (Patrol and Safety):** Uses pose and front-LiDAR evidence directly for movement decisions. The runtime can present its decision trace alongside `RouteBeliefSummary`.
 - **P2-07 (Session Runtime):** Coordinates periodic simulation step updates, invoking `ingest_sample()` on each sensor polling tick.
 - **P2-08 (Temporal Questions):** Uses `get_entity_belief_summary()` and `get_route_belief_summary()` to synthesize natural-language answers distinguishing "last seen" from currently verified locations.
 - **P2-11 (Timeline & Presentation):** Renders epistemic visibility states and audit trails directly from the SQLite evidence ledger and synchronized NetworkX projection.
+
+### Review regression checks
+
+Camera summaries select the latest broad or matching targeted attempt for the last sighting’s robot, room and map frame through `ObservationLedgerReader.get_latest_camera_attempt()`. Acquisition order uses `(sim_time_ms, sample_sequence)`, including equal-time omissions. These checks prevent an unrelated target or observer from changing an entity’s verification.
+
+Full regression verification passed with 510 tests, localhost access enabled, and developer `.env` loading disabled in the test process. Frontend build, graph checks and inspector display checks passed.

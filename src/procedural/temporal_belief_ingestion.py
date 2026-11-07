@@ -8,7 +8,7 @@ and injected protocols; never imports concrete SQLite, NetworkX, or sensor code.
 
 from __future__ import annotations
 
-import threading
+from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
@@ -45,6 +45,8 @@ class RevisionResultProtocol(Protocol):
 @runtime_checkable
 class FactRepositoryProtocol(Protocol):
     """Protocol for Tier 1 fact persistence and revision."""
+
+    def observation_ingestion_lock(self) -> AbstractContextManager: ...
 
     def record_fact(self, assertion: FactAssertion) -> StoredFact: ...
 
@@ -404,7 +406,7 @@ class TemporalBeliefIngestionService:
         self._zone_map = zone_map or StationZoneMap.default_warehouse_zones()
         self._route_map = route_map or StaticRouteMap.default_warehouse_routes()
         self._config = config or IngestionConfig()
-        self._lock = threading.RLock()
+        self._lock = fact_repository.observation_ingestion_lock()
         self._latest_entity_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
         self._latest_route_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
 
@@ -1162,11 +1164,6 @@ class TemporalBeliefIngestionService:
                 capability="camera_detect",
                 at_sim_time_ms=current_sim_time_ms,
             )
-            latest_attempt = self._ledger.get_latest_sample(
-                run_id=run_id,
-                capability="camera_detect",
-                at_sim_time_ms=current_sim_time_ms,
-            )
             # Check if there is a future-dated sighting in this run
             if last_sighting is None:
                 future_sighting = self._ledger.get_last_sighting(
@@ -1180,6 +1177,11 @@ class TemporalBeliefIngestionService:
                     and future_sighting.sim_time_ms > current_sim_time_ms
                 ):
                     last_sighting = future_sighting
+
+        if last_sighting is not None:
+            latest_attempt = self._ledger.get_latest_camera_attempt(
+                run_id, entity_id, last_sighting.observer_pose, current_sim_time_ms
+            )
 
         # 3. Determine location and coordinates
         supported_location: str | None = None
@@ -1251,10 +1253,10 @@ class TemporalBeliefIngestionService:
                     freshness = "stale"
 
                 # Check latest camera attempt
-                if (
-                    latest_attempt is not None
-                    and latest_attempt.sim_time_ms > last_sighting.sim_time_ms
-                ):
+                if latest_attempt is not None and (
+                    latest_attempt.sim_time_ms,
+                    latest_attempt.sample_sequence,
+                ) > (last_sighting.sim_time_ms, last_sighting.sample_sequence):
                     if isinstance(latest_attempt.result, ObservationUnavailable):
                         verification_status = "unavailable"
                         visibility = "unknown"

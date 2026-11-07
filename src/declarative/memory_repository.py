@@ -12,8 +12,10 @@ see separate databases.
 
 import json
 import sqlite3
+import threading
 import unicodedata
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -26,6 +28,7 @@ from src.contracts import (
     FactAssertion,
     FactQuery,
     ObservationSample,
+    Pose,
     SensorObservation,
     SpatialContext,
     StoredFact,
@@ -86,6 +89,7 @@ class MemoryRepository:
         uuid_factory: Callable[[], UUID] | None = None,
         write_listeners: list[Callable[[], None]] | None = None,
     ) -> None:
+        self._ingestion_lock = threading.RLock()
         self._db_path = db_path
         self._clock = clock or _utc_now
         self._uuid_factory = uuid_factory or uuid4
@@ -95,6 +99,10 @@ class MemoryRepository:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
         initialize_schema(self._conn)
+
+    def observation_ingestion_lock(self) -> AbstractContextManager:
+        """Share one reentrant ingestion boundary across services using this repository."""
+        return self._ingestion_lock
 
     def export_snapshot(self) -> bytes:
         """Return a complete SQLite image, including facts, revisions, and aliases."""
@@ -845,6 +853,35 @@ class MemoryRepository:
         if row is None:
             return None
         return self._row_to_stored_sample(row)
+
+    def get_latest_camera_attempt(
+        self, run_id: UUID, entity_id: str, observer_pose: Pose, at_sim_time_ms: int
+    ) -> StoredObservationSample | None:
+        """Latest broad or target-specific attempt in the sighting's observer context."""
+        TemporalObservationQuery(
+            run_id=run_id, mode="latest", capability="camera_detect", end_ms=at_sim_time_ms
+        )
+        row = self._conn.execute(
+            """
+            SELECT raw_sample_json, stored_at FROM observation_samples
+            WHERE run_id = ? AND capability = 'camera_detect'
+              AND (target IS NULL OR target = ?) AND sim_time_ms <= ?
+              AND json_extract(observer_pose_json, '$.robot_id') = ?
+              AND json_extract(observer_pose_json, '$.location') = ?
+              AND json_extract(observer_pose_json, '$.frame_of_reference') = ?
+            ORDER BY sim_time_ms DESC, sample_sequence DESC, sample_id DESC
+            LIMIT 1
+            """,
+            (
+                str(run_id),
+                entity_id,
+                at_sim_time_ms,
+                observer_pose.robot_id,
+                observer_pose.location,
+                observer_pose.frame_of_reference,
+            ),
+        ).fetchone()
+        return self._row_to_stored_sample(row) if row is not None else None
 
     def get_last_sighting(
         self,

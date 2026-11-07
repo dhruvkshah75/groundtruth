@@ -447,3 +447,134 @@ def test_integration_warehouse_sensors_to_ledger_to_belief_lifecycle(
         if res_lidar.status == "applied":
             assert res_lidar.route_summary is not None
             assert res_lidar.route_summary.status in ("clear", "blocked")
+
+
+def _camera_attempt(
+    base,
+    *,
+    identity,
+    sim_time_ms=0,
+    sequence=0,
+    empty=False,
+    target=None,
+    unavailable=False,
+    pose_changes=None,
+):
+    """Build deterministic acquisition variants from the shared contract fixture."""
+    from datetime import timedelta
+    from uuid import UUID
+
+    payload = base.model_dump(mode="json")
+    payload.update(
+        sample_id=str(UUID(int=identity)), sim_time_ms=sim_time_ms, sample_sequence=sequence
+    )
+    captured = base.epoch_utc + timedelta(milliseconds=sim_time_ms)
+    payload["captured_at"] = captured.isoformat()
+    payload["request"]["target"] = target
+    payload["observer_pose"].update(pose_changes or {})
+    if unavailable:
+        payload["result"] = {
+            "capability": "camera_detect",
+            "reason": "target_not_visible",
+            "message": "Observation unavailable.",
+            "reported_at": captured.isoformat(),
+        }
+    else:
+        result = payload["result"]
+        result.update(
+            observed_at=captured.isoformat(), observation_id=str(UUID(int=identity + 1000))
+        )
+        if empty:
+            result["measurements"]["objects"] = []
+        pose = payload["observer_pose"]
+        result["context"].update(
+            location=pose["location"],
+            observer=pose["robot_id"],
+            frame_of_reference=pose["frame_of_reference"],
+        )
+    return ObservationSample.model_validate(payload)
+
+
+def test_summary_respects_same_time_acquisition_sequence(phase2_fixtures):
+    base = ObservationSample.model_validate(phase2_fixtures["samples"][0])
+    with MemoryRepository() as repo:
+        service = TemporalBeliefIngestionService(repo, repo)
+        service.ingest_sample(base)
+        service.ingest_sample(_camera_attempt(base, identity=201, sequence=1, empty=True))
+        summary = service.get_entity_belief_summary(base.run_id, "parcel_01", 0)
+        assert summary.verification_status == "last_seen"
+        assert summary.visibility == "not_currently_visible"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"target": "parcel_02", "unavailable": True},
+        {"empty": True, "pose_changes": {"robot_id": "robot_2"}},
+        {"empty": True, "pose_changes": {"location": "another_room"}},
+        {"empty": True, "pose_changes": {"frame_of_reference": "another_map"}},
+    ],
+)
+def test_summary_ignores_unrelated_camera_attempts(phase2_fixtures, changes):
+    base = ObservationSample.model_validate(phase2_fixtures["samples"][0])
+    with MemoryRepository() as repo:
+        service = TemporalBeliefIngestionService(repo, repo)
+        service.ingest_sample(base)
+        service.ingest_sample(_camera_attempt(base, identity=202, sim_time_ms=500, **changes))
+        summary = service.get_entity_belief_summary(base.run_id, "parcel_01", 500)
+        assert summary.verification_status == "verified"
+        assert summary.visibility == "currently_visible"
+        assert summary.latest_sensor_attempt.sample_id == base.sample_id
+
+
+def test_targeted_failure_affects_its_own_entity(phase2_fixtures):
+    base = ObservationSample.model_validate(phase2_fixtures["samples"][0])
+    with MemoryRepository() as repo:
+        service = TemporalBeliefIngestionService(repo, repo)
+        service.ingest_sample(base)
+        service.ingest_sample(
+            _camera_attempt(
+                base, identity=203, sim_time_ms=500, target="parcel_01", unavailable=True
+            )
+        )
+        summary = service.get_entity_belief_summary(base.run_id, "parcel_01", 500)
+        assert summary.verification_status == "unavailable"
+
+
+def test_duplicate_ingestion_across_services_and_restore(phase2_fixtures):
+    from threading import Barrier
+
+    base = ObservationSample.model_validate(phase2_fixtures["samples"][0])
+    with MemoryRepository() as repo:
+        synced = GraphSyncedRepository.create(repo)
+        services = [
+            TemporalBeliefIngestionService(repo, repo),
+            TemporalBeliefIngestionService(synced, repo),
+        ]
+        assert services[0]._lock is services[1]._lock
+        barrier = Barrier(2)
+
+        def ingest(service):
+            barrier.wait(timeout=5)
+            return service.ingest_sample(base)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(ingest, service) for service in services]
+            results = [future.result(timeout=5) for future in futures]
+        assert sorted(result.status for result in results) == ["applied", "duplicate_ignored"]
+        facts = repo.query_facts(FactQuery(subject="parcel_01", predicate="located_at"))
+        assert len(facts) == 1
+        image = repo.export_snapshot()
+    with MemoryRepository() as restored:
+        restored.restore_snapshot(image)
+        result = TemporalBeliefIngestionService(restored, restored).ingest_sample(base)
+        assert result.status == "duplicate_ignored"
+        assert len(restored.query_facts(FactQuery(subject="parcel_01"))) == 1
+
+
+def test_documented_sensor_to_belief_example_executes():
+    import re
+
+    path = Path(__file__).parents[2] / "docs/phase-two/Temporal_Belief_Ingestion.md"
+    examples = re.findall(r"```python\n(.*?)```", path.read_text(), re.S)
+    exec(compile(examples[-1], str(path), "exec"), {})
