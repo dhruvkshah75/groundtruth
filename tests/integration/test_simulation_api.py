@@ -684,3 +684,64 @@ def test_http_export_delegation_boundary_attachment_and_validation(tmp_path):
             finally:
                 release.set()
             assert_error(export.result(timeout=4), 409, "stale_run")
+
+
+def test_repeated_restore_reserves_generation_before_exposure(tmp_path):
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    key = str(uuid4())
+    first = service_for([0.0], store)
+    second = service_for([0.0], store)
+    third = service_for([0.0], store)
+    try:
+        initial = first.read_live_simulation(key)
+        first.load_warehouse(
+            key,
+            SimulationLoadRequest(preset=PRESET, expected=initial, request_id=uuid4()),
+        )
+        restored = second.read_live_simulation(key)
+        # Simulate another process starting from durable storage before the
+        # restored process has saved any subsequent control or tick.
+        again = third.read_live_simulation(key)
+        assert again.run_id == restored.run_id
+        assert again.generation > restored.generation
+        from src.web.service import StaleRequestError
+
+        with pytest.raises(StaleRequestError):
+            third.apply_simulation_control(
+                key,
+                SimulationControlRequest(action="step", expected=restored),
+            )
+    finally:
+        # Retire without writing old incarnations over the latest checkpoint.
+        for service in (first, second, third):
+            for session in service._sessions.values():
+                session.runtime = None
+            service.shutdown()
+        store.close()
+
+
+def test_restore_is_not_exposed_when_incarnation_save_fails(tmp_path, monkeypatch):
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    key = str(uuid4())
+    first = service_for([0.0], store)
+    second = service_for([0.0], store)
+    try:
+        initial = first.read_live_simulation(key)
+        run = first.load_warehouse(
+            key, SimulationLoadRequest(preset=PRESET, expected=initial, request_id=uuid4())
+        )
+
+        def fail_save(*_args):
+            raise OSError("checkpoint unavailable")
+
+        monkeypatch.setattr(store, "save", fail_save)
+        failed = second.read_live_simulation(key)
+        assert failed.state == "error"
+        assert failed.run_id is None
+        assert store.load(key)[0]["simulation_generation"] == run.generation
+    finally:
+        for service in (first, second):
+            for session in service._sessions.values():
+                session.runtime = None
+            service.shutdown()
+        store.close()

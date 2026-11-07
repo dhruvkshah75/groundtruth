@@ -77,8 +77,8 @@ Order responses by `(generation, revision)` within a session and verify
 `run_id` before associating evidence. `snapshot_sequence` counts executed ticks.
 `revision` advances for acquisitions and visible changes such as paused rate or
 status changes and accepted schedules. Restoring a checkpoint keeps the run ID,
-pauses the runtime and increases its generation so clients can accept the
-restored time even if it precedes the last live poll. Replacing or deleting the
+pauses the runtime and durably saves its increased generation before exposing
+the session, so clients can accept the restored time even if it precedes the last live poll. Replacing or deleting the
 browser session requires a fresh polling baseline. Reads do not advance time,
 acquire observations or invoke the provider.
 

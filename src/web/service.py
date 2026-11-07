@@ -987,6 +987,9 @@ class AgentService:
             stored = self._store.load(key)
             if stored:
                 session.restore(*stored)
+                if session.runtime is not None:
+                    # Reserve this incarnation durably before publishing the session.
+                    self.save_session(key, session)
             else:
                 self.save_session(key, session)
         except Exception:
