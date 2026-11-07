@@ -51,7 +51,7 @@ No new runtime/development dependency is required.
 2. **Monotonic wall time:** future runtime scheduling clock. At default 0.5×,
    one simulation step nominally takes 200 wall-clock ms, an acquisition interval
    one wall-clock second, and the default demo about one minute excluding pauses.
-   Rates 0.25 / 0.5 / 1.0 are the only supported values. They do not change robot
+   Rates 0.25 / 0.5 / 1.0 / 2.0 are the only supported values. They do not change robot
    speed in cm/simulation-second or sensor/event/freshness simulation times.
 3. **Acquisition UTC:** `epoch_utc + sim_time_ms`, including while paused or replayed.
    `captured_at` and successful `observed_at` (or failure `reported_at`) must agree.

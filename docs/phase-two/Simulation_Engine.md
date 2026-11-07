@@ -41,7 +41,7 @@ restored.step()  # paused manual advance by 100 simulation ms
 - advance: one tick only when running, otherwise no-op. step: one tick only while
   paused; running/completed manual step is an error. Default 300 ticks finish at
   exactly 30,000 ms with no automatic loop.
-- set_rate: validated 0.25/0.5/1, initially 0.5; no time jump or physics change.
+- set_rate: validated 0.25/0.5/1/2, initially 0.5; no time jump or physics change.
   Reset retains selected rate; loading a fresh default scenario returns to 0.5.
 - reset: initial scene, fresh run ID, same epoch/config, zero elapsed time/event
   progress/input log; no sensor acquisition is performed here.

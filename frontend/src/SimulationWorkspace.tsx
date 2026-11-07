@@ -10,7 +10,7 @@ import { useSimulation } from "./useSimulation";
 import WarehouseMap, { warehouseLabel } from "./WarehouseMap";
 import "./simulation-workspace.css";
 
-const rates = [0.25, 0.5, 1] as const;
+const rates = [0.25, 0.5, 1, 2] as const;
 const patrolLabels = {
   moving: "Moving", turning: "Turning", blocked: "Blocked",
   waiting_for_sensor: "Waiting for sensor", complete: "Patrol complete", stalled: "Stalled",
@@ -211,7 +211,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
     </button>
     <div className="sim-rate-field" role="group" aria-label="Playback speed">
       <span>Playback speed</span>
-      <div className="sim-rates">
+      <div className="sim-rates" style={{ "--selected-rate": rates.indexOf(state?.playback_rate ?? 0.5) } as React.CSSProperties}>
         {rates.map((rate) => <button type="button" key={rate} className="sim-button"
           aria-pressed={(state?.playback_rate ?? 0.5) === rate}
           onClick={() => control("set_rate", rate)} disabled={!canAdjust}>{rate}×</button>)}
@@ -225,13 +225,14 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
     <div className="sim-content">
       <div className="sim-heading">
         <div><h2>Warehouse inspection</h2><p>Session · {chatName}</p></div>
-        <div className={`sim-chip ${live && active ? "success" : !live || state?.state === "error" ? "warn" : ""}`} role="status">
+        {!(live && state?.state === "completed") && <div className={`sim-chip ${live && active ? "success" : !live || state?.state === "error" ? "warn" : ""}`} role="status">
           {connection === "disconnected" ? <WifiOff size={15} /> : active && live ? <Play size={13} /> : <Activity size={15} />}{status}
-        </div>
+        </div>}
       </div>
       <div className="sim-toolbar">
         <div className="sim-clock">
           <span>Simulation time</span>
+          {state?.state === "completed" && <span role="status">Run finished · Reload preset to start again</span>}
           <strong>{state?.sim_time_ms == null ? "—" : simTime(state.sim_time_ms)}</strong>
         </div>
         {playStep}
@@ -243,7 +244,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
           {presenter}
         </details>}
       <div className="sim-feedback" role="status">
-        {pending ? <span>{pending}</span> : notice && <span className={notice.error ? "sim-warning" : ""}>
+        {pending ? <span>{pending}</span> : notice && (state?.state !== "completed" || notice.error) && <span className={notice.error ? "sim-warning" : ""}>
           {notice.error ? <CircleAlert size={15} /> : <Check size={15} />}{notice.text}
         </span>}
       </div>

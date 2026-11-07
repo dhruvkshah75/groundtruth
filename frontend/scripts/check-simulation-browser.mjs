@@ -79,7 +79,7 @@ try {
   assert.equal(await observations.getByText("Parcel 03", { exact: true }).count(), 0);
   const initialCapture = await observations.locator(".sim-time").first().innerText();
 
-  for (const rate of ["0.25×", "1×", "0.5×"]) {
+  for (const rate of ["0.25×", "1×", "2×", "0.5×"]) {
     const data = await post(rate, "control");
     assert.equal(data.snapshot_sequence, 0);
     await eventually(async () => (await button(rate).getAttribute("aria-pressed")) === "true");
@@ -338,6 +338,13 @@ try {
   await page.reload();
   await page.getByRole("heading", { name: "Warehouse inspection" }).waitFor();
   await page.getByText("Session · Second chat", { exact: true }).waitFor();
+  await post("Load preset", "load");
+  await post("2×", "control");
+  await post("Play", "control");
+  await page.getByText("Run finished · Reload preset to start again", { exact: true })
+    .waitFor({ timeout: 22_000 });
+  assert.equal(await page.getByText("Completed", { exact: true }).count(), 0);
+  assert.equal(await clock.innerText(), "30.000 s");
 
   console.log("Simulation browser checks passed on the real backend at 1440, 1024, 768 and 390px.");
 } finally {

@@ -1321,6 +1321,14 @@ export const validSimulationFixtures = {
       }
     },
     {
+      "action": "set_rate",
+      "playback_rate": 2.0,
+      "expected": {
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "generation": 1
+      }
+    },
+    {
       "action": "step",
       "expected": {
         "run_id": "00000000-0000-0000-0000-000000000001",

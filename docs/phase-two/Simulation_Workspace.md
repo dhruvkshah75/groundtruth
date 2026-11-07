@@ -30,7 +30,8 @@ GROUNDTRUTH_PROVIDER_MODE=offline uv run --locked python -m src.web.server
 Open [the local simulation route](http://127.0.0.1:8765/simulation). Select
 **Load preset**. The warehouse starts paused at zero. Press **Step** to advance
 100 simulation milliseconds or **Play** to watch the robot at the default 0.5×.
-A 30-second run takes about one wall-clock minute at that rate. **Reload preset**
+A 30-second run takes about one wall-clock minute at that rate, or 15 seconds
+at 2×. **Reload preset**
 starts a fresh run and restores the default rate. On desktop, the open left
 sidebar contains the preset, playback speed and disruption controls. With the sidebar closed
 or on a narrow screen, open **Presenter controls** above the map to reach

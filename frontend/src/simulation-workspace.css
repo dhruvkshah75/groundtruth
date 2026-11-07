@@ -180,3 +180,69 @@
   }
   .sim-disrupt option::checkmark { color: var(--accent); }
 }
+
+/* Match the moving glass selection used by the belief graph. */
+.sim-heading { margin-bottom: 16px; }
+.sim-clock { font-size: .875rem; }
+.sim-rate-field { width: 100%; gap: 8px; font-size: .75rem; }
+.sim-presenter { gap: 14px; }
+.sim-rates {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
+  gap: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-raised) 85%, transparent);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+}
+.sim-rates::before {
+  position: absolute;
+  z-index: -1;
+  inset: 4px auto 4px 4px;
+  width: calc((100% - 8px) / 4);
+  border-radius: 10px;
+  background: linear-gradient(165deg, color-mix(in srgb, var(--surface) 85%, white), var(--surface));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 55%), 0 3px 8px rgb(0 0 0 / 10%);
+  transform: translateX(calc(var(--selected-rate) * 100%));
+  transition: transform 250ms cubic-bezier(.22, 1, .36, 1);
+  content: "";
+}
+.sim-rates .sim-button, .sim-rates .sim-button[aria-pressed="true"] {
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 2px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--quiet);
+  font-size: .75rem;
+}
+.sim-rates .sim-button[aria-pressed="true"] { color: var(--accent); font-weight: 600; }
+:root[data-theme="dark"] .sim-rates { border-color: rgb(255 255 255 / 10%); background: rgb(255 255 255 / 3%); }
+:root[data-theme="dark"] .sim-rates::before {
+  background: linear-gradient(165deg, rgb(255 255 255 / 14%), rgb(255 255 255 / 4%));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 20%), inset 0 -1px 0 rgb(255 255 255 / 5%), 0 3px 8px rgb(0 0 0 / 16%);
+}
+.sim-toolbar, .sim-panel, .sim-disrupt, .sim-presenter-inline {
+  border-color: var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: blur(18px) saturate(115%);
+  -webkit-backdrop-filter: blur(18px) saturate(115%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 8px 24px var(--glass-shadow);
+}
+.sim-presenter > .sim-button, .sim-disrupt summary, .sim-actions .sim-button:not(.primary) {
+  font-size: .75rem;
+}
+.sim-presenter > .sim-button, .sim-actions .sim-button:not(.primary) {
+  border-color: var(--glass-border);
+  background: var(--glass-surface);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+.sim-presenter > .sim-button:hover:not(:disabled),
+.sim-actions .sim-button:not(.primary):hover:not(:disabled) { background: var(--glass-selected); }
+@media (prefers-reduced-motion: reduce) { .sim-rates::before { transition: none; } }

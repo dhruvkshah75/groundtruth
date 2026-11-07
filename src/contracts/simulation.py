@@ -28,7 +28,7 @@ Finite = Annotated[float, Field(allow_inf_nan=False, strict=True)]
 Positive = Annotated[Finite, Field(gt=0)]
 Identifier = Annotated[str, Field(min_length=1, pattern=r"^\S+$")]
 Direction = Literal["north", "east", "south", "west"]
-PlaybackRate = Literal[0.25, 0.5, 1.0]
+PlaybackRate = Literal[0.25, 0.5, 1.0, 2.0]
 
 
 class Contract(BaseModel):
@@ -55,7 +55,7 @@ class SimulationConfig(Contract):
     @classmethod
     def numeric_rate(cls, value: object) -> object:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("playback_rate must be numeric: 0.25, 0.5 or 1.0")
+            raise ValueError("playback_rate must be numeric: 0.25, 0.5, 1.0 or 2.0")
         return value
 
     @model_validator(mode="after")

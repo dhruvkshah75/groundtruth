@@ -35,7 +35,7 @@ session. An unloaded session has `run_id: null` and starts at generation zero.
 A completed run requires reset before playing again. Pause on a completed run
 leaves it completed. Reset creates a fresh run ID and epoch, restores the preset
 and its script, and retains the selected playback rate. A new load starts at
-0.5×. The only supported rates are 0.25×, 0.5× and 1×.
+0.5×. The only supported rates are 0.25×, 0.5×, 1× and 2×.
 
 ### Presenter disruptions
 
