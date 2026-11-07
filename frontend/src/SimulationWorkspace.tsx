@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { createPortal } from "react-dom";
 import { Activity, Camera, Check, CircleAlert, Map, Pause, Play, RotateCcw, SkipForward, SlidersHorizontal, WifiOff } from "lucide-react";
 import { api } from "./api";
 import type {
@@ -154,7 +155,9 @@ function DisruptionControls({ state, disabled, submit }: {
   </details>;
 }
 
-export default function SimulationWorkspace({ sessionId, chatName }: { sessionId: string; chatName: string }) {
+export default function SimulationWorkspace({ sessionId, chatName, presenterTarget }: {
+  sessionId: string; chatName: string; presenterTarget: HTMLElement | null;
+}) {
   const { state, connection, connectionError, pending, notice, run } = useSimulation(sessionId);
   const live = connection === "live";
   const stale = !live || state?.state === "error";
@@ -195,6 +198,29 @@ export default function SimulationWorkspace({ sessionId, chatName }: { sessionId
     });
   }
 
+  const playStep = <div className="sim-actions" role="group" aria-label="Playback controls">
+    {active
+      ? <button key="playback" type="button" className="sim-button primary" onClick={() => control("pause")} disabled={!canAdjust}><Pause size={16} />Pause</button>
+      : <button key="playback" type="button" className="sim-button primary" onClick={() => control("play")} disabled={!canAdjust || state?.state !== "paused"}><Play size={16} />Play</button>}
+    <button type="button" className="sim-button" onClick={() => control("step")} disabled={!canAdjust || state?.state !== "paused"}><SkipForward size={16} />Step</button>
+  </div>;
+
+  const presenter = <section className="sim-presenter" aria-label="Presenter controls">
+    <div className="sim-preset">
+      <button type="button" className="sim-button" onClick={load} disabled={blocked || active}>
+        <Map size={16} />{loaded ? "Reload preset" : "Load preset"}
+      </button>
+      <button type="button" className="sim-button" onClick={() => control("reset")} disabled={blocked || !loaded}><RotateCcw size={16} />Reset</button>
+    </div>
+    <div className="sim-rates" role="group" aria-label="Playback rate">
+      {rates.map((rate) => <button type="button" key={rate} className="sim-button"
+        aria-pressed={(state?.playback_rate ?? 0.5) === rate}
+        onClick={() => control("set_rate", rate)} disabled={!canAdjust}>{rate}×</button>)}
+    </div>
+    {loaded && state && <DisruptionControls key={state.run_id} state={state}
+      disabled={!canAdjust || state.state === "completed"} submit={disrupt} />}
+  </section>;
+
   return <section className="simulation-workspace" aria-label="Warehouse simulation">
     <div className="sim-content">
       <div className="sim-heading">
@@ -207,26 +233,15 @@ export default function SimulationWorkspace({ sessionId, chatName }: { sessionId
         <div className="sim-clock">
           <span>Simulation time</span>
           <strong>{state?.sim_time_ms == null ? "—" : simTime(state.sim_time_ms)}</strong>
-          <span>30 s ≈ 1 presentation min at 0.5×</span>
         </div>
-        <div className="sim-actions" role="group" aria-label="Playback controls">
-          <button type="button" className="sim-button" onClick={load} disabled={blocked || active}>
-            <Map size={16} />{loaded ? "Reload preset" : "Load preset"}
-          </button>
-          {active
-            ? <button key="playback" type="button" className="sim-button primary" onClick={() => control("pause")} disabled={!canAdjust}><Pause size={16} />Pause</button>
-            : <button key="playback" type="button" className="sim-button primary" onClick={() => control("play")} disabled={!canAdjust || state?.state !== "paused"}><Play size={16} />Play</button>}
-          <button type="button" className="sim-button" onClick={() => control("step")} disabled={!canAdjust || state?.state !== "paused"}><SkipForward size={16} />Step</button>
-          <button type="button" className="sim-button" onClick={() => control("reset")} disabled={blocked || !loaded}><RotateCcw size={16} />Reset</button>
-        </div>
-        <div className="sim-rates" role="group" aria-label="Playback rate">
-          {rates.map((rate) => <button type="button" key={rate} className="sim-button"
-            aria-pressed={(state?.playback_rate ?? 0.5) === rate}
-            onClick={() => control("set_rate", rate)} disabled={!canAdjust}>{rate}×</button>)}
-        </div>
+        {playStep}
       </div>
-      {loaded && state && <DisruptionControls key={state.run_id} state={state}
-        disabled={!canAdjust || state.state === "completed"} submit={disrupt} />}
+      {presenterTarget ? createPortal(<><h2>Presenter controls</h2><p>30 s ≈ 1 presentation min at 0.5×</p>{presenter}</>, presenterTarget)
+        : <details className="sim-presenter-inline" open={!loaded || undefined}>
+          <summary>Presenter controls</summary>
+          <p>30 s ≈ 1 presentation min at 0.5×</p>
+          {presenter}
+        </details>}
       <div className="sim-feedback" role="status">
         {pending ? <span>{pending}</span> : notice && <span className={notice.error ? "sim-warning" : ""}>
           {notice.error ? <CircleAlert size={15} /> : <Check size={15} />}{notice.text}
@@ -243,6 +258,7 @@ export default function SimulationWorkspace({ sessionId, chatName }: { sessionId
               {state?.patrol && <span className={`sim-chip ${["blocked", "stalled", "waiting_for_sensor"].includes(state.patrol.state) ? "warn" : ""}`}>
                 Patrol · {patrolLabels[state.patrol.state]}
               </span>}
+              {loaded && <a className="sim-evidence-link" href="#simulation-evidence">Evidence</a>}
             </div>
           </div>
           {state?.audience ? <WarehouseMap key={`${state.generation}:${state.run_id}`} state={state} live={live} />
@@ -251,7 +267,7 @@ export default function SimulationWorkspace({ sessionId, chatName }: { sessionId
               <p>{live ? "Load the warehouse preset to see the room and robot." : "Waiting for the warehouse backend."}</p>
             </div>}
         </section>
-        <aside className="sim-evidence" aria-label="Simulation evidence">
+        <aside id="simulation-evidence" className="sim-evidence" aria-label="Simulation evidence">
           <ObservationPanel state={state} stale={stale} />
           <BeliefPanel state={state} stale={stale} />
         </aside>

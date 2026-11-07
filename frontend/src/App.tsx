@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import {
   ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database, Map as MapIcon,
   FlaskConical, LoaderCircle, MessageSquareText, MoreHorizontal, Network, PanelLeftClose,
-  PanelLeftOpen, Pencil, Plus, RotateCcw, ScanLine, Sparkles, Sun, Moon, Trash2, X,
+  PanelLeftOpen, PanelRightOpen, Maximize2, Pencil, Plus, RotateCcw, ScanLine, Sparkles, Sun, Moon, Trash2, X,
 } from "lucide-react";
 import { api, getSessionId, setSessionId } from "./api";
 import { useMotionPresence } from "./useMotionPresence";
@@ -13,6 +13,8 @@ import type { AgentResponse, ApiHealth, AppState, Fact } from "./types";
 const BeliefGraphPage = lazy(() => import("./BeliefGraphPage"));
 const SimulationWorkspace = lazy(() => import("./SimulationWorkspace"));
 type WorkspaceTab = "chat" | "inspector" | "graph" | "simulation";
+type DockPane = "chat" | "graph";
+const dockLabel = { chat: "Chat", graph: "Belief graph" };
 type Action = "ask" | "scenario-a" | "scenario-b" | "reset" | "new-chat" | "switch-chat" | "delete-chat" | null;
 type Chat = { id: string; title: string | null; scenario: "scenario-a" | "scenario-b" | null; customTitle?: boolean; hasMessages?: boolean };
 type ChatDialog = { kind: "limit" } | { kind: "delete"; chat: Chat } | { kind: "scenario"; scenario: "scenario-a" | "scenario-b" };
@@ -80,11 +82,23 @@ function App() {
   const [chatDialog, setChatDialog] = useState<ChatDialog | null>(null);
   const chatMenuTrigger = useRef<HTMLButtonElement | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(tabFromPath);
+  const [dock, setDock] = useState<DockPane | null>(null);
+  const [draggedPane, setDraggedPane] = useState<DockPane | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [presenterTarget, setPresenterTarget] = useState<HTMLDivElement | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = Number(window.localStorage.getItem("groundtruth-sidebar-width"));
     return Number.isFinite(saved) && saved >= 200 && saved <= 400 ? saved : 232;
   });
+  const canDock = viewportWidth - (sidebarOpen ? sidebarWidth : 0) >= 900;
+  const visibleDock = canDock && activeTab === "simulation" ? dock : null;
+  const presenterInSidebar = sidebarOpen && viewportWidth > 760;
+  useEffect(() => {
+    const resize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
   const resizeSidebar = (width: number) => {
     const next = Math.max(200, Math.min(400, window.innerWidth - 500, width));
@@ -153,14 +167,35 @@ function App() {
     };
   }, []);
   useEffect(() => {
-    if (activeTab === "chat") conversationEnd.current?.scrollIntoView({ block: "end" });
-  }, [state?.history.length, activeTab, action]);
+    if (activeTab === "chat" || visibleDock === "chat") conversationEnd.current?.scrollIntoView({ block: "end" });
+  }, [state?.history.length, activeTab, visibleDock, action]);
 
   const selectTab = (tab: WorkspaceTab) => {
     setActiveTab(tab);
     window.history.pushState({}, "", tab === "chat" ? "/" : `/${tab}`);
     if (window.innerWidth <= 760) setSidebarOpen(false);
   };
+  function openDock(pane: DockPane) {
+    if (!canDock) return;
+    setDock(pane);
+    setDraggedPane(null);
+    if (activeTab !== "simulation") selectTab("simulation");
+  }
+
+  function dockHeader(pane: DockPane) {
+    return <header className="workspace-dock-header">
+      <h2>{dockLabel[pane]}</h2>
+      <button type="button" className="icon-button" aria-label={`Open ${dockLabel[pane]} full screen`}
+        title="Open full screen" onClick={() => { setDock(null); selectTab(pane); }}><Maximize2 size={16} /></button>
+      <button type="button" className="icon-button" aria-label={`Close docked ${dockLabel[pane]}`}
+        title="Close pane" onClick={() => {
+          setDock(null);
+          const target = document.getElementById(`dock-${pane}`);
+          (sidebarOpen ? target : sidebarToggle.current)?.focus();
+        }}><X size={17} /></button>
+    </header>;
+  }
+
   const runQuestion = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!question.trim() || health?.status !== "ok" || action) return;
@@ -324,11 +359,29 @@ function App() {
           </button>
         </div>
         <nav className="workspace-nav" aria-label="Workspace tabs">
-          {tabs.map(({ id, label, icon: Icon }) => (
-            <button key={id} type="button" className={`workspace-nav-item ${activeTab === id ? "active" : ""}`} aria-current={activeTab === id ? "page" : undefined} onClick={() => selectTab(id)}>
-              <Icon size={19} strokeWidth={1.6} /><span>{label}</span>
-            </button>
-          ))}
+          {tabs.map(({ id, label, icon: Icon }) => {
+            const pane = canDock && (id === "chat" || id === "graph") ? id : null;
+            return <div className="workspace-nav-row" key={id}>
+              <button type="button" className={`workspace-nav-item ${activeTab === id ? "active" : ""}`}
+                draggable={!!pane} aria-current={activeTab === id ? "page" : undefined}
+                title={pane ? `Drag ${label} to the right to open beside Simulation` : undefined}
+                onDragStart={pane ? (event) => {
+                  event.dataTransfer.setData("text/plain", pane);
+                  event.dataTransfer.effectAllowed = "move";
+                  setDraggedPane(pane);
+                } : undefined}
+                onDragEnd={() => setDraggedPane(null)}
+                onClick={() => selectTab(id)}>
+                <Icon size={19} strokeWidth={1.6} /><span>{label}</span>
+              </button>
+              {pane && <button id={`dock-${pane}`} type="button" className="icon-button workspace-dock-button"
+                title={`Open ${label} beside Simulation`} aria-label={`Open ${label} beside Simulation`}
+                aria-pressed={visibleDock === pane} onClick={() => openDock(pane)}><PanelRightOpen size={16} /></button>}
+            </div>;
+          })}
+          {activeTab === "simulation" && canDock && <p className="workspace-dock-hint">
+            Drag Chat or Belief graph to the right, or use its dock button.
+          </p>}
         </nav>
         {activeTab === "chat" && <div className="workspace-scenarios" role="group" aria-label="Scenario presets">
           {(["scenario-a", "scenario-b"] as const).map((scenario, index) => (
@@ -355,6 +408,10 @@ function App() {
             </>}
           </div>)}
         </section>}
+        {activeTab === "simulation" && presenterInSidebar && <div ref={setPresenterTarget} className="workspace-presenter-target" />}
+        {visibleDock === "graph" && <details className="workspace-docked-graph-options">
+          <summary>Belief graph options</summary><div ref={setGraphSidebarTarget} className="workspace-graph-controls" />
+        </details>}
         {activeTab === "graph" && <div ref={setGraphSidebarTarget} className="workspace-graph-controls" />}
         <div className="workspace-sidebar-footer">
           <button type="button" className="workspace-nav-item" onClick={() => void resetAgent()} disabled={!backendReachable || busy}>
@@ -379,7 +436,14 @@ function App() {
         </header>
         {health?.status === "degraded" && health.error && <div className="error-banner" role="status"><CircleAlert size={17} /><span>{health.error}</span></div>}
         {error && <div className="error-banner" role="alert"><CircleAlert size={17} /><span>{error}</span><button type="button" onClick={() => void refresh()}>Retry connection</button><button type="button" aria-label="Dismiss error" onClick={() => setError(null)}><X size={16} /></button></div>}
-        {activeTab === "chat" && <section className="chat-workspace" aria-label="Chat">
+        <div className={`workspace-stage ${visibleDock ? "with-dock" : ""}`}>
+        {activeTab === "simulation" && <Suspense fallback={<div className="route-loading">Loading simulation…</div>}>
+          <SimulationWorkspace key={activeChatId} sessionId={activeChatId} chatName={activeChat ? chatLabel(activeChat) : "Current chat"}
+            presenterTarget={presenterInSidebar ? presenterTarget : null} />
+        </Suspense>}
+        {(activeTab === "chat" || visibleDock === "chat") && <div className={`workspace-pane ${visibleDock === "chat" ? "workspace-dock" : ""}`}>
+        {visibleDock === "chat" && dockHeader("chat")}
+        <section className="chat-workspace" aria-label="Chat">
           <div className="conversation" role="log" aria-label="Conversation" aria-busy={action === "ask"}>
             <div className={`conversation-inner ${!state?.history.length ? "is-empty" : ""}`}>
               {state?.history.length ? state.history.map((response, index) => <ConversationTurn key={`${displayText(response.question)}-${index}`} response={response} />) : (
@@ -405,12 +469,25 @@ function App() {
             </div>
             <p className="composer-hint">Enter to send <span>·</span> Shift + Enter for a new line</p>
           </form>
-        </section>}
+        </section></div>}
         {activeTab === "inspector" && <Inspector state={state} />}
-        {activeTab === "graph" && <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}><BeliefGraphPage embedded workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} /></Suspense>}
-        {activeTab === "simulation" && <Suspense fallback={<div className="route-loading">Loading simulation…</div>}>
-          <SimulationWorkspace key={activeChatId} sessionId={activeChatId} chatName={activeChat ? chatLabel(activeChat) : "Current chat"} />
-        </Suspense>}
+        {(activeTab === "graph" || visibleDock === "graph") &&
+          <div className={`workspace-pane ${visibleDock === "graph" ? "workspace-dock" : ""}`}>
+            {visibleDock === "graph" && dockHeader("graph")}
+            <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}>
+              <BeliefGraphPage embedded workspaceState={state} workspaceHealth={health}
+                sidebarTarget={graphSidebarTarget} />
+            </Suspense>
+          </div>}
+        {canDock && draggedPane && <div className="workspace-drop-zone" aria-hidden="true"
+          onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+          onDrop={(event) => {
+            event.preventDefault();
+            if (event.dataTransfer.getData("text/plain") === draggedPane) openDock(draggedPane);
+          }}>
+          <div><PanelRightOpen size={23} /><strong>Drop {dockLabel[draggedPane]} here</strong><span>Open beside Simulation</span></div>
+        </div>}
+        </div>
       </main>
       {chatDialog && <ChatActionDialog dialog={chatDialog} onClose={() => setChatDialog(null)} onDelete={(chat) => void deleteChat(chat)} onLoadScenario={(scenario) => void loadScenario(scenario, true)} />}
     </div>

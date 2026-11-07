@@ -7,9 +7,9 @@
 }
 
 .sim-content {
-  width: min(100%, 1480px);
+  width: 100%;
   margin-inline: auto;
-  padding: 24px;
+  padding: 14px 18px 18px;
   color: var(--text);
 }
 
@@ -21,12 +21,13 @@
   gap: 12px;
 }
 
-.sim-heading { margin-bottom: 16px; }
-.sim-heading h2 { margin: 0; font-size: 1.5rem; font-weight: 550; letter-spacing: -.03em; }
+.sim-heading { margin-bottom: 8px; }
+.sim-heading h2 { margin: 0; font-size: 1.125rem; font-weight: 550; letter-spacing: -.03em; }
 .sim-heading p { margin: 3px 0 0; color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
-.sim-toolbar { padding: 12px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 9px; }
-.sim-clock { display: grid; gap: 2px; color: var(--muted); font-size: .75rem; }
-.sim-clock strong { color: var(--text); font: 500 1.25rem var(--font-mono); font-variant-numeric: tabular-nums; }
+.sim-toolbar { padding: 6px 10px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 9px; }
+.sim-evidence-link { padding: 6px 2px; color: var(--accent); font-size: .8125rem; text-underline-offset: 3px; }
+.sim-clock { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; color: var(--muted); font-size: .75rem; }
+.sim-clock strong { color: var(--text); font: 500 1rem var(--font-mono); font-variant-numeric: tabular-nums; }
 .sim-actions, .sim-rates { display: flex; gap: 6px; flex-wrap: wrap; }
 .sim-button, .sim-disrupt select {
   min-height: 40px;
@@ -76,13 +77,13 @@
 .sim-disrupt[open] summary::after { content: "−"; }
 .sim-disrupt form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; padding: 0 12px 12px; }
 .sim-disrupt label { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }
-.sim-feedback { display: flex; align-items: center; min-height: 32px; color: var(--muted); font-size: .8125rem; }
+.sim-feedback { display: flex; align-items: center; min-height: 26px; color: var(--muted); font-size: .8125rem; }
 .sim-feedback > span, .sim-warning { display: inline-flex; align-items: center; gap: 6px; }
 .sim-warning { color: var(--warning-text); }
 .sim-banner { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; color: var(--danger); background: var(--error-surface); font-size: .8125rem; }
 
-.sim-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(224px, 28%); gap: 16px; align-items: start; }
-.sim-evidence { display: grid; gap: 16px; min-width: 0; }
+.sim-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.sim-evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; }
 .sim-panel { min-width: 0; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
 .sim-panel-heading { min-height: 46px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .sim-panel-heading h2 { display: inline-flex; align-items: center; gap: 7px; margin: 0; font-size: .875rem; font-weight: 600; }
@@ -92,7 +93,7 @@
 .sim-map-empty p { margin: 0; font-size: .875rem; }
 
 .warehouse-stage { background: var(--surface-raised); }
-.warehouse-map { display: block; width: 100%; max-height: clamp(300px, calc(100dvh - 460px), 630px); }
+.warehouse-map { display: block; width: 100%; max-height: max(360px, calc(100dvh - 258px)); }
 .warehouse-floor { fill: var(--surface); }
 .warehouse-grid-line, .warehouse-outline { fill: none; stroke: var(--line-strong); vector-effect: non-scaling-stroke; }
 .warehouse-route { fill: none; stroke: var(--muted); stroke-dasharray: 8 6; stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -132,13 +133,8 @@
 .sim-list span { color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
 .sim-details .sim-list { margin: 0; padding: 0 12px 12px; }
 
-@container (max-width: 750px) {
-  .sim-layout { grid-template-columns: minmax(0, 1fr); }
-  .sim-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 @container (max-width: 540px) {
-  .sim-content { padding: 16px; }
-  .sim-toolbar { align-items: start; flex-direction: column; }
+  .sim-content { padding-inline: 12px; }
   .sim-button, .sim-disrupt select { min-height: 44px; }
   .sim-evidence { grid-template-columns: minmax(0, 1fr); }
   .warehouse-object-label { font-size: 25px; }
@@ -147,3 +143,18 @@
 @media (prefers-reduced-motion: reduce) {
   .sim-button { transition: none; }
 }
+
+.workspace-presenter-target { min-width: 0; margin: 0 12px; padding: 14px 4px 0; border-top: 1px solid var(--line); }
+.workspace-presenter-target h2 { margin: 0; font-size: .875rem; font-weight: 600; }
+.workspace-presenter-target p, .sim-presenter-inline p { margin: 5px 0 10px; color: var(--muted); font-size: .75rem; }
+.sim-presenter { display: flex; flex-wrap: wrap; gap: 8px; align-items: start; min-width: 0; }
+.workspace-presenter-target .sim-presenter { flex-direction: column; }
+.sim-preset { display: flex; flex-wrap: wrap; gap: 6px; }
+.workspace-presenter-target .sim-preset .sim-button { padding-inline: 8px; }
+.sim-presenter .sim-disrupt { width: 100%; margin: 0; }
+.sim-disrupt label { min-width: 0; max-width: 100%; }
+.sim-disrupt select { max-width: 100%; }
+.workspace-presenter-target .sim-disrupt form { display: grid; }
+.workspace-presenter-target .sim-disrupt select { width: 100%; }
+.sim-presenter-inline { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
+.sim-presenter-inline > summary { cursor: pointer; color: var(--text); font-size: .8125rem; }

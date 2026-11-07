@@ -431,3 +431,13 @@
 @media (prefers-reduced-motion: reduce) {
   .belief-shell.belief-embedded { transition: none; }
 }
+
+/* Docked graph controls wrap against the pane, independent of viewport width. */
+.workspace-dock .belief-shell.belief-embedded,
+.workspace-dock .belief-shell.belief-embedded.details-open { grid-template-columns: minmax(0, 1fr); }
+.workspace-dock .belief-shell.belief-embedded { grid-template-rows: minmax(0, 1fr); transition: none; }
+.workspace-dock .belief-shell.belief-embedded.details-open { grid-template-rows: minmax(0, 1fr) minmax(0, 42%); }
+.workspace-dock .belief-embedded.details-visible .belief-details { grid-column: 1; grid-row: 2; border-left: 0; border-top: 1px solid var(--line); }
+.workspace-dock .belief-topbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 0; }
+.workspace-dock .belief-top-actions { flex-wrap: wrap; flex-shrink: 1; }
+.workspace-dock .belief-orbit-hint { display: none; }

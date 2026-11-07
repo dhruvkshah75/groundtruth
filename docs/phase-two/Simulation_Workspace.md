@@ -32,7 +32,17 @@ Open [the local simulation route](http://127.0.0.1:8765/simulation). Select
 100 simulation milliseconds or **Play** to watch the robot at the default 0.5×.
 A 30-second run takes about one wall-clock minute at that rate. **Reset** starts
 a fresh run from the preset and retains the selected rate. **Reload preset**
-restores the default rate.
+restores the default rate. On desktop, the open left sidebar contains the
+preset, reset, playback rate and disruption controls. With the sidebar closed
+or on a narrow screen, open **Presenter controls** above the map to reach
+the same actions. The **Evidence** link jumps to the panels below the map.
+
+When the workspace has at least 900 px available beside the sidebar, drag
+**Chat** or **Belief graph** from the navigation onto the right-hand drop area.
+The dock button beside each tab offers the same action by keyboard or click.
+The right pane has controls to close it or open its view full screen. The
+simulation stays mounted while a pane opens or closes, and both panes use the
+active chat's session. The layout returns to one pane as the window narrows.
 
 Open **Presenter disruptions** to schedule cart movement, parcel relocation to
 a named station, lighting changes, or camera and LiDAR outages and recovery. A
@@ -89,7 +99,8 @@ conflict are visible, and the client does not automatically replay mutations.
   1024, 768 and 390 pixels. It covers the heading and coordinates, real motion,
   keyboard focus and step, paused rate changes, all disruption types, conflict
   and stale-run errors, outages and recovery, delayed polls, visibility,
-  navigation, and per-chat state. It also checks text contrast and reduced
+  navigation, per-chat state, drag and keyboard docking, and access to presenter
+  controls on a narrow screen. It also checks text contrast and reduced
   motion for controls. The screenshots come from loaded server state.
 
 To repeat the browser check, run the build and server above, then from
@@ -109,4 +120,5 @@ available for contract tests. The workspace and browser verification do not
 render fixture snapshots as live data.
 
 [Desktop, light theme](images/simulation-workspace-desktop.png) ·
+[Simulation with docked Chat](images/simulation-workspace-split.png) ·
 [Narrow viewport, dark theme](images/simulation-workspace-mobile.png)

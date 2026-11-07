@@ -68,8 +68,7 @@ export default function WarehouseMap({ state, live }: Props) {
   return <>
     <div className="warehouse-stage">
       <svg className="warehouse-map" viewBox={`-44 -36 ${width + 88} ${height + 84}`}
-        role="img" aria-labelledby={`${id}-title ${id}-desc`}>
-        <title id={`${id}-title`}>Top-down audience map of the warehouse</title>
+        role="img" aria-label="Top-down audience map of the warehouse" aria-describedby={`${id}-desc`}>
         <desc id={`${id}-desc`}>North is up. The grid is in centimeters. The camera sector shows range and heading. The map objects list below provides coordinates.</desc>
         <defs>
           <pattern id={`${id}-grid`} width="50" height="50" patternUnits="userSpaceOnUse">
