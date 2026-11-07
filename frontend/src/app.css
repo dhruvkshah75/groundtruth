@@ -516,6 +516,17 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 .workspace-dock { overflow: hidden; background: var(--surface); }
 .workspace-dock-header { display: flex; align-items: center; gap: 6px; min-height: 46px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .workspace-dock-header h2 { margin: 0 auto 0 0; font-size: .875rem; font-weight: 600; }
+.workspace-header.with-dock { gap: 0; padding-left: 0; }
+.workspace-header.with-dock .workspace-heading { box-sizing: border-box; flex: 0 0 var(--primary-pane-width); min-width: 0; padding-left: 16px; }
+.workspace-header.with-dock .workspace-dock-header { flex: 1; min-width: 0; align-self: stretch; border-bottom: 0; border-left: 1px solid var(--line); }
+:root[data-theme] .inspector-section {
+  border-color: var(--glass-border);
+  background: var(--glass-surface);
+  backdrop-filter: blur(18px) saturate(115%);
+  -webkit-backdrop-filter: blur(18px) saturate(115%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 8px 24px var(--glass-shadow);
+}
+:root[data-theme] .inspector-section-heading:hover { background: var(--glass-selected); }
 .workspace-stage.with-dock :is(.conversation-inner, .composer-wrap) { padding-inline: 14px; }
 .workspace-drop-zone {
   position: absolute;

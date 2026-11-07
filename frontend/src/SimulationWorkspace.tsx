@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { Activity, Camera, Check, CircleAlert, Map, Pause, Play, SkipForward, SlidersHorizontal, WifiOff } from "lucide-react";
-import { api } from "./api";
+import { api, ApiRequestError } from "./api";
 import type {
   CameraDetection, SimulationControlRequest, SimulationDisruptRequest,
   SimulationStateResponse, StoredObservationSample,
@@ -176,10 +176,16 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
   function control(action: Exclude<SimulationControlRequest["action"], "reset">, rate?: typeof rates[number]) {
     const messages = { play: "Playback started.", pause: "Playback paused.", step: "Step confirmed.",
       set_rate: `Rate set to ${rate}×.` };
-    void run("Applying control…", async (expected, options) => ({
-      state: await api.controlSimulation({ action, expected, playback_rate: rate }, options),
-      message: messages[action],
-    }));
+    void run("Applying control…", async (expected, options) => {
+      try {
+        return { state: await api.controlSimulation({ action, expected, playback_rate: rate }, options), message: messages[action] };
+      } catch (error) {
+        if (action === "set_rate" && rate === 2 && error instanceof ApiRequestError && error.code === "invalid_request") {
+          throw new Error("The backend rejected 2× playback. Restart the backend to load the latest version, then try again.");
+        }
+        throw error;
+      }
+    });
   }
 
   function load() {

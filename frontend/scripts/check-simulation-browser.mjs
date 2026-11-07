@@ -79,6 +79,14 @@ try {
   assert.equal(await observations.getByText("Parcel 03", { exact: true }).count(), 0);
   const initialCapture = await observations.locator(".sim-time").first().innerText();
 
+  // An older server rejects 2×: explain how to update it instead of hiding the cause.
+  await page.route("**/api/simulation/control", (route) => route.fulfill({
+    status: 400, contentType: "application/json",
+    body: JSON.stringify({ code: "invalid_request", error: "Invalid simulation request." }),
+  }), { times: 1 });
+  await post("2×", "control", 400);
+  await page.getByRole("complementary", { name: "Agent workspace" }).getByText(/Restart the backend/).waitFor();
+
   for (const rate of ["0.25×", "1×", "2×", "0.5×"]) {
     const data = await post(rate, "control");
     assert.equal(data.snapshot_sequence, 0);
@@ -217,12 +225,20 @@ try {
     await page.mouse.move(destination.x + destination.width / 2, destination.y + 90);
     await page.mouse.up();
   }
+  async function assertAlignedHeaders() {
+    const primary = await page.locator(".workspace-heading h1").boundingBox();
+    const secondary = await page.locator(".workspace-dock-header h2").boundingBox();
+    const divider = await page.getByRole("separator", { name: "Resize split view" }).boundingBox();
+    assert.ok(Math.abs((primary.y + primary.height / 2) - (secondary.y + secondary.height / 2)) < 2);
+    assert.ok(primary.x < divider.x && secondary.x > divider.x);
+  }
 
   const pausedTime = await clock.innerText();
   const dock = page.locator(".workspace-dock");
   await dragTab("Chat");
   const composer = dock.getByRole("textbox", { name: "Ask the cognitive Agent" });
   await composer.waitFor();
+  await assertAlignedHeaders();
   assert.equal(await clock.innerText(), pausedTime);
   assert.ok((await dock.boundingBox()).x > (await robot.boundingBox()).x);
   const oneLine = (await composer.boundingBox()).height;
@@ -244,6 +260,7 @@ try {
   const afterDrag = (await divider.boundingBox()).x;
   await divider.press("ArrowRight");
   assert.ok((await divider.boundingBox()).x > afterDrag);
+  await assertAlignedHeaders();
   if (output) await page.screenshot({ path: join(output, "simulation-workspace-split.png") });
 
   await button("Second chat").click();
@@ -255,6 +272,7 @@ try {
 
   await dragTab("Chat", "left");
   await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  await assertAlignedHeaders();
   assert.ok((await page.getByRole("textbox", { name: "Ask the cognitive Agent" }).boundingBox()).x < (await dock.boundingBox()).x);
   await button("Second chat").waitFor();
   assert.equal(await clock.innerText(), pausedTime);
@@ -271,8 +289,10 @@ try {
 
   await dragTab("System inspector");
   await dock.getByRole("region", { name: "System inspector", exact: true }).waitFor();
+  await assertAlignedHeaders();
   await button("Belief graph").press("Shift+Enter");
   await dock.getByRole("region", { name: "Belief network" }).waitFor();
+  await assertAlignedHeaders();
   await button("Active beliefs").waitFor();
   await dragTab("Simulation");
   await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
