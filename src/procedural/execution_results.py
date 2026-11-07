@@ -52,6 +52,7 @@ class AuditExecutionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation_index: int = Field(ge=0)
     purpose: str
+    run_id: UUID | None = None
     trails: dict[UUID, AuditTrail]
 
 

@@ -1,6 +1,7 @@
 """Typed data for work that a later executor may perform."""
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -69,6 +70,7 @@ class AuditChainOperation(BaseModel):
     entity_id: str = Field(min_length=1)
     fact_ids_from_memory_operation: int = Field(ge=0)
     purpose: str = Field(min_length=1)
+    run_id: UUID | None = None
 
 
 class ActionPlaceholder(BaseModel):

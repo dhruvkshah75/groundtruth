@@ -418,6 +418,7 @@ class PlanBuilder:
                     entity_id=entity,
                     fact_ids_from_memory_operation=0,
                     purpose=f"Retrieve revision audit chain for {entity} location changes.",
+                    run_id=run_id,
                 )
             )
 

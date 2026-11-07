@@ -1088,3 +1088,277 @@ def test_negative_fractional_time_rejected() -> None:
     assert response.status == "unsupported"
     assert response.react_trace is not None
     assert response.react_trace.execution_summary["temporal_queries_count"] == 0
+
+
+def test_changes_mode_revision_evidence_scoped_and_associated_with_transition() -> None:
+    """Revision evidence is scoped to selected run and associated only with relevant transition."""
+    agent = setup_agent()
+    run_1 = uuid4()
+    run_2 = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Ingest Run 2 sightings: transition from station_1 to station_2
+    s1 = make_sample(
+        run_id=run_2,
+        sim_time_ms=1000,
+        sample_sequence=1,
+        observer_pose=make_pose(location="station_1"),
+        detections=[make_detection("parcel_01", 100.0, 200.0)],
+    )
+    s2 = make_sample(
+        run_id=run_2,
+        sim_time_ms=4000,
+        sample_sequence=2,
+        observer_pose=make_pose(location="station_2"),
+        detections=[make_detection("parcel_01", 500.0, 600.0)],
+    )
+    agent.memory.record_observation_sample(s1)
+    agent.memory.record_observation_sample(s2)
+
+    # Revision 1 (from run_1): dock to station_1 (should be excluded due to run mismatch)
+    f_run1_old = agent.memory.record_fact(
+        FactAssertion(
+            subject="parcel_01",
+            predicate="located_at",
+            object="dock",
+            source_agent="operator",
+            confidence_score=1.0,
+            observed_at=EPOCH,
+            context=SpatialContext(
+                observer="system", location="dock", extra_context={"run_id": str(run_1)}
+            ),
+        )
+    )
+    agent.memory.record_revision(
+        old_fact_id=f_run1_old.fact_id,
+        replacement=FactAssertion(
+            subject="parcel_01",
+            predicate="located_at",
+            object="station_1",
+            source_agent="crane",
+            confidence_score=1.0,
+            observed_at=EPOCH + timedelta(seconds=1),
+            context=SpatialContext(
+                observer="system", location="station_1", extra_context={"run_id": str(run_1)}
+            ),
+        ),
+        reason="Moved by crane in run 1",
+        policy_rule="crane_policy",
+        revised_at=EPOCH + timedelta(seconds=1),
+    )
+
+    # Revision 2 (from run_2): station_1 to station_2 (should be associated with the transition)
+    f_run2_old = agent.memory.record_fact(
+        FactAssertion(
+            subject="parcel_01",
+            predicate="located_at",
+            object="station_1",
+            source_agent="operator",
+            confidence_score=1.0,
+            observed_at=EPOCH + timedelta(seconds=1),
+            context=SpatialContext(
+                observer="system", location="station_1", extra_context={"run_id": str(run_2)}
+            ),
+        )
+    )
+    agent.memory.record_revision(
+        old_fact_id=f_run2_old.fact_id,
+        replacement=FactAssertion(
+            subject="parcel_01",
+            predicate="located_at",
+            object="station_2",
+            source_agent="agv_system",
+            confidence_score=1.0,
+            observed_at=EPOCH + timedelta(seconds=4),
+            context=SpatialContext(
+                observer="system", location="station_2", extra_context={"run_id": str(run_2)}
+            ),
+        ),
+        reason="Transferred by AGV in run 2",
+        policy_rule="station_handover_policy",
+        revised_at=EPOCH + timedelta(seconds=4),
+    )
+
+    # Revision 3 (from run_2): unrelated transition station_9 to station_10
+    f_unrelated_old = agent.memory.record_fact(
+        FactAssertion(
+            subject="parcel_01",
+            predicate="located_at",
+            object="station_9",
+            source_agent="operator",
+            confidence_score=1.0,
+            observed_at=EPOCH + timedelta(seconds=5),
+            context=SpatialContext(
+                observer="system", location="station_9", extra_context={"run_id": str(run_2)}
+            ),
+        )
+    )
+    agent.memory.record_revision(
+        old_fact_id=f_unrelated_old.fact_id,
+        replacement=FactAssertion(
+            subject="parcel_01",
+            predicate="located_at",
+            object="station_10",
+            source_agent="forklift",
+            confidence_score=1.0,
+            observed_at=EPOCH + timedelta(seconds=6),
+            context=SpatialContext(
+                observer="system", location="station_10", extra_context={"run_id": str(run_2)}
+            ),
+        ),
+        reason="Unrelated relocation to station 10",
+        policy_rule="unrelated_policy",
+        revised_at=EPOCH + timedelta(seconds=6),
+    )
+
+    response = agent.ask("Where was parcel_01 before, and what changed?")
+    assert response.status == "verified"
+    assert "Observed transition for parcel_01:" in response.answer
+    assert "sighted at station_1 at 1000 ms" in response.answer
+    assert "subsequently sighted at station_2 at 4000 ms" in response.answer
+    # Associated revision should be present
+    assert "Transferred by AGV in run 2" in response.answer
+    # Unrelated or cross-run revisions must NOT be associated with this transition
+    assert "Moved by crane in run 1" not in response.answer
+    assert "Unrelated relocation to station 10" not in response.answer
+
+
+def test_at_time_mode_explicit_previous_run_query_not_capped_by_active_run_clock() -> None:
+    """Explicit previous-run query uses that run's horizon, not the active request's clock."""
+    agent = setup_agent()
+    run_1 = uuid4()
+    run_2 = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Ingest Run 1 sighting at 20 seconds (20,000 ms)
+    s1 = make_sample(
+        run_id=run_1,
+        sim_time_ms=20000,
+        sample_sequence=1,
+        observer_pose=make_pose(location="aisle_4"),
+        detections=[make_detection("parcel_01", 300.0, 400.0)],
+    )
+    agent.memory.record_observation_sample(s1)
+
+    # Active sensors is on Run 2 with sim_time_ms = 500 (e.g. after a reset)
+    class MockActiveRun2Sensors:
+        run_id = run_2
+        sim_time_ms = 500
+
+        def observe(self, req: Any) -> Any:
+            return ObservationUnavailable(
+                capability=req.capability,
+                reason="sensor_unavailable",
+                message="Unavailable in active run",
+                reported_at=datetime.now(UTC),
+            )
+
+    # Query explicit previous run at 20 seconds
+    from src.contracts.models import IntentRequest
+    from src.procedural.intent_planner import IntentPlannerOutcome
+
+    intent = IntentPlannerOutcome(
+        intent=IntentRequest(
+            intent="object_location_query",
+            mode="at_time",
+            entity_mentions=["parcel_01"],
+            at_sim_time_ms=20000,
+            run_id=run_1,
+            user_question="Where was parcel_01 at 20 seconds in run 1?",
+        )
+    )
+
+    response = agent.capture(
+        "Where was parcel_01 at 20 seconds in run 1?",
+        intent,
+        sensors=MockActiveRun2Sensors(),
+    )()
+
+    # Must be verified at 20s, NOT rejected as in the future
+    assert response.status == "verified"
+    assert "simulation time 20000 ms" in response.answer
+    assert "aisle_4" in response.answer
+
+
+def test_changes_mode_incompatible_frames_reports_uncertain() -> None:
+    """Sightings using incompatible reference frames report uncertain status."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Sighting 1 in warehouse_map frame
+    s1 = make_sample(
+        run_id=run_id,
+        sim_time_ms=1000,
+        sample_sequence=1,
+        observer_pose=make_pose(location="station_A", frame_of_reference="warehouse_map"),
+        detections=[make_detection("parcel_01", 100.0, 200.0, frame_of_reference="warehouse_map")],
+    )
+    # Sighting 2 in camera_optical_frame with different coordinates
+    s2 = make_sample(
+        run_id=run_id,
+        sim_time_ms=3000,
+        sample_sequence=2,
+        observer_pose=make_pose(location="station_A", frame_of_reference="camera_optical_frame"),
+        detections=[
+            make_detection("parcel_01", 10.0, 20.0, frame_of_reference="camera_optical_frame")
+        ],
+    )
+    agent.memory.record_observation_sample(s1)
+    agent.memory.record_observation_sample(s2)
+
+    response = agent.ask("Has parcel_01 moved?")
+    assert response.status == "uncertain"
+    assert "incompatible reference frames" in response.answer
+    assert "No location change observed" not in response.answer
+
+
+def test_at_time_complete_time_expression_parsing_and_rejection() -> None:
+    """Compound word numbers parse completely and malformed expressions reject."""
+    from src.procedural.rule_based_provider import RuleBasedIntentProvider
+
+    provider = RuleBasedIntentProvider()
+
+    # 1. 'at twenty five seconds' parses completely to 25000 ms (not 20000 ms)
+    p1 = provider.propose_intent("Where was parcel_01 at twenty five seconds?")
+    assert p1["intent"] == "object_location_query"
+    assert p1["mode"] == "at_time"
+    assert p1["at_sim_time_ms"] == 25000
+
+    # 2. Malformed 'at 7.2.3 seconds' rejects (at_sim_time_ms is None)
+    p2 = provider.propose_intent("Where was parcel_01 at 7.2.3 seconds?")
+    assert p2["intent"] == "object_location_query"
+    assert p2["mode"] == "at_time"
+    assert p2["at_sim_time_ms"] is None
+
+    agent = setup_agent()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+    resp = agent.ask("Where was parcel_01 at 7.2.3 seconds?")
+    assert resp.status in ("unsupported", "invalid")
+    assert resp.react_trace is not None
+    assert resp.react_trace.execution_summary["temporal_queries_count"] == 0
+
+
+def test_telemetry_preserves_successful_sample_envelope() -> None:
+    """Structured telemetry preserves sample_id and sim_time_ms alongside observation."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    sample = make_sample(
+        run_id=run_id,
+        sim_time_ms=2500,
+        sample_sequence=1,
+        observer_pose=make_pose(location="dock"),
+        detections=[make_detection("parcel_01", 50.0, 75.0)],
+    )
+    agent.memory.record_observation_sample(sample)
+
+    response = agent.ask("Where is parcel_01 now?")
+    assert response.status == "verified"
+    assert len(response.sensor_telemetry) > 0
+    t = response.sensor_telemetry[0]
+    assert "sample_id" in t
+    assert t["sample_id"] == str(sample.sample_id)
+    assert "sim_time_ms" in t
+    assert t["sim_time_ms"] == 2500

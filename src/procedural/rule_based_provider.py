@@ -43,6 +43,40 @@ WORD_NUMBERS: dict[str, int] = {
 }
 
 
+def _parse_word_number(text: str) -> float | None:
+    """Parse single or compound number words (e.g. 'twenty five', 'one hundred') into a float."""
+    clean = text.lower().replace("-", " ").strip()
+    tokens = clean.split()
+    if not tokens:
+        return None
+
+    is_negative = False
+    if tokens[0] in ("minus", "negative"):
+        is_negative = True
+        tokens = tokens[1:]
+        if not tokens:
+            return None
+
+    valid_words = set(WORD_NUMBERS.keys()) | {"hundred", "thousand", "and"}
+    if any(t not in valid_words for t in tokens):
+        return None
+
+    total = 0
+    current = 0
+    for t in tokens:
+        if t == "and":
+            continue
+        if t in WORD_NUMBERS:
+            current += WORD_NUMBERS[t]
+        elif t == "hundred":
+            current = (current if current != 0 else 1) * 100
+        elif t == "thousand":
+            total += (current if current != 0 else 1) * 1000
+            current = 0
+    result = float(total + current)
+    return -result if is_negative else result
+
+
 class RuleBasedIntentProvider(IntentProvider):
     """Deterministic, rule-based provider for common epistemic scenarios."""
 
@@ -175,28 +209,62 @@ class RuleBasedIntentProvider(IntentProvider):
                 }
 
             # C. at_time mode: "where was parcel_01 at 7 seconds", "at 7s", "at 7000ms",
-            # or "at seven seconds"
-            time_match = re.search(
-                r"\bat\s+(-?\d+(?:\.\d+)?)\s*(seconds?|secs?|s|milliseconds?|ms)?\b", q
+            # "at twenty five seconds", or malformed "at 7.2.3 seconds"
+            has_at_phrase = False
+            raw_expr = None
+            unit = ""
+
+            # Check 1: joined unit, e.g. "at 4s", "at 4000ms", "at 7.2.3s"
+            m_joined = re.search(
+                r"\bat\s+(-?[0-9a-zA-Z.]+?)(ms|milliseconds?|seconds?|secs?|s)\b", q
             )
-            time_word_match = re.search(
-                r"\bat\s+([a-zA-Z]+)\s*(seconds?|secs?|s|milliseconds?|ms)?\b", q
+            # Check 2: separate unit, e.g. "at twenty five seconds", "at 7.2.3 seconds"
+            m_sep = re.search(r"\bat\s+(.+?)\s+(seconds?|secs?|s|milliseconds?|ms)\b", q)
+            # Check 3: "at time <expr>" or "at second <expr>"
+            m_time = re.search(
+                r"\bat\s+(?:time|second|seconds)\s+(.+?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
+                q,
             )
-            has_at_phrase = bool(
-                time_match
-                or time_word_match
-                or "at time" in q
-                or "at second" in q
-                or bool(re.search(r"\bat\s+\S+", q))
+            # Check 4: generic "at <expr>" followed by end of phrase/question
+            m_gen = re.search(
+                r"\bat\s+([^\s?.,;]+(?:\s+[^\s?.,;]+)*?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
+                q,
             )
+
+            if m_joined and not bool(re.search(r"\bat\s+[0-9a-zA-Z.]+\s+", q)):
+                has_at_phrase = True
+                raw_expr = m_joined.group(1)
+                unit = m_joined.group(2).lower()
+            elif m_sep:
+                has_at_phrase = True
+                raw_expr = m_sep.group(1)
+                unit = m_sep.group(2).lower()
+            elif m_time:
+                has_at_phrase = True
+                raw_expr = m_time.group(1)
+                unit = (m_time.group(2) or "").lower()
+            elif m_gen:
+                candidate = m_gen.group(1).strip()
+                if (
+                    any(c.isdigit() for c in candidate)
+                    or any(w in WORD_NUMBERS for w in candidate.lower().split())
+                    or "time" in q
+                    or "second" in q
+                ):
+                    has_at_phrase = True
+                    raw_expr = candidate
+                    unit = (m_gen.group(2) or "").lower()
+            elif bool(re.search(r"\bat\s+\S+", q)) and ("time" in q or "second" in q):
+                has_at_phrase = True
+                raw_expr = None
+                unit = ""
 
             if has_at_phrase:
                 at_sim_time_ms = None
-                if time_match:
-                    val_str = time_match.group(1)
-                    unit = (time_match.group(2) or "").lower()
+                if raw_expr:
+                    raw_expr = raw_expr.strip()
                     try:
-                        val = float(val_str)
+                        val = float(raw_expr)
                         if val < 0:
                             # Reject negative values before integer truncation
                             at_sim_time_ms = (
@@ -214,19 +282,19 @@ class RuleBasedIntentProvider(IntentProvider):
                             else:
                                 at_sim_time_ms = int(val * 1000)
                     except ValueError:
-                        at_sim_time_ms = None
-                elif time_word_match:
-                    word = time_word_match.group(1).lower()
-                    if word in WORD_NUMBERS:
-                        val = float(WORD_NUMBERS[word])
-                        unit = (time_word_match.group(2) or "").lower()
-                        if unit in ("ms", "millisecond", "milliseconds"):
-                            at_sim_time_ms = int(val)
+                        word_val = _parse_word_number(raw_expr)
+                        if word_val is not None:
+                            if word_val < 0:
+                                at_sim_time_ms = -1
+                            else:
+                                if unit in ("ms", "millisecond", "milliseconds"):
+                                    at_sim_time_ms = int(word_val)
+                                else:
+                                    at_sim_time_ms = int(word_val * 1000)
                         else:
-                            at_sim_time_ms = int(val * 1000)
-                    else:
-                        # Unrecognized word time phrase; keep at_sim_time_ms=None so it is rejected
-                        at_sim_time_ms = None
+                            # Unrecognized or malformed time phrase (e.g. '7.2.3 seconds');
+                            # keep at_sim_time_ms=None so it is rejected
+                            at_sim_time_ms = None
 
                 return {
                     "intent": "object_location_query",

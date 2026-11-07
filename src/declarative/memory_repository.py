@@ -594,6 +594,16 @@ class MemoryRepository:
                     pass
         return None
 
+    def get_run_horizon_ms(self, run_id: UUID) -> int | None:
+        """Return the maximum simulation time recorded in observation_samples for a run."""
+        row = self._conn.execute(
+            "SELECT MAX(sim_time_ms) AS max_ms FROM observation_samples WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+        if row is not None and row["max_ms"] is not None:
+            return int(row["max_ms"])
+        return None
+
     # ------------------------------------------------------------------
     # private helpers
     # ------------------------------------------------------------------

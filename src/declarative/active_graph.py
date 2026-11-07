@@ -439,6 +439,12 @@ class GraphSyncedRepository:
             return self._repository.get_latest_run_id()
         return None
 
+    def get_run_horizon_ms(self, run_id: UUID) -> int | None:
+        """Delegate get_run_horizon_ms to the underlying repository."""
+        if hasattr(self._repository, "get_run_horizon_ms"):
+            return self._repository.get_run_horizon_ms(run_id)
+        return None
+
     def query_observations(self, query: TemporalObservationQuery) -> list[StoredObservationSample]:
         """Delegate query_observations to the underlying repository."""
         if hasattr(self._repository, "query_observations"):

@@ -217,6 +217,7 @@ class GroundedAgent:
             memory_repo=self._memory,
             revise_routes=sensors is None,
             capture_time_ms=sim_time,
+            active_run_id=getattr(sensors, "run_id", None),
         )
 
         # 3. Pull current active projection and facts

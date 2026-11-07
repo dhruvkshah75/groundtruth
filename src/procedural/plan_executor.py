@@ -99,7 +99,12 @@ class PlanExecutor:
                 trails[fact.fact_id] = self._memory.get_audit_chain(fact.fact_id)
 
             audit_results.append(
-                AuditExecutionResult(operation_index=idx, purpose=audit_op.purpose, trails=trails)
+                AuditExecutionResult(
+                    operation_index=idx,
+                    purpose=audit_op.purpose,
+                    run_id=audit_op.run_id,
+                    trails=trails,
+                )
             )
 
         approved_operations: list[str] = []

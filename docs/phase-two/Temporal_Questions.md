@@ -161,13 +161,17 @@ Following the completion of Issue [#43 / P2-07](https://github.com/dhruvkshah75/
 - **Canonical Alias Resolution:** Canonical entity IDs resolved from the execution result are used across all 5 temporal modes to match detections. Missing detections yield uncertainty/error instead of fabricating `(0, 0)` coordinates. Pronouns such as `it` are matched strictly with word boundaries so legacy robot pose questions (e.g. `What is your position?`) are not misclassified as object queries.
 - **Physical Position Changes vs. Observer Movement:** In `changes` mode, object positions are compared across compatible reference frames (`pos1 != pos2`). Movement of the observer robot between stations alone does not invent object relocation. Observer location is preserved solely as provenance.
 - **Stored Belief Run Provenance:** Stored location beliefs without matching run provenance cannot establish current position for a run lacking sightings, preventing cross-run belief leakage.
-- **Robust Temporal Parsing:** Natural language word numbers (e.g., "seven seconds") are parsed into exact milliseconds. Unrecognized time phrases are rejected at planning rather than falling through to current mode, and relative terms (e.g., "previously", "earlier") correctly route to `changes`/`history`. Negative values (including fractional values like `-0.1 ms`) are rejected before integer truncation.
+- **Robust Temporal Parsing:** Natural language word numbers (including compound numbers like "twenty five seconds" $\to$ 25,000 ms) are parsed into exact milliseconds. Unrecognized or malformed time phrases (e.g. "at 7.2.3 seconds") are rejected at planning rather than matching partial prefixes, and relative terms (e.g., "previously", "earlier") correctly route to `changes`/`history`. Negative values (including fractional values like `-0.1 ms`) are rejected before integer truncation.
+- **Revision Association & Run Scoping:** In `changes` mode, revision records are scoped to `selected_run_id` and associated directly with their relevant transition. Revisions from older runs or unrelated transitions are excluded from explaining this run's movement.
+- **Independent Run Horizon for Explicit Queries:** `at_time` mode evaluates previous-run queries against that run's recorded horizon (`MemoryRepository.get_run_horizon_ms`), preventing active clock resets from falsely rejecting past evidence.
+- **Incompatible Reference Frames Defense:** Comparing sightings across incompatible coordinate frames in `changes` mode explicitly reports `uncertain` rather than claiming no location change occurred.
+- **Preserved Sample Envelope in Telemetry:** Telemetry serialized for evaluation and synthesis preserves `sample_id`, `sim_time_ms`, and `observer_pose` alongside observation payloads.
 
 ---
 
 ## 5. Verification and Test Results
 
-The implementation is verified by 44 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite (628 tests).
+The implementation is verified by 49 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite (633 tests).
 
 ### Test Categories
 1. **Mode-Specific Grounding Tests:**
@@ -200,14 +204,19 @@ The implementation is verified by 44 targeted unit and integration tests in [`te
    - `test_stored_belief_scoped_to_run_earlier_run_cannot_establish_location`: Verifies stored beliefs from older runs cannot establish current location for a new run.
    - `test_time_words_and_historical_intent_preserved`: Verifies parsing of word numbers (e.g., "seven seconds"), mapping "previously" to changes, and rejecting unparseable times.
    - `test_negative_fractional_time_rejected`: Verifies negative fractional times (e.g., `-0.1 ms`) are rejected before integer truncation.
+   - `test_changes_mode_revision_evidence_scoped_and_associated_with_transition`: Verifies revision evidence scoping and per-transition association.
+   - `test_at_time_mode_explicit_previous_run_query_not_capped_by_active_run_clock`: Verifies explicit previous run queries are evaluated against that run's horizon.
+   - `test_changes_mode_incompatible_frames_reports_uncertain`: Verifies uncertainty on incompatible reference frames.
+   - `test_at_time_complete_time_expression_parsing_and_rejection`: Verifies complete time expression parsing and malformed expression rejection.
+   - `test_telemetry_preserves_successful_sample_envelope`: Verifies sample_id and sim_time_ms preservation in structured telemetry.
 
 ### Verification Run
 ```text
 uv run --locked pytest tests/unit/procedural/test_temporal_questions.py -v
-44 passed in 1.94s
+49 passed in 2.29s
 
 uv run --locked pytest -q
-628 passed in 17.87s
+633 passed in 18.18s
 
 uv run --locked ruff check .
 All checks passed!

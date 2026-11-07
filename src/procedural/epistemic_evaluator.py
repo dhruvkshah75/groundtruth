@@ -73,6 +73,7 @@ class EpistemicEvaluator:
         *,
         revise_routes: bool = True,
         capture_time_ms: int | None = None,
+        active_run_id: UUID | None = None,
     ) -> EpistemicEvaluation:
         """Perform epistemic evaluation of execution results against memory and sensors."""
         # 1. Handle planning-level fallbacks
@@ -115,6 +116,7 @@ class EpistemicEvaluator:
                 user_question=user_question,
                 memory_repo=memory_repo,
                 capture_time_ms=capture_time_ms,
+                active_run_id=active_run_id,
             )
 
         # 3. Check for unverifiable sensor state
@@ -547,6 +549,7 @@ class EpistemicEvaluator:
         user_question: str,
         memory_repo: EpistemicMemoryInterface,
         capture_time_ms: int | None = None,
+        active_run_id: UUID | None = None,
     ) -> EpistemicEvaluation:
         """Evaluate observation ledger and temporal belief results for an object location query."""
         temporal_results = plan_result.temporal_results
@@ -561,6 +564,12 @@ class EpistemicEvaluator:
         display_name = (
             intent.entity_mentions[0] if intent and intent.entity_mentions else canonical_entity_id
         )
+
+        selected_run_id = (
+            temporal_results[0].run_id if temporal_results and temporal_results[0].run_id else None
+        )
+        if selected_run_id is None and intent and intent.run_id:
+            selected_run_id = intent.run_id
 
         if mode is None:
             if any(tr.at_sim_time_ms is not None for tr in temporal_results):
@@ -589,17 +598,29 @@ class EpistemicEvaluator:
                 latest_cam_samples.extend(tr.samples)
 
         all_samples = [s for tr in temporal_results for s in tr.samples]
-        telemetry = [
-            s.result.model_dump(mode="json")
-            if isinstance(s.result, SensorObservation)
-            else {
-                "sample_id": str(s.sample_id),
-                "capability": s.request.capability,
-                "status": "unavailable",
-                "reason": s.result.reason,
-            }
-            for s in all_samples
-        ]
+        telemetry: list[dict[str, Any]] = []
+        for s in all_samples:
+            if isinstance(s.result, SensorObservation):
+                obs_dict = s.result.model_dump(mode="json")
+                obs_dict["sample_id"] = str(s.sample_id)
+                obs_dict["run_id"] = str(s.run_id)
+                obs_dict["sim_time_ms"] = s.sim_time_ms
+                obs_dict["sample_sequence"] = s.sample_sequence
+                obs_dict["observer_pose"] = s.observer_pose.model_dump(mode="json")
+                telemetry.append(obs_dict)
+            else:
+                telemetry.append(
+                    {
+                        "sample_id": str(s.sample_id),
+                        "run_id": str(s.run_id),
+                        "sim_time_ms": s.sim_time_ms,
+                        "sample_sequence": s.sample_sequence,
+                        "capability": s.request.capability,
+                        "status": "unavailable",
+                        "reason": s.result.reason,
+                        "observer_pose": s.observer_pose.model_dump(mode="json"),
+                    }
+                )
         memory_facts = [f for m in plan_result.memory_results for f in m.facts]
         trails = [trail for ar in plan_result.audit_results for trail in ar.trails.values()]
         events = [e for trail in trails for e in trail.events]
@@ -894,11 +915,47 @@ class EpistemicEvaluator:
         # 3. Mode: at_time
         if mode == "at_time":
             target_ms = at_sim_time_ms if at_sim_time_ms is not None else 0
-            latest_run_ms = (
-                capture_time_ms
-                if capture_time_ms is not None
-                else (latest_camera.sim_time_ms if latest_camera else None)
-            )
+
+            # Determine whether capture_time_ms belongs to the selected run.
+            # The active request clock is applicable only when it belongs to the run being queried.
+            is_active_run = (
+                active_run_id is not None
+                and selected_run_id is not None
+                and str(active_run_id) == str(selected_run_id)
+            ) or (active_run_id is None and (intent is None or intent.run_id is None))
+
+            if is_active_run:
+                latest_run_ms = (
+                    capture_time_ms
+                    if capture_time_ms is not None
+                    else (latest_camera.sim_time_ms if latest_camera else None)
+                )
+            else:
+                # Explicit previous-run query: use the selected run's own horizon
+                run_horizon = None
+                if (
+                    memory_repo is not None
+                    and hasattr(memory_repo, "get_run_horizon_ms")
+                    and selected_run_id is not None
+                ):
+                    run_horizon = memory_repo.get_run_horizon_ms(selected_run_id)
+                if run_horizon is not None:
+                    latest_run_ms = run_horizon
+                elif latest_camera and (
+                    getattr(latest_camera, "run_id", None) is None
+                    or str(latest_camera.run_id) == str(selected_run_id)
+                ):
+                    latest_run_ms = latest_camera.sim_time_ms
+                elif valid_sightings:
+                    matching_sightings = [
+                        s for s in valid_sightings if str(s.run_id) == str(selected_run_id)
+                    ]
+                    latest_run_ms = (
+                        matching_sightings[0].sim_time_ms if matching_sightings else None
+                    )
+                else:
+                    latest_run_ms = None
+
             if latest_run_ms is None and valid_sightings:
                 latest_run_ms = valid_sightings[0].sim_time_ms
 
@@ -991,6 +1048,7 @@ class EpistemicEvaluator:
                 )
 
             transitions = []
+            incompatible_frames: list[tuple[str, str]] = []
             for i in range(len(valid_sightings) - 1):
                 s1 = valid_sightings[i]
                 s2 = valid_sightings[i + 1]
@@ -1006,27 +1064,89 @@ class EpistemicEvaluator:
                 # Compare object positions in compatible frames. A change in the
                 # observer's location is NOT evidence that the object moved.
                 frames_compatible = (frame1 == frame2) or (not frame1 or not frame2)
-                if frames_compatible and pos1 != pos2:
+                if not frames_compatible:
+                    incompatible_frames.append((frame1, frame2))
+                    continue
+
+                if pos1 != pos2:
                     transitions.append((s1, s2, loc1, loc2))
 
+            if incompatible_frames:
+                f1, f2 = incompatible_frames[0]
+                return EpistemicEvaluation(
+                    status="uncertain",
+                    explanation=(
+                        f"Location changes for {display_name} cannot be verified because "
+                        f"observations use incompatible reference frames ({f1} vs {f2}). "
+                        f"Movement cannot be determined from these observations."
+                    ),
+                    memory_facts=memory_facts,
+                    sensor_telemetry=telemetry,
+                )
+
             if transitions:
+                # Scope revision evidence to selected_run_id and associate each
+                # revision with the relevant observed transition.
+                all_audit_facts: dict[UUID, StoredFact] = {}
+                for tr in trails:
+                    for f in tr.facts:
+                        all_audit_facts[f.fact_id] = f
+
+                run_scoped_events: list[tuple[AuditEvent, set[str], set[str]]] = []
+                for ev in events:
+                    in_facts = [
+                        all_audit_facts[fid] for fid in ev.input_fact_ids if fid in all_audit_facts
+                    ]
+                    out_facts = [
+                        all_audit_facts[fid] for fid in ev.output_fact_ids if fid in all_audit_facts
+                    ]
+                    ev_facts = in_facts + out_facts
+
+                    # Check run scoping: exclude events belonging to other runs
+                    if selected_run_id is not None and str(selected_run_id) != str(UUID(int=0)):
+                        fact_runs = {
+                            f.context.extra_context.get("run_id") or f.evidence.get("run_id")
+                            for f in ev_facts
+                            if (f.context and f.context.extra_context.get("run_id"))
+                            or f.evidence.get("run_id")
+                        }
+                        if any(str(r) != str(selected_run_id) for r in fact_runs if r is not None):
+                            continue
+
+                    from_locs = {f.object for f in in_facts} | {
+                        f.context.location for f in in_facts if f.context and f.context.location
+                    }
+                    to_locs = {f.object for f in out_facts} | {
+                        f.context.location for f in out_facts if f.context and f.context.location
+                    }
+                    run_scoped_events.append((ev, from_locs, to_locs))
+
                 trans_texts = []
+                associated_events: list[AuditEvent] = []
                 for s1, s2, loc1, loc2 in transitions:
-                    trans_texts.append(
+                    trans_desc = (
                         f"sighted at {loc1} at {s1.sim_time_ms} ms (sample ID: {s1.sample_id}), "
                         f"subsequently sighted at {loc2} at {s2.sim_time_ms} ms "
                         f"(sample ID: {s2.sample_id})"
                     )
+                    matching_revs = [
+                        ev
+                        for ev, from_locs, to_locs in run_scoped_events
+                        if (loc1 in from_locs or not from_locs) and (loc2 in to_locs or not to_locs)
+                    ]
+                    if matching_revs:
+                        associated_events.extend(matching_revs)
+                        rev_str = " ".join(
+                            f"Revision record: {ev.reason} (Policy: {ev.policy_rule})."
+                            for ev in matching_revs
+                        )
+                        trans_texts.append(f"{trans_desc}. {rev_str}")
+                    else:
+                        trans_texts.append(trans_desc)
+
                 explanation = (
                     f"Observed transition for {display_name}: " + "; ".join(trans_texts) + "."
                 )
-
-                audit_texts = []
-                for ev in events:
-                    audit_texts.append(f"Revision record: {ev.reason} (Policy: {ev.policy_rule}).")
-                if audit_texts:
-                    explanation += " " + " ".join(audit_texts)
-
                 explanation += (
                     " Note: Two sightings at distinct locations demonstrate that a transition "
                     "occurred, but do not prove continuous path, exact transit duration, or "
@@ -1038,7 +1158,7 @@ class EpistemicEvaluator:
                     memory_facts=memory_facts,
                     sensor_telemetry=telemetry,
                     audit_trails=trails,
-                    audit_events=events,
+                    audit_events=associated_events,
                 )
             else:
                 s_first = valid_sightings[0]
