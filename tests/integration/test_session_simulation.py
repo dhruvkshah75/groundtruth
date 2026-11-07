@@ -219,6 +219,15 @@ def test_slow_checkpoint_does_not_block_other_sessions_or_resurrect_deleted_id(
         service.pump()
         assert service.read_simulation(second)["status"]["sim_time_ms"] == 1000
         with ThreadPoolExecutor() as pool:
+            other_control = pool.submit(
+                service.control_simulation, second, SimulationControl(action="pause")
+            )
+            try:
+                assert other_control.result(timeout=2)["state"] == "paused"
+            finally:
+                # Unblock the writer even if the assertion fails.
+                if not other_control.done():
+                    release.set()
             delete = pool.submit(service.delete_session, first)
             release.set()
             delete.result(timeout=5)

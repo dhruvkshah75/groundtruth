@@ -125,9 +125,10 @@ contains the validated engine replay checkpoint, paired controller checkpoint,
 latest patrol evidence, next sequence, and unprocessed clock time. The existing
 SQLite row commits that JSON and its matching memory image together.
 
-Capture and queue submission are ordered under the session lock. One FIFO writer
-per service performs SQLite writes and deletions, so an older capture cannot commit
-after a newer one or recreate a deleted session. Dirty runs checkpoint at one wall
+Capture and queue submission are ordered under the session lock. Each session has
+its own FIFO writer, so an older capture cannot commit after a newer one or recreate
+a deleted session. Session writers share the SQLite store, whose transactions still
+serialize database access. Dirty runs checkpoint at one wall
 second intervals, with immediate captures for controls and lifecycle changes.
 A writer failure pauses the affected run with a persistence diagnostic.
 

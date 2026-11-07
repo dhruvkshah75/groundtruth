@@ -196,6 +196,7 @@ class AgentSession:
     _last_save: float = field(init=False, default=0)
     _last_view: float = field(init=False, default=0)
     _pending_save: Future | None = field(init=False, default=None)
+    _writer: ThreadPoolExecutor | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.agent = _new_agent(self.config)
@@ -798,11 +799,6 @@ class AgentService:
         self._background = background
         self._stop = threading.Event()
         self._runner: threading.Thread | None = None
-        self._writer = (
-            ThreadPoolExecutor(max_workers=1, thread_name_prefix="groundtruth-save")
-            if store
-            else None
-        )
 
     def get_session(self, session_id: str) -> AgentSession:
         canonical_id = _canonical_session_id(session_id)
@@ -821,6 +817,10 @@ class AgentService:
                 if len(self._sessions) >= 128:
                     raise RuntimeError("The local demo has reached its 128-session limit.")
             session = AgentSession(config=self._config, now=self._now)
+            if self._store:
+                session._writer = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="groundtruth-save"
+                )
             try:
                 stored = self._store.load(canonical_id) if self._store else None
                 if stored:
@@ -885,10 +885,10 @@ class AgentService:
                 session.lock.release()
 
     def _queue_save(self, key: str, session: AgentSession) -> Future | None:
-        # Session lock orders capture and submission. All writes/deletes share one
-        # FIFO writer, so a slow old save cannot land after replacement/deletion.
+        # Each session's FIFO writer preserves submission order without holding up
+        # other sessions. Deletion drains it before the ID can be reused.
         if (
-            self._writer is None
+            session._writer is None
             or session.load_error
             or (session.runtime and session.runtime.error)
         ):
@@ -908,7 +908,7 @@ class AgentService:
                         runtime.fail(runtime.persistence_error)
                 raise
 
-        future = self._writer.submit(write)
+        future = session._writer.submit(write)
         session._pending_save = future
         session._dirty = False
         session._last_save = self._now()
@@ -983,8 +983,12 @@ class AgentService:
                     session._retired = True
                     session.runtime = None
                     session.agent.close()
-            if self._writer is not None and self._store is not None:
-                self._writer.submit(self._store.delete, key).result()
+            if self._store is not None:
+                if session is not None and session._writer is not None:
+                    session._writer.submit(self._store.delete, key).result()
+                    session._writer.shutdown()
+                else:
+                    self._store.delete(key)
 
     def shutdown(self) -> None:
         with self._lifecycle:
@@ -1006,8 +1010,9 @@ class AgentService:
                         except Exception:
                             LOGGER.warning("Failed to capture shutdown checkpoint")
                     session._retired = True
-            if self._writer is not None:
-                self._writer.shutdown()
+            for _, session in sessions:
+                if session._writer is not None:
+                    session._writer.shutdown()
             for _, session in sessions:
                 with session.lock:
                     session.runtime = None
