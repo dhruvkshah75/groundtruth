@@ -340,6 +340,11 @@ class SimulationEngine:
         self._snap, self._motions, self._cursor = snap, motions, cursor
         self._robot_command = None
 
+    @property
+    def pending_robot_command(self) -> Pose | None:
+        """Detached pending command for an atomic runtime/controller checkpoint handoff."""
+        return self._robot_command.model_copy(deep=True) if self._robot_command else None
+
     def export_state(self) -> dict:
         """Versioned replay checkpoint; includes input order and pending commands."""
         return {

@@ -24,6 +24,7 @@
 
 - [Observation ledger and temporal queries (P2-04)](phase-two/Observation_Ledger.md) - durable raw observation envelope persistence, normalized detection indexing, run-scoped temporal queries, idempotence, and backward compatibility.
 
+- [Robot patrol and reactive safety controller (P2-06)](phase-two/Patrol_Controller.md) - deterministic waypoint patrol, front-LiDAR reactive stopping, clearance odometry, and obstacle resumption.
 - [Temporal belief ingestion and epistemic summaries (P2-05)](phase-two/Temporal_Belief_Ingestion.md) - time-aware belief updates, auditable revisions, last-seen tracking, and route verification.
 
 ## Supporting context
