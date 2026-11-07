@@ -64,7 +64,8 @@
   --success-surface: #292929;
   --success-line: #494949;
 }
-* { box-sizing: border-box; scrollbar-color: #c9bfce transparent; scrollbar-width: thin; }
+* { box-sizing: border-box; scrollbar-color: transparent transparent; scrollbar-width: thin; }
+[data-scrolling] { scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent; }
 html, body, #root { width: 100%; height: 100%; min-width: 320px; margin: 0; }
 body { height: 100dvh; overflow: hidden; }
 button, input, textarea { font: inherit; }
@@ -427,7 +428,6 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
   .chat-dialog-actions button { min-height: 44px; }
 }
 
-:root[data-theme="dark"] { scrollbar-color: #505050 transparent; }
 :root[data-theme="dark"] ::selection { color: var(--text); background: #454545; }
 
 :root[data-theme="dark"] .workspace-main { background: var(--background); }
@@ -502,19 +502,18 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 /* The simulation stays mounted when a companion pane opens or closes. */
 .workspace-stage, .workspace-pane { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; position: relative; }
 .workspace-nav-item[draggable="true"] { cursor: grab; }
-.workspace-stage.with-dock { display: grid; grid-template-columns: var(--primary-pane-width) 10px minmax(0, 1fr); }
+.workspace-stage.with-dock { display: grid; grid-template-columns: var(--primary-pane-width) 1px minmax(0, 1fr); }
 .workspace-split-divider {
-  display: grid;
-  place-items: center;
+  position: relative;
+  z-index: 1;
   cursor: col-resize;
   touch-action: none;
-  background: var(--surface-raised);
-  border-inline: 1px solid var(--line);
+  background: var(--line-strong);
 }
-.workspace-split-divider::after { content: ""; width: 2px; height: 40px; border-radius: 2px; background: var(--muted); }
-.workspace-split-divider:hover::after, .workspace-split-divider:focus-visible::after { background: var(--accent); }
-.workspace-split-divider:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; }
-.workspace-dock { border-left: 1px solid var(--line-strong); overflow: hidden; background: var(--surface); }
+.workspace-split-divider::after { content: ""; position: absolute; inset: 0 -5px; }
+.workspace-split-divider:hover, .workspace-split-divider:focus-visible { background: var(--accent); }
+.workspace-split-divider:focus-visible { outline: none; }
+.workspace-dock { overflow: hidden; background: var(--surface); }
 .workspace-dock-header { display: flex; align-items: center; gap: 6px; min-height: 46px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .workspace-dock-header h2 { margin: 0 auto 0 0; font-size: .875rem; font-weight: 600; }
 .workspace-stage.with-dock :is(.conversation-inner, .composer-wrap) { padding-inline: 14px; }
@@ -533,6 +532,5 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
   text-align: center;
 }
 .workspace-drop-zone > div { display: grid; justify-items: center; gap: 8px; pointer-events: none; }
+.workspace-drop-zone.left { inset: 8px auto 8px 8px; }
 .workspace-drop-zone svg { color: var(--accent); }
-.workspace-docked-graph-options { margin: 12px; padding: 10px 8px; border-top: 1px solid var(--line); }
-.workspace-docked-graph-options > summary { color: var(--text); cursor: pointer; font-size: .8125rem; }

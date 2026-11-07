@@ -44,7 +44,9 @@ const tabs = [
 ] as const;
 const tabLabel = (tab: WorkspaceTab) => tabs.find(({ id }) => id === tab)?.label ?? "";
 const MIN_PANE_WIDTH = 320;
-const SPLIT_DIVIDER_WIDTH = 10;
+const SPLIT_DIVIDER_WIDTH = 1;
+const SPLIT_SIDES = ["left", "right"] as const;
+type SplitSide = typeof SPLIT_SIDES[number];
 const tabFromPath = (): WorkspaceTab =>
   tabs.find(({ id }) => `/${id}` === window.location.pathname.replace(/\/$/, ""))?.id ?? "chat";
 
@@ -101,6 +103,7 @@ function App() {
   const primaryWidth = Math.round(Math.max(MIN_PANE_WIDTH, Math.min(maxPaneWidth, splitRatio * splitWidth)));
   const visibleTabs = visibleDock ? [activeTab, visibleDock] : [activeTab];
   const chatVisible = activeTab === "chat" || visibleDock === "chat";
+  const graphVisible = activeTab === "graph" || visibleDock === "graph";
   const simulationVisible = activeTab === "simulation" || visibleDock === "simulation";
   const stageRef = useRef<HTMLDivElement>(null);
 
@@ -112,6 +115,27 @@ function App() {
     const resize = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
+  }, []);
+  useEffect(() => {
+    const timers = new Map<HTMLElement, number>();
+    const showScrollbar = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      window.clearTimeout(timers.get(target));
+      target.dataset.scrolling = "";
+      timers.set(target, window.setTimeout(() => {
+        delete target.dataset.scrolling;
+        timers.delete(target);
+      }, 750));
+    };
+    document.addEventListener("scroll", showScrollbar, true);
+    return () => {
+      document.removeEventListener("scroll", showScrollbar, true);
+      for (const [target, timer] of timers) {
+        window.clearTimeout(timer);
+        delete target.dataset.scrolling;
+      }
+    };
   }, []);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
   const resizeSidebar = (width: number) => {
@@ -208,9 +232,15 @@ function App() {
     window.history.pushState({}, "", tab === "chat" ? "/" : `/${tab}`);
     if (window.innerWidth <= 760) setSidebarOpen(false);
   };
-  function openDock(pane: WorkspaceTab) {
+  function openDock(pane: WorkspaceTab, side: SplitSide) {
     if (!canDock) return;
     setDraggedPane(null);
+    if (side === "left") {
+      if (pane === activeTab) return;
+      selectTab(pane);
+      setDock(pane === visibleDock ? activeTab : visibleDock ?? activeTab);
+      return;
+    }
     if (pane === activeTab) {
       if (!visibleDock) return;
       selectTab(visibleDock);
@@ -280,7 +310,7 @@ function App() {
       setState(next);
       setQuestion("");
       setLoadedScenario(chats.find((chat) => chat.id === id)?.scenario ?? null);
-      selectTab("chat");
+      if (!chatVisible) selectTab("chat");
     } catch (cause) {
       setSessionId(previous);
       setError(cause instanceof Error ? cause.message : "Could not open this chat.");
@@ -317,7 +347,7 @@ function App() {
       setState(next);
       setQuestion("");
       setLoadedScenario(null);
-      selectTab("chat");
+      if (!chatVisible) selectTab("chat");
       requestAnimationFrame(() => questionInput.current?.focus());
     } catch (cause) {
       setSessionId(previous);
@@ -351,7 +381,7 @@ function App() {
         setChats(remaining);
         try { setState(await api.state()); }
         catch (cause) { setError(cause instanceof Error ? cause.message : "Could not open the remaining chat."); }
-        selectTab("chat");
+        if (!chatVisible) selectTab("chat");
       } else {
         setSessionId(previous);
         setChats(remaining);
@@ -400,8 +430,8 @@ function App() {
             return <button key={id} id={`workspace-tab-${id}`} type="button"
               className={`workspace-nav-item ${activeTab === id ? "active" : ""}`}
               draggable={draggable} aria-current={activeTab === id ? "page" : undefined}
-              aria-keyshortcuts={draggable ? "Shift+Enter" : undefined}
-              title={draggable ? `Drag ${label} to the right or press Shift+Enter to split` : undefined}
+              aria-keyshortcuts={draggable ? "Shift+Enter Shift+ArrowLeft" : undefined}
+              title={draggable ? `Drag ${label} to either side of the workspace` : undefined}
               onDragStart={draggable ? (event) => {
                 event.dataTransfer.setData("text/plain", id);
                 event.dataTransfer.effectAllowed = "move";
@@ -409,9 +439,9 @@ function App() {
               } : undefined}
               onDragEnd={() => setDraggedPane(null)}
               onKeyDown={(event) => {
-                if (draggable && event.shiftKey && event.key === "Enter") {
+                if (draggable && event.shiftKey && (event.key === "Enter" || event.key === "ArrowLeft")) {
                   event.preventDefault();
-                  openDock(id);
+                  openDock(id, event.key === "ArrowLeft" ? "left" : "right");
                 }
               }}
               onClick={() => selectTab(id)}>
@@ -428,7 +458,7 @@ function App() {
             </button>
           ))}
         </div>}
-        {activeTab === "chat" && <section className="chat-list" aria-label="Saved chats">
+        {chatVisible && <section className="chat-list" aria-label="Saved chats">
           <div className="chat-list-heading"><h2>Chats</h2></div>
           {chats.map((chat) => <div className={`chat-list-item ${chat.id === activeChatId ? "active" : ""}`} key={chat.id}>
             {renamingChat === chat.id ? <form className="chat-rename" onSubmit={(event) => { event.preventDefault(); saveChatName(chat.id); }} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setRenamingChat(null); } }}>
@@ -445,10 +475,7 @@ function App() {
           </div>)}
         </section>}
         {simulationVisible && presenterInSidebar && <div ref={setPresenterTarget} className="workspace-presenter-target" />}
-        {visibleDock === "graph" && <details className="workspace-docked-graph-options">
-          <summary>Belief graph options</summary><div ref={setGraphSidebarTarget} className="workspace-graph-controls" />
-        </details>}
-        {activeTab === "graph" && <div ref={setGraphSidebarTarget} className="workspace-graph-controls" />}
+        {graphVisible && <div ref={setGraphSidebarTarget} className="workspace-graph-controls" />}
         <div className="workspace-sidebar-footer">
           <button type="button" className="workspace-nav-item" onClick={() => void resetAgent()} disabled={!backendReachable || busy}>
             {action === "reset" ? <LoaderCircle size={18} className="spin" /> : <RotateCcw size={18} strokeWidth={1.6} />}<span>Reset current Agent</span>
@@ -534,14 +561,17 @@ function App() {
               </Suspense>}
             </div>
           </Fragment>)}
-          {canDock && draggedPane && <div className="workspace-drop-zone" aria-hidden="true"
+          {canDock && draggedPane && SPLIT_SIDES.map((side) => <div key={side}
+            className={`workspace-drop-zone ${side}`} aria-hidden="true"
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
             onDrop={(event) => {
               event.preventDefault();
-              if (event.dataTransfer.getData("text/plain") === draggedPane) openDock(draggedPane);
+              if (event.dataTransfer.getData("text/plain") === draggedPane) openDock(draggedPane, side);
             }}>
-            <div><PanelRightOpen size={23} /><strong>Drop {tabLabel(draggedPane)} here</strong></div>
-          </div>}
+            <div>{side === "left" ? <PanelLeftOpen size={23} /> : <PanelRightOpen size={23} />}
+              <strong>Drop {tabLabel(draggedPane)} {side}</strong>
+            </div>
+          </div>)}
         </div>
       </main>
       {chatDialog && <ChatActionDialog dialog={chatDialog} onClose={() => setChatDialog(null)} onDelete={(chat) => void deleteChat(chat)} onLoadScenario={(scenario) => void loadScenario(scenario, true)} />}

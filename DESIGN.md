@@ -169,7 +169,7 @@ Use rounded controls within a restrained, line-based interface: 8px icon control
 
 ### Navigation and scenario controls
 
-Navigation is a quiet, icon-led list with 40px minimum item height, 12px corners, 9px by 12px padding, and 14px text. Hover uses the raised surface; the active page uses the user-bubble surface and weight 500. Chat, System inspector, Belief graph, and Simulation share the same left navigation. When space allows, drag a tab to the right or press Shift+Enter on it to open it beside the current view. A center divider adjusts both pane widths and supports arrow keys. Scenario buttons remain simple action labels and show a check for the loaded preset. Retain existing BrainCircuit/Lucide icons. The visible assistant name is lowercase `agent` in the header, response identity, and document title.
+Navigation is a quiet, icon-led list with 40px minimum item height, 12px corners, 9px by 12px padding, and 14px text. Hover uses the raised surface; the active page uses the user-bubble surface and weight 500. Chat, System inspector, Belief graph, and Simulation share the same left navigation. When space allows, drag a tab to either side of the workspace. Shift+Left Arrow places it on the left, and Shift+Enter places it on the right. A one-pixel divider adjusts both pane widths and supports arrow keys. The sidebar shows saved chats and graph controls whenever their views are open. Thin, translucent scrollbars appear during scrolling and hide when idle. Scenario buttons remain simple action labels and show a check for the loaded preset. Retain existing BrainCircuit/Lucide icons. The visible assistant name is lowercase `agent` in the header, response identity, and document title.
 
 ### Buttons and composer
 

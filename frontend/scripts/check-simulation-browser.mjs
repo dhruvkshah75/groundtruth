@@ -204,12 +204,12 @@ try {
     await mkdir(output, { recursive: true });
     await page.screenshot({ path: join(output, "simulation-workspace-desktop.png") });
   }
-  async function dragTab(name) {
+  async function dragTab(name, side = "right") {
     const source = await button(name).boundingBox();
     await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
     await page.mouse.down();
     await page.mouse.move(source.x + source.width / 2 + 16, source.y + source.height / 2, { steps: 4 });
-    const dropZone = page.locator(".workspace-drop-zone");
+    const dropZone = page.locator(`.workspace-drop-zone.${side}`);
     await dropZone.waitFor();
     const destination = await dropZone.boundingBox();
     await page.mouse.move(destination.x + destination.width / 2, destination.y + 80, { steps: 6 });
@@ -234,6 +234,7 @@ try {
 
   const divider = page.getByRole("separator", { name: "Resize split view" });
   const center = await divider.boundingBox();
+  assert.equal(center.width, 1);
   await page.mouse.move(center.x + center.width / 2, center.y + 50);
   await page.mouse.down();
   await page.mouse.move(center.x + center.width / 2 - 100, center.y + 50, { steps: 8 });
@@ -244,11 +245,33 @@ try {
   assert.ok((await divider.boundingBox()).x > afterDrag);
   if (output) await page.screenshot({ path: join(output, "simulation-workspace-split.png") });
 
+  await button("Second chat").click();
+  await page.getByText("No run loaded", { exact: true }).waitFor();
+  await composer.waitFor();
+  await button("Warehouse demo").click();
+  await robot.waitFor();
+  assert.equal(await clock.innerText(), pausedTime);
+
+  await dragTab("Chat", "left");
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
+  assert.ok((await page.getByRole("textbox", { name: "Ask the cognitive Agent" }).boundingBox()).x < (await dock.boundingBox()).x);
+  await button("Second chat").waitFor();
+  assert.equal(await clock.innerText(), pausedTime);
+  await dragTab("Chat");
+  await composer.waitFor();
+  await button("Second chat").waitFor();
+
+  const mapPane = page.getByRole("region", { name: "Warehouse simulation" });
+  const hiddenScrollbar = await mapPane.evaluate((el) => getComputedStyle(el).scrollbarColor);
+  await mapPane.evaluate((el) => { el.scrollTop = 100; });
+  await eventually(async () => (await mapPane.evaluate((el) => getComputedStyle(el).scrollbarColor)) !== hiddenScrollbar);
+  await eventually(async () => (await mapPane.evaluate((el) => getComputedStyle(el).scrollbarColor)) === hiddenScrollbar);
+  await mapPane.evaluate((el) => { el.scrollTop = 0; });
+
   await dragTab("System inspector");
   await dock.getByRole("region", { name: "System inspector", exact: true }).waitFor();
   await button("Belief graph").press("Shift+Enter");
   await dock.getByRole("region", { name: "Belief network" }).waitFor();
-  await page.getByText("Belief graph options", { exact: true }).click();
   await button("Active beliefs").waitFor();
   await dragTab("Simulation");
   await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();

@@ -37,12 +37,13 @@ or on a narrow screen, open **Presenter controls** above the map to reach
 the same actions. The **Evidence** link jumps to the panels below the map.
 
 When the workspace has at least 900 px available beside the sidebar, drag
-any other navigation tab onto the right-hand drop area to open it beside the
-current view. Shift+Enter on a tab provides the keyboard equivalent. Drag the
-center divider or use its arrow keys to adjust the pane widths. The right pane
-has controls to close it or open its view full screen. The simulation stays
-mounted as long as one pane shows it, and both panes use the active chat's
-session. The layout returns to one pane as the window narrows.
+a navigation tab to the left or right drop area. Shift+Left Arrow places it
+on the left, and Shift+Enter places it on the right. Drag the center divider
+or use its arrow keys to adjust the widths. The right pane can be closed or
+opened full screen. The sidebar shows saved chats whenever Chat is visible
+and graph controls whenever Belief graph is visible. Switching saved chats
+keeps the split and loads the selected session in both panes. The layout
+returns to one pane as the window narrows.
 
 Open **Presenter disruptions** to schedule cart movement, parcel relocation to
 a named station, lighting changes, or camera and LiDAR outages and recovery. A
@@ -99,7 +100,7 @@ conflict are visible, and the client does not automatically replay mutations.
   1024, 768 and 390 pixels. It covers the heading and coordinates, real motion,
   keyboard focus and step, paused rate changes, all disruption types, conflict
   and stale-run errors, outages and recovery, delayed polls, visibility,
-  navigation, per-chat state, drag and keyboard docking, divider resizing,
+  navigation, per-chat state, two-sided docking, divider resizing, scrollbars,
   composer growth, themed dropdowns, and presenter controls on a narrow
   screen. It also checks text contrast and reduced motion for controls.
   The screenshots come from loaded server state.
