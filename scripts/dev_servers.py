@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def available_api_port() -> int:
+    """Prefer the usual API port, falling back to a free local port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", 8765))
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 def main() -> int:
@@ -24,11 +38,16 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
+        port = available_api_port()
+        env = os.environ.copy()
+        env["GROUNDTRUTH_API_PORT"] = str(port)
+        if port != 8765:
+            print(f"API port 8765 is in use; using {port} instead.", flush=True)
         for command in (
-            ["uv", "run", "python", "-m", "src.web.server"],
+            ["uv", "run", "python", "-m", "src.web.server", "--port", str(port)],
             ["npm", "--prefix", "frontend", "run", "dev"],
         ):
-            processes.append(subprocess.Popen(command, cwd=ROOT, start_new_session=True))
+            processes.append(subprocess.Popen(command, cwd=ROOT, env=env, start_new_session=True))
 
         while not interrupted:
             for process in processes:

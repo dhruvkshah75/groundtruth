@@ -6,6 +6,8 @@ import {
   PanelLeftOpen, Pencil, Plus, RotateCcw, ScanLine, Sparkles, Sun, Moon, Trash2, X,
 } from "lucide-react";
 import { api, getSessionId, setSessionId } from "./api";
+import { useMotionPresence } from "./useMotionPresence";
+import { displayText, environmentTableData, fieldLabel, formatTimestamp, isInternalIdField, isTimestampField } from "./display";
 import type { AgentResponse, ApiHealth, AppState, Fact } from "./types";
 
 const BeliefGraphPage = lazy(() => import("./BeliefGraphPage"));
@@ -47,15 +49,8 @@ const PERSPECTIVE_LABELS: Record<string, string> = {
   historical_perspective: "Historical record",
 };
 
-function formatTime(value: string | null | undefined): string {
-  if (!value) return "";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
+const formatTime = formatTimestamp;
 
-function shortId(value: string): string {
-  return value.length > 15 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
-}
 
 function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => document.documentElement.dataset.theme === "light" ? "light" : "dark");
@@ -350,20 +345,10 @@ function App() {
               <button type="submit" aria-label="Save chat name" disabled={!renameValue.trim()}><Check size={15} /></button>
               <button type="button" aria-label="Cancel rename" onClick={() => setRenamingChat(null)}><X size={15} /></button>
             </form> : <>
-              <button type="button" className="chat-list-select" title={chatLabel(chat)} aria-current={chat.id === activeChatId ? "page" : undefined} disabled={busy} onClick={() => void switchChat(chat.id)}><MessageSquareText size={16} /><span>{chatLabel(chat)}</span></button>
+              <button type="button" className="chat-list-select" title={displayText(chatLabel(chat))} aria-current={chat.id === activeChatId ? "page" : undefined} disabled={busy} onClick={() => void switchChat(chat.id)}><MessageSquareText size={16} /><span>{displayText(chatLabel(chat))}</span></button>
               <div className="chat-menu-wrap" data-chat-menu>
                 <button type="button" className="chat-menu-trigger" aria-label={`Options for ${chatLabel(chat)}`} aria-expanded={openChatMenu === chat.id} aria-haspopup="menu" disabled={busy} onClick={(event) => { chatMenuTrigger.current = event.currentTarget; setOpenChatMenu((current) => current === chat.id ? null : chat.id); }}><MoreHorizontal size={18} /></button>
-                {openChatMenu === chat.id && <div className="chat-menu" role="menu" aria-label={`Options for ${chatLabel(chat)}`} ref={(menu) => menu?.querySelector<HTMLButtonElement>("button")?.focus()} onKeyDown={(event) => {
-                  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-                  event.preventDefault();
-                  const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
-                  const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-                  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
-                  buttons[next]?.focus();
-                }}>
-                  <button type="button" role="menuitem" tabIndex={-1} onClick={() => { setRenameValue(chatLabel(chat)); setRenamingChat(chat.id); setOpenChatMenu(null); }}><Pencil size={15} />Rename</button>
-                  <button type="button" role="menuitem" tabIndex={-1} className="chat-menu-delete" onClick={() => { setOpenChatMenu(null); setChatDialog({ kind: "delete", chat }); }}><Trash2 size={15} />Delete</button>
-                </div>}
+                <ChatMenu chat={chat} open={openChatMenu === chat.id} onRename={() => { setRenameValue(chatLabel(chat)); setRenamingChat(chat.id); setOpenChatMenu(null); }} onDelete={() => { setOpenChatMenu(null); setChatDialog({ kind: "delete", chat }); }} />
               </div>
             </>}
           </div>)}
@@ -385,7 +370,7 @@ function App() {
         <header className="workspace-header">
           <div className="workspace-heading">
             <button ref={sidebarToggle} type="button" className="icon-button" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}><PanelLeftOpen size={19} /></button>
-            <h1 title={activeTab === "chat" && activeChat ? chatLabel(activeChat) : undefined}>{activeTab === "chat" && activeChat ? chatLabel(activeChat) : tabs.find((tab) => tab.id === activeTab)?.label}</h1>
+            <h1 title={activeTab === "chat" && activeChat ? displayText(chatLabel(activeChat)) : undefined}>{activeTab === "chat" && activeChat ? displayText(chatLabel(activeChat)) : tabs.find((tab) => tab.id === activeTab)?.label}</h1>
           </div>
 
           <button type="button" className="icon-button theme-toggle" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</button>
@@ -395,7 +380,7 @@ function App() {
         {activeTab === "chat" && <section className="chat-workspace" aria-label="Chat">
           <div className="conversation" role="log" aria-label="Conversation" aria-busy={action === "ask"}>
             <div className={`conversation-inner ${!state?.history.length ? "is-empty" : ""}`}>
-              {state?.history.length ? state.history.map((response, index) => <ConversationTurn key={`${response.question}-${index}`} response={response} />) : (
+              {state?.history.length ? state.history.map((response, index) => <ConversationTurn key={`${displayText(response.question)}-${index}`} response={response} />) : (
                 <div className="empty-conversation">
                   <div className="welcome-mark"><BrainCircuit size={34} strokeWidth={1.4} /></div>
                   <h2>What would you like to know?</h2>
@@ -427,6 +412,26 @@ function App() {
   );
 }
 
+function ChatMenu({ chat, open, onRename, onDelete }: { chat: Chat; open: boolean; onRename: () => void; onDelete: () => void }) {
+  const { present, phase } = useMotionPresence(open, "--dropdown-close-dur");
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (present && open) menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [present, open]);
+  if (!present) return null;
+  return <div ref={(element) => { menuRef.current = element; if (element) element.inert = !open; }} className={`chat-menu t-dropdown ${phase === "open" ? "is-open" : phase === "exit" ? "is-closing" : ""}`} data-origin="top-right" role="menu" aria-hidden={!open} aria-label={`Options for ${chatLabel(chat)}`} onKeyDown={(event) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  }}>
+    <button type="button" role="menuitem" tabIndex={-1} onClick={onRename}><Pencil size={15} />Rename</button>
+    <button type="button" role="menuitem" tabIndex={-1} className="chat-menu-delete" onClick={onDelete}><Trash2 size={15} />Delete</button>
+  </div>;
+}
+
 function ChatActionDialog({ dialog, onClose, onDelete, onLoadScenario }: { dialog: ChatDialog; onClose: () => void; onDelete: (chat: Chat) => void; onLoadScenario: (scenario: "scenario-a" | "scenario-b") => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -448,7 +453,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
 
   return (
     <article className="conversation-turn">
-      <div className="user-message">{response.question}</div>
+      <div className="user-message">{displayText(response.question)}</div>
       <div className="assistant-message">
         <div className="agent-heading">
           <div className="agent-icon"><BrainCircuit size={16} /></div>
@@ -463,13 +468,13 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
           </div>
         </div>
 
-        <div className="answer-text"><ReactMarkdown skipHtml>{response.answer}</ReactMarkdown></div>
+        <div className="answer-text"><ReactMarkdown skipHtml remarkPlugins={[formatMarkdownIdentifiers]}>{response.answer}</ReactMarkdown></div>
         {response.perspectives && (
           <div className="perspective-cards">
             {Object.entries(response.perspectives).map(([key, value]) => (
               <div className="perspective-card" key={key}>
                 <span>{PERSPECTIVE_LABELS[key] ?? key.replaceAll("_", " ")}</span>
-                <p>{value}</p>
+                <p>{displayText(value)}</p>
               </div>
             ))}
           </div>
@@ -480,7 +485,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
             <div className="revision-heading"><Check size={15} /><strong>Belief revision recorded</strong></div>
             {response.revisions.map((revision) => (
               <p key={revision.audit_event.event_id}>
-                {revision.audit_event.reason} · rule <code>{revision.audit_event.policy_rule}</code>
+                {displayText(revision.audit_event.reason)} · rule <code>{displayText(revision.audit_event.policy_rule)}</code>
               </p>
             ))}
           </div>
@@ -495,7 +500,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
             >
               <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                 <Sparkles size={12} />
-                <span>ReAct Tool Cycle: <code>{trace.tool_name}</code></span>
+                <span>ReAct Tool Cycle: <code>{displayText(trace.tool_name)}</code></span>
               </span>
               <ChevronDown size={13} className={`trace-chevron ${showTrace ? "open" : ""}`} />
             </button>
@@ -504,8 +509,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
                 <div className="react-step-row">
                   <span className="step-label"><span>1.</span><span>Proposed Tool</span></span>
                   <div className="step-content">
-                    <code>{trace.tool_name}({JSON.stringify(trace.arguments)})</code>
-                    <small>Call ID: {trace.tool_call_id}</small>
+                    <><strong>{displayText(trace.tool_name)}</strong><StructuredValue value={trace.arguments} /></>
                   </div>
                 </div>
                 <div className="react-step-row">
@@ -514,7 +518,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
                     {trace.approved_operations.length > 0 ? (
                       <div className="ops-list">
                         {trace.approved_operations.map((op, i) => (
-                          <span key={i} className="op-tag"><Check size={11} /> {op}</span>
+                          <span key={i} className="op-tag"><Check size={11} /> {displayText(op)}</span>
                         ))}
                       </div>
                     ) : (
@@ -531,17 +535,10 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
                           <div key={i} className="trace-op-item">
                             <div className="trace-op-header">
                               <span className={`op-status-badge status-${op.status}`}>
-                                {op.ran ? <Check size={10} /> : null} {op.name} ({op.status})
+                                {op.ran ? <Check size={10} /> : null} {displayText(op.name)} ({displayText(op.status)})
                               </span>
-                              {op.evidence_ids.length > 0 && (
-                                <span className="trace-op-ids">
-                                  IDs: {op.evidence_ids.map((id) => (
-                                    <code key={id} className="id-tag">{shortId(id)}</code>
-                                  ))}
-                                </span>
-                              )}
                             </div>
-                            <div className="trace-op-summary">{op.summary}</div>
+                            <div className="trace-op-summary">{displayText(op.summary)}</div>
                           </div>
                         ))}
                       </div>
@@ -557,7 +554,7 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
                 <div className="react-step-row">
                   <span className="step-label"><span>4.</span><span>Response Synthesis</span></span>
                   <div className="step-content">
-                    <span className="model-tag">Source: {trace.explanation_source} {trace.model ? `(${trace.model})` : ""}</span>
+                    <span className="model-tag">Source: {displayText(trace.explanation_source)}</span>
                   </div>
                 </div>
               </div>
@@ -597,20 +594,33 @@ function AuditTrailInline({ response }: { response: AgentResponse }) {
         {facts.map((fact, index) => (
           <div className={`audit-fact ${fact.superseded_by ? "superseded" : "active"}`} key={fact.fact_id}>
             <span>{fact.superseded_by ? "Previous belief" : "Current belief"}</span>
-            <strong>{fact.subject} <code>{fact.predicate}</code> {fact.object}</strong>
-            <small>{fact.source_agent} · {Math.round(fact.confidence_score * 100)}% confidence</small>
+            <strong>{displayText(fact.subject)} <code>{displayText(fact.predicate)}</code> {displayText(fact.object)}</strong>
+            <small>{displayText(fact.source_agent)} · {Math.round(fact.confidence_score * 100)}% confidence</small>
             {index < facts.length - 1 && <i aria-hidden="true">→</i>}
           </div>
         ))}
       </div>
       {events.map((event) => (
         <div className="audit-event-explanation" key={event.event_id}>
-          <p>{event.reason}</p>
-          <small>Policy: <code>{event.policy_rule}</code> · {formatTime(event.created_at)}</small>
+          <p>{displayText(event.reason)}</p>
+          <small>Policy: <code>{displayText(event.policy_rule)}</code> · {formatTime(event.created_at)}</small>
         </div>
       ))}
     </section>
   );
+}
+
+function InspectorSection({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  return <div className="inspector-section t-acc" data-open={open}>
+    <button type="button" className="inspector-section-heading t-acc-head" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen((value) => !value)}>
+      <span>{title}</span><span className="t-acc-chevron"><ChevronDown size={16} /></span>
+    </button>
+    <div className="t-acc-panel" id={panelId} aria-hidden={!open} ref={(element) => { if (element) element.inert = !open; }}>
+      <div className="t-acc-panel-inner">{children}</div>
+    </div>
+  </div>;
 }
 
 function Inspector({ state }: { state: AppState | null }) {
@@ -621,8 +631,7 @@ function Inspector({ state }: { state: AppState | null }) {
         <div><h2>Inside the Agent</h2><p>Reasoning, evidence, and the current world state.</p></div>
       </header>
       <div className="inspector-content">
-        <details className="inspector-section">
-          <summary><span>Tier 1 · graph &amp; evidence ledger</span><ChevronDown size={16} /></summary>
+        <InspectorSection title="Tier 1 · graph &amp; evidence ledger">
           <div className="inspector-section-body">
             {state ? (
               <>
@@ -630,11 +639,11 @@ function Inspector({ state }: { state: AppState | null }) {
                   <ValueCard label="Active nodes">{state.graph.node_count}</ValueCard>
                   <ValueCard label="Active edges">{state.graph.edge_count}</ValueCard>
                 </div>
-                <ValueCard label="Active graph nodes">{state.graph.nodes.length ? state.graph.nodes.join(", ") : "No active graph nodes."}</ValueCard>
+                <ValueCard label="Active graph nodes">{state.graph.nodes.length ? state.graph.nodes.map(displayText).join(", ") : "No active graph nodes."}</ValueCard>
                 <InspectorCard label="Active belief graph" className="table-card">
                   {state.graph.edges.length ? (
-                    <div className="table-scroll"><table><thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Source</th></tr></thead><tbody>
-                      {state.graph.edges.map((edge) => <tr key={edge.key}><td>{edge.source}</td><td>{edge.predicate}</td><td>{edge.target}</td><td>{edge.source_agent}</td></tr>)}
+                    <div className="table-scroll environment-table-scroll" role="region" aria-label="Active belief graph, scroll horizontally for more fields" tabIndex={0}><table className="environment-table"><thead><tr><th scope="col">Subject</th><th scope="col">Predicate</th><th scope="col">Object</th><th scope="col">Source</th></tr></thead><tbody>
+                      {state.graph.edges.map((edge) => <tr key={edge.key}><th scope="row">{displayText(edge.source)}</th><td>{displayText(edge.predicate)}</td><td>{displayText(edge.target)}</td><td>{displayText(edge.source_agent)}</td></tr>)}
                     </tbody></table></div>
                   ) : <p className="empty-detail">No active edges in the graph.</p>}
                 </InspectorCard>
@@ -642,21 +651,20 @@ function Inspector({ state }: { state: AppState | null }) {
               </>
             ) : <p className="empty-detail">Agent state has not been retrieved.</p>}
           </div>
-        </details>
+        </InspectorSection>
 
-        <details className="inspector-section">
-          <summary><span>Tier 2 · reasoning &amp; outcome</span><ChevronDown size={16} /></summary>
+        <InspectorSection title="Tier 2 · reasoning &amp; outcome">
           <div className="inspector-section-body">
-            <ValueCard label="Response status">{latest?.status ?? "No Agent response yet."}</ValueCard>
-            <ValueCard label="Plan rationale">{latest?.plan_reason ?? "No plan has run yet."}</ValueCard>
+            <ValueCard label="Response status">{latest?.status ? displayText(latest.status) : "No Agent response yet."}</ValueCard>
+            <ValueCard label="Plan rationale">{latest?.plan_reason ? displayText(latest.plan_reason) : "No plan has run yet."}</ValueCard>
             <ValueCard label="Plan verification">{latest?.plan_verifiable === true ? "Verifiable" : latest?.plan_verifiable === false ? "Unverifiable" : "No executable plan was created."}</ValueCard>
             {latest?.react_trace && (
               <InspectorCard label="ReAct Execution Cycle">
                 <div className="trace-kv">
-                  <div><strong>Proposed Tool:</strong> <code>{latest.react_trace.tool_name}</code></div>
-                  <div><strong>Arguments:</strong> <code>{JSON.stringify(latest.react_trace.arguments)}</code></div>
-                  <div><strong>Approved Operations:</strong> {latest.react_trace.approved_operations.join(", ") || "None"}</div>
-                  <div><strong>Source:</strong> {latest.react_trace.explanation_source} {latest.react_trace.model ? `(${latest.react_trace.model})` : ""}</div>
+                  <div><strong>Proposed Tool:</strong> <code>{displayText(latest.react_trace.tool_name)}</code></div>
+                  <div><strong>Arguments:</strong> <StructuredValue value={latest.react_trace.arguments} /></div>
+                  <div><strong>Approved Operations:</strong> {latest.react_trace.approved_operations.map(displayText).join(", ") || "None"}</div>
+                  <div><strong>Source:</strong> {displayText(latest.react_trace.explanation_source)}</div>
                   {latest.react_trace.operations && latest.react_trace.operations.length > 0 && (
                     <div style={{ marginTop: "8px" }}>
                       <strong style={{ fontSize: "11px", display: "block", marginBottom: "5px" }}>
@@ -667,17 +675,10 @@ function Inspector({ state }: { state: AppState | null }) {
                           <div key={idx} className="trace-op-item">
                             <div className="trace-op-header">
                               <span className={`op-status-badge status-${op.status}`}>
-                                {op.ran ? <Check size={10} /> : null} {op.name}
+                                {op.ran ? <Check size={10} /> : null} {displayText(op.name)}
                               </span>
-                              {op.evidence_ids.length > 0 && (
-                                <span className="trace-op-ids">
-                                  {op.evidence_ids.map((id) => (
-                                    <code key={id} className="id-tag">{shortId(id)}</code>
-                                  ))}
-                                </span>
-                              )}
                             </div>
-                            <div className="trace-op-summary">{op.summary}</div>
+                            <div className="trace-op-summary">{displayText(op.summary)}</div>
                           </div>
                         ))}
                       </div>
@@ -690,40 +691,38 @@ function Inspector({ state }: { state: AppState | null }) {
               {state?.audit_events.length ? state.audit_events.map((event) => <AuditEventView key={event.event_id} event={event} />) : <p className="empty-detail">No audit events have been recorded.</p>}
             </InspectorCard>
             <ValueCard label="Sensor telemetry">
-              {latest?.sensor_telemetry.length ? <JsonValue value={latest.sensor_telemetry} /> : "No observation has been returned yet."}
+              {latest?.sensor_telemetry.length ? <StructuredValue value={latest.sensor_telemetry} /> : "No observation has been returned yet."}
             </ValueCard>
             {latest?.audit_trails.map((trail) => (
-              <InspectorCard key={trail.root_fact_id} label={`Audit chain · ${shortId(trail.root_fact_id)}`}>
+              <InspectorCard key={trail.root_fact_id} label="Audit chain">
                 <p className="empty-detail">{trail.facts.length} related fact(s), {trail.events.length} revision event(s).</p>
               </InspectorCard>
             ))}
           </div>
-        </details>
+        </InspectorSection>
 
-        <details className="inspector-section">
-          <summary><span>Tier 3 · physical environment</span><ChevronDown size={16} /></summary>
+        <InspectorSection title="Tier 3 · physical environment">
           <div className="inspector-section-body">
             {state ? (
               <>
-                {state.environment.scenario_name && <ValueCard label="Loaded scenario">{state.environment.scenario_name}</ValueCard>}
+                {state.environment.scenario_name && <ValueCard label="Loaded scenario">{displayText(state.environment.scenario_name)}</ValueCard>}
                 <ValueCard label="World version">{state.environment.world_version}</ValueCard>
-                <ValueCard label="Robot pose"><JsonValue value={state.environment.robot} /></ValueCard>
-                <ValueCard label="Ambient lighting"><JsonValue value={state.environment.light} /></ValueCard>
-                <ValueCard label={`Obstacles (${Object.keys(state.environment.obstacles).length})`}><JsonValue value={state.environment.obstacles} /></ValueCard>
-                <ValueCard label={`Objects (${Object.keys(state.environment.objects).length})`}><JsonValue value={state.environment.objects} /></ValueCard>
-                <ValueCard label="Advertised sensor capabilities">{state.capabilities.filter((item) => item.kind === "sensor").map((item) => item.name).join(", ") || "No sensor capabilities are advertised."}</ValueCard>
+                <ValueCard label="Robot pose"><StructuredValue value={state.environment.robot} /></ValueCard>
+                <ValueCard label="Ambient lighting"><StructuredValue value={state.environment.light} /></ValueCard>
+                <InspectorCard label={`Obstacles (${Object.keys(state.environment.obstacles).length})`} className="table-card"><EnvironmentTable records={state.environment.obstacles} idField="obstacle_id" /></InspectorCard>
+                <InspectorCard label={`Objects (${Object.keys(state.environment.objects).length})`} className="table-card"><EnvironmentTable records={state.environment.objects} idField="object_id" /></InspectorCard>
+                <ValueCard label="Advertised sensor capabilities">{state.capabilities.filter((item) => item.kind === "sensor").map((item) => displayText(item.name)).join(", ") || "No sensor capabilities are advertised."}</ValueCard>
               </>
             ) : <p className="empty-detail">Environment state has not been retrieved.</p>}
           </div>
-        </details>
-        <details className="inspector-section">
-          <summary><span>Perspectives</span><ChevronDown size={16} /></summary>
+        </InspectorSection>
+        <InspectorSection title="Perspectives">
           <div className="inspector-section-body">
             {latest?.perspectives
-              ? Object.entries(latest.perspectives).map(([key, value]) => <ValueCard key={key} label={PERSPECTIVE_LABELS[key] ?? key}>{value}</ValueCard>)
+              ? Object.entries(latest.perspectives).map(([key, value]) => <ValueCard key={key} label={PERSPECTIVE_LABELS[key] ?? displayText(key)}>{value}</ValueCard>)
               : <p className="empty-detail">No perspective result has been returned yet.</p>}
           </div>
-        </details>
+        </InspectorSection>
       </div>
     </section>
   );
@@ -750,7 +749,7 @@ function InspectorCard({ label, children, className = "" }: { label: string; chi
   return (
     <div className={`inspector-card ${className}`}>
       <p className="value-label">{label}</p>
-      <div id={contentId} className={`inspector-card-preview ${overflows && !expanded ? "collapsed" : ""}`} aria-hidden={overflows && !expanded ? true : undefined}>
+      <div id={contentId} className={`inspector-card-preview ${overflows && !expanded ? "collapsed" : ""}`}>
         <div ref={contentRef}>{children}</div>
       </div>
       {overflows && <button type="button" className="inspector-card-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded((value) => !value)}>
@@ -764,16 +763,54 @@ function ValueCard({ label, children }: { label: string; children: React.ReactNo
   return <InspectorCard label={label}><div className="value-content">{children}</div></InspectorCard>;
 }
 
-function JsonValue({ value }: { value: unknown }) {
-  return <pre className="json-value">{JSON.stringify(value, null, 2)}</pre>;
+function formatMarkdownIdentifiers() {
+  const visit = (node: unknown) => {
+    if (typeof node !== "object" || node === null) return;
+    const item = node as { type?: string; value?: string; children?: unknown[] };
+    if ((item.type === "text" || item.type === "inlineCode" || item.type === "code") && typeof item.value === "string") item.value = displayText(item.value);
+    item.children?.forEach(visit);
+  };
+  return (tree: unknown) => visit(tree);
+}
+
+function EnvironmentTable({ records, idField }: { records: Record<string, Record<string, unknown>>; idField: string }) {
+  const { rows, columns } = environmentTableData(records, idField);
+  if (!rows.length) return <p className="empty-detail">None recorded.</p>;
+  return <div className="table-scroll environment-table-scroll" role="region" aria-label="Recorded readings, scroll horizontally for more fields" tabIndex={0}><table className="environment-table">
+    <thead><tr><th scope="col">Item</th>{columns.map((key) => <th scope="col" key={key}>{fieldLabel(key)}</th>)}</tr></thead>
+    <tbody>{rows.map(({ id, fields }) => <tr key={id}><th scope="row">{displayText(id)}</th>{columns.map((key) => <td key={key}>{key in fields ? <StructuredValue value={fields[key]} field={key} /> : "—"}</td>)}</tr>)}</tbody>
+  </table></div>;
+}
+
+function StructuredValue({ value, field = "" }: { value: unknown; field?: string }): React.ReactNode {
+  if (value === null || value === undefined) return <span>Not recorded</span>;
+  if (typeof value === "boolean") return <span>{value ? "Yes" : "No"}</span>;
+  if (typeof value === "string") return <span>{value ? (isTimestampField(field) ? formatTimestamp(value) : displayText(value)) : "Empty"}</span>;
+  if (typeof value === "number") return <span>{String(value)}</span>;
+  if (Array.isArray(value)) {
+    if (!value.length) return <span>None recorded</span>;
+    return <ol className="inspector-value-list">{value.map((item, index) => (
+      <li key={index}><StructuredValue value={item} /></li>
+    ))}</ol>;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value).filter(([key]) => !isInternalIdField(key));
+    if (!entries.length) return <span>None recorded</span>;
+    return <dl className="inspector-fields">{entries.map(([key, item]) => (
+      <div className="inspector-field" key={key}>
+        <dt>{fieldLabel(key)}</dt><dd><StructuredValue value={item} field={key} /></dd>
+      </div>
+    ))}</dl>;
+  }
+  return <span>{String(value)}</span>;
 }
 
 function AuditEventView({ event }: { event: AgentResponse["audit_events"][number] }) {
   return (
     <div className="audit-event">
-      <div className="audit-rule"><Database size={13} /><code>{event.policy_rule}</code></div>
-      <p>{event.reason}</p>
-      <small>{formatTime(event.created_at)} · input {event.input_fact_ids.map(shortId).join(", ")}</small>
+      <div className="audit-rule"><Database size={13} /><code>{displayText(event.policy_rule)}</code></div>
+      <p>{displayText(event.reason)}</p>
+      <small>{formatTime(event.created_at)}</small>
     </div>
   );
 }
@@ -782,13 +819,12 @@ function LedgerTable({ facts }: { facts: Fact[] }) {
   return (
     <InspectorCard label={`SQLite evidence ledger · ${facts.length} fact(s)`} className="table-card">
       {facts.length ? (
-        <div className="table-scroll"><table><thead><tr><th>Fact</th><th>Claim</th><th>Source</th><th>State</th></tr></thead><tbody>
+        <div className="table-scroll environment-table-scroll" role="region" aria-label="Evidence ledger, scroll horizontally for more fields" tabIndex={0}><table className="environment-table ledger-table"><thead><tr><th scope="col">Claim</th><th scope="col">Source</th><th scope="col">State</th></tr></thead><tbody>
           {facts.map((fact) => (
             <tr key={fact.fact_id}>
-              <td title={fact.fact_id}>{shortId(fact.fact_id)}</td>
-              <td>{fact.subject} {fact.predicate} {fact.object}<small>{formatTime(fact.observed_at)}</small></td>
-              <td>{fact.source_agent}<small>{Math.round(fact.confidence_score * 100)}% confidence</small></td>
-              <td>{fact.superseded_by ? `Superseded by ${shortId(fact.superseded_by)}` : "Active"}</td>
+              <th scope="row">{displayText(fact.subject)} {displayText(fact.predicate)} {displayText(fact.object)}<small>{formatTime(fact.observed_at)}</small></th>
+              <td>{displayText(fact.source_agent)}<small>{Math.round(fact.confidence_score * 100)}% confidence</small></td>
+              <td>{fact.superseded_by ? "Superseded" : "Active"}</td>
             </tr>
           ))}
         </tbody></table></div>
