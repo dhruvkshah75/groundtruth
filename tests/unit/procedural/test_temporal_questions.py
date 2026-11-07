@@ -752,3 +752,204 @@ def test_prompt_dataset_coverage(
     if expected_mode is not None:
         assert response.react_trace is not None
         assert response.react_trace.arguments.get("mode") == expected_mode
+
+
+# ==============================================================================
+# 10. Reviews & Edge Cases: Aliases across modes, Ties, Stale, & Cross-Run
+# ==============================================================================
+
+
+def test_aliases_across_all_temporal_modes() -> None:
+    """Valid alias resolves to canonical ID and locates detections without inventing coordinates."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("red parcel", "parcel_01")
+
+    s1 = make_sample(
+        run_id=run_id,
+        sim_time_ms=2000,
+        sample_sequence=1,
+        observer_pose=make_pose(location="station_A"),
+        detections=[make_detection("parcel_01", 150.0, 250.0)],
+    )
+    s2 = make_sample(
+        run_id=run_id,
+        sim_time_ms=5000,
+        sample_sequence=2,
+        observer_pose=make_pose(location="station_B"),
+        detections=[make_detection("parcel_01", 400.0, 500.0)],
+    )
+    agent.memory.record_observation_sample(s1)
+    agent.memory.record_observation_sample(s2)
+
+    # 1. current mode
+    r_curr = agent.ask("Where is red parcel now?")
+    assert r_curr.status == "verified"
+    assert "x=400 cm, y=500 cm" in r_curr.answer
+    assert "x=0 cm, y=0 cm" not in r_curr.answer
+
+    # 2. last_seen mode
+    r_ls = agent.ask("When did you last see red parcel?")
+    assert r_ls.status == "verified"
+    assert "x=400 cm, y=500 cm" in r_ls.answer
+
+    # 3. at_time mode
+    r_at = agent.ask("Where was red parcel at 2 seconds?")
+    assert r_at.status == "verified"
+    assert "x=150 cm, y=250 cm" in r_at.answer
+    assert "x=0 cm, y=0 cm" not in r_at.answer
+
+    # 4. history mode
+    r_hist = agent.ask("Show sighting history of red parcel")
+    assert r_hist.status == "verified"
+    assert "150" in r_hist.answer and "400" in r_hist.answer
+
+    # 5. changes mode
+    r_chg = agent.ask("Has red parcel moved?")
+    assert r_chg.status == "verified"
+    assert "sighted at station_A" in r_chg.answer
+    assert "subsequently sighted at station_B" in r_chg.answer
+
+
+def test_missing_detection_yields_uncertainty_or_no_data_never_invented_coords() -> None:
+    """Missing detection in a sample does not fabricate (0, 0) coordinates."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Sample only contains other_box, parcel_01 is NOT detected
+    s = make_sample(
+        run_id=run_id,
+        sim_time_ms=2000,
+        sample_sequence=1,
+        detections=[make_detection("other_box", 300.0, 400.0)],
+    )
+    agent.memory.record_observation_sample(s)
+
+    r_curr = agent.ask("Where is parcel_01 now?")
+    assert r_curr.status in ("uncertain", "no_data")
+    assert "x=0" not in r_curr.answer
+
+    r_at = agent.ask("Where was parcel_01 at 3000 ms?")
+    assert r_at.status in ("uncertain", "no_data")
+    assert "x=0" not in r_at.answer
+
+
+def test_unspecified_object_reference_does_not_default_to_parcel_01() -> None:
+    """Where is it? does not query parcel_01 and returns safe fallback without assumption."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+    s = make_sample(
+        run_id=run_id,
+        sim_time_ms=2000,
+        sample_sequence=1,
+        detections=[make_detection("parcel_01", 100.0, 200.0)],
+    )
+    agent.memory.record_observation_sample(s)
+
+    response = agent.ask("Where is it?")
+    assert response.status in ("unrecognized_entity", "ambiguous", "unsupported")
+    assert "100" not in response.answer
+
+
+def test_equal_time_sequence_tie_outage_or_non_detection_marks_uncertain() -> None:
+    """Later sample at same sim_time_ms with higher sequence overrides earlier detection."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Sighting at sequence 1
+    s_detect = make_sample(
+        run_id=run_id,
+        sim_time_ms=5000,
+        sample_sequence=1,
+        detections=[make_detection("parcel_01", 100.0, 200.0)],
+    )
+    # Non-detection scan at sequence 2 (same millisecond)
+    s_empty = make_sample(
+        run_id=run_id,
+        sim_time_ms=5000,
+        sample_sequence=2,
+        detections=[],
+    )
+    agent.memory.record_observation_sample(s_detect)
+    agent.memory.record_observation_sample(s_empty)
+
+    response = agent.ask("Where is parcel_01 now?")
+    assert response.status == "uncertain"
+    assert "did not detect" in response.answer
+
+
+def test_capture_time_stale_evidence_marks_current_uncertain_and_advances_last_seen_age() -> None:
+    """Request capture time advances evidence age and flags current location as stale."""
+    agent = setup_agent()
+    run_id = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    s = make_sample(
+        run_id=run_id,
+        sim_time_ms=1000,
+        sample_sequence=1,
+        detections=[make_detection("parcel_01", 100.0, 200.0)],
+    )
+    agent.memory.record_observation_sample(s)
+
+    # World has advanced to 12000 ms (age: 11000 ms > 1000 ms freshness threshold)
+    intent_curr = agent.interpret("Where is parcel_01 now?")
+    resp_curr = agent.capture("Where is parcel_01 now?", intent_curr, capture_time_ms=12000)()
+    assert resp_curr.status == "uncertain"
+    assert "stale" in resp_curr.answer
+    assert "11000 ms" in resp_curr.answer
+
+    # last_seen age calculates against capture time 12000 ms, not 0 ms
+    intent_ls = agent.interpret("When did you last see parcel_01?")
+    resp_ls = agent.capture("When did you last see parcel_01?", intent_ls, capture_time_ms=12000)()
+    assert resp_ls.status == "verified"
+    assert "age: 11000 ms" in resp_ls.answer
+
+
+def test_cross_run_reset_isolation() -> None:
+    """Resetting run isolates queries so Run 2 does not select Run 1's historical evidence."""
+    agent = setup_agent()
+    run_id_1 = uuid4()
+    run_id_2 = uuid4()
+    agent.memory.add_alias("parcel_01", "parcel_01")
+
+    # Run 1 ends at 20000 ms
+    s_run1 = make_sample(
+        run_id=run_id_1,
+        sim_time_ms=20000,
+        sample_sequence=1,
+        detections=[make_detection("parcel_01", 888.0, 888.0)],
+    )
+    agent.memory.record_observation_sample(s_run1)
+
+    # Run 2 starts after reset at 500 ms
+    s_run2 = make_sample(
+        run_id=run_id_2,
+        sim_time_ms=500,
+        sample_sequence=1,
+        detections=[make_detection("parcel_01", 111.0, 222.0)],
+    )
+    agent.memory.record_observation_sample(s_run2)
+
+    # Implicit query with sensors bound to Run 2
+    class MockRuntimeSensors:
+        run_id = run_id_2
+        sim_time_ms = 500
+
+        def observe(self, req: Any) -> Any:
+            return ObservationUnavailable(
+                capability=req.capability,
+                reason="sensor_unavailable",
+                message="Mock offline",
+                reported_at=datetime.now(UTC),
+            )
+
+    intent = agent.interpret("Where is parcel_01 now?")
+    response = agent.capture("Where is parcel_01 now?", intent, sensors=MockRuntimeSensors())()
+
+    assert response.status == "verified"
+    assert "x=111 cm, y=222 cm" in response.answer
+    assert "888" not in response.answer

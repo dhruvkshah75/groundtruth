@@ -49,11 +49,12 @@ class PlanBuilder:
         self._entity_resolver = entity_resolver
         self._capability_validator = capability_validator
 
-    def build(self, intent: IntentRequest) -> PlanningOutcome:
+    def build(self, intent: IntentRequest, *, sensors: object | None = None) -> PlanningOutcome:
         """Create the required typed operations for one validated intent.
 
         Args:
             intent: The validated intent received from ``IntentPlanner``.
+            sensors: Optional active sensor/runtime environment.
 
         Returns:
             An approved plan or a safe fallback with no operations.
@@ -69,7 +70,7 @@ class PlanBuilder:
         if intent.intent == "current_robot_pose":
             return self._build_robot_pose(intent)
         if intent.intent == "object_location_query":
-            return self._build_object_location_query(intent)
+            return self._build_object_location_query(intent, sensors=sensors)
         if intent.intent == "environment_action":
             return self._fallback(
                 "unsupported_intent",
@@ -308,13 +309,17 @@ class PlanBuilder:
             )
         return True
 
-    def _build_object_location_query(self, intent: IntentRequest) -> PlanningOutcome:
+    def _build_object_location_query(
+        self, intent: IntentRequest, *, sensors: object | None = None
+    ) -> PlanningOutcome:
         """Build memory and observation ledger operations for an object location question."""
         entity = self._resolve_one_entity(intent)
         if isinstance(entity, PlanningFallback):
             return PlanningOutcome(fallback=entity)
 
         run_id = intent.run_id
+        if run_id is None and sensors is not None and hasattr(sensors, "run_id"):
+            run_id = getattr(sensors, "run_id")
         if run_id is None and hasattr(self._entity_resolver, "get_latest_run_id"):
             run_id = self._entity_resolver.get_latest_run_id()
         if run_id is None:

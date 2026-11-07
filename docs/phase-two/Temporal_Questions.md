@@ -152,43 +152,58 @@ The tool `object_location_query` is exposed to LLM function calling with detaile
 5. **`GroundedAgent`** (`src/agent.py`):
    - Coordinates intent proposal, plan building, execution, evaluation, and answer delivery with complete operation traces.
 
+### F. P2-07 Session Runtime & Request-Owned Evidence Integration
+Following the completion of Issue [#43 / P2-07](https://github.com/dhruvkshah75/groundtruth/issues/43):
+- **Request-Owned Run and Capture Time:** `GroundedAgent.capture(...)` accepts `capture_time_ms` directly from the request's session snapshot (`SimulationRuntime.read().status.sim_time_ms`), ensuring evidence evaluation uses the exact simulation clock tick when the user asked the question.
+- **Freshness Threshold (1,000 ms):** In `current` mode, sightings are validated against `capture_time_ms`. Sightings older than 1,000 ms are marked `uncertain` rather than verified.
+- **Sequence and Timestamp Tie-Breaking:** When comparing sightings against camera scans or outages, the evaluator applies `_is_strictly_later(a, b)` using both `sim_time_ms` and `sample_sequence`. An equal-time non-detection or outage correctly supersedes an earlier sighting at the same timestamp.
+- **Cross-Run Reset Isolation:** `MemoryRepository.get_latest_run_id()` orders by insertion order (`rowid DESC LIMIT 1`) rather than simulation time, and implicit queries prioritize the request's active `sensors.run_id`, preventing resets from exposing previous run data.
+- **Canonical Alias Resolution:** Canonical entity IDs resolved from the execution result are used across all 5 temporal modes to match detections. Missing detections yield uncertainty/error instead of fabricating `(0, 0)` coordinates. Unspecified or ambiguous pronouns (`it`, `where is it?`) do not default to `parcel_01`.
+
 ---
 
 ## 5. Verification and Test Results
 
-The implementation is verified by 33 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite.
+The implementation is verified by 39 targeted unit and integration tests in [`tests/unit/procedural/test_temporal_questions.py`](file:///c:/Users/rajat/groundtruth/tests/unit/procedural/test_temporal_questions.py), alongside GroundTruth's complete regression suite (623 tests).
 
 ### Test Categories
 1. **Mode-Specific Grounding Tests:**
-   - `test_current_mode_fresh_observation`: Confirms verified status with exact coordinates.
-   - `test_current_mode_sensor_outage`: Verifies uncertainty on camera outage.
-   - `test_current_mode_subsequent_scan_omission`: Verifies uncertainty when later scan omits entity.
-   - `test_current_mode_fallback_to_stored_belief`: Tests fallback when no camera scans exist.
-   - `test_last_seen_mode_reports_age_and_context`: Validates timestamp, coordinates, age calculation, and subsequent scan status.
-   - `test_at_time_mode_exact_match`: Verifies sighting at requested time.
+   - `test_current_mode_fresh_positive_sighting`: Confirms verified status with exact coordinates.
+   - `test_current_mode_resilient_to_subsequent_camera_outage`: Verifies uncertainty on camera outage.
+   - `test_current_mode_resilient_to_subsequent_empty_scan`: Verifies uncertainty when later scan omits entity.
+   - `test_current_mode_no_sightings_with_stored_belief`: Tests fallback when no camera scans exist.
+   - `test_last_seen_mode_with_subsequent_status`: Validates timestamp, coordinates, age calculation against capture time, and subsequent scan status.
    - `test_at_time_mode_preceding_sighting_no_interpolation`: Proves anti-interpolation guarantee.
-   - `test_at_time_mode_future_unrecorded_time`: Rejects queries beyond recorded horizon.
-   - `test_history_mode_chronological_list`: Validates full chronological detection sequence.
-   - `test_changes_mode_relocation_audit`: Verifies station transition detection with revision audit reasons and mandatory transit caveat.
-   - `test_changes_mode_no_movement`: Verifies stationary object explanation.
+   - `test_at_time_mode_future_time_uncertain`: Rejects queries beyond recorded horizon.
+   - `test_history_mode_chronological_timeline`: Validates full chronological detection sequence.
+   - `test_changes_mode_visible_station_relocation`: Verifies station transition detection with revision audit reasons and mandatory transit caveat.
+   - `test_changes_mode_no_transition`: Verifies stationary object explanation.
 2. **Robustness & Edge Cases:**
-   - `test_negative_simulation_time_rejected`: Validates Pydantic schema validation.
+   - `test_at_time_mode_negative_time_rejected`: Validates Pydantic schema validation.
    - `test_alias_ambiguity_returns_clarification`: Validates entity resolution safety.
+   - `test_missing_alias_returns_unrecognized`: Validates missing alias error handling.
    - `test_adversarial_synthesis_falls_back_to_deterministic_grounding`: Confirms deterministic defense against LLM hallucination.
-   - `test_simultaneous_observations_tie_breaking`: Tests deterministic ordering on matching timestamps.
+   - `test_out_of_order_sample_delivery_chronological_ordering`: Tests deterministic chronological ordering on out-of-order sample arrivals.
    - `test_prompt_dataset_coverage`: Executes natural language prompts across all 5 modes end-to-end.
+3. **P2-07 Integration & PR Review Tests:**
+   - `test_aliases_across_all_temporal_modes`: Tests canonical entity resolution across `current`, `last_seen`, `at_time`, `history`, and `changes`.
+   - `test_missing_detection_yields_uncertainty_or_no_data_never_invented_coords`: Verifies missing detections produce uncertainty/no-data without invented coordinates.
+   - `test_unspecified_object_reference_does_not_default_to_parcel_01`: Verifies ungrounded questions like "Where is it?" do not default to `parcel_01`.
+   - `test_equal_time_sequence_tie_outage_or_non_detection_marks_uncertain`: Verifies tie-breaking on same timestamp using `sample_sequence`.
+   - `test_capture_time_stale_evidence_marks_current_uncertain_and_advances_last_seen_age`: Verifies 1,000 ms freshness threshold and capture time reference.
+   - `test_cross_run_reset_isolation`: Verifies that resetting at 20s followed by a new run at 0s does not leak evidence across runs.
 
 ### Verification Run
 ```text
 uv run --locked pytest tests/unit/procedural/test_temporal_questions.py -v
-33 passed in 1.66s
+39 passed in 1.73s
 
 uv run --locked pytest -q
-586 passed in 13.79s
+623 passed in 17.74s
 
 uv run --locked ruff check .
 All checks passed!
 
 uv run --locked ruff format --check .
-130 files already formatted
+138 files already formatted
 ```

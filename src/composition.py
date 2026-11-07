@@ -45,7 +45,7 @@ class CompositionService:
             return intent_outcome
 
         assert intent_outcome.intent is not None
-        plan_outcome = self._builder.build(intent_outcome.intent)
+        plan_outcome = self._builder.build(intent_outcome.intent, sensors=sensors)
         if plan_outcome.fallback is not None:
             return plan_outcome
 

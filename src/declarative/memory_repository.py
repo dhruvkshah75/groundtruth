@@ -565,7 +565,7 @@ class MemoryRepository:
         row = self._conn.execute(
             """
             SELECT run_id FROM observation_samples
-            ORDER BY sim_time_ms DESC, sample_sequence DESC
+            ORDER BY rowid DESC
             LIMIT 1
             """
         ).fetchone()

@@ -190,6 +190,7 @@ class GroundedAgent:
         intent: IntentPlannerOutcome,
         *,
         sensors: EnvironmentInterface | None = None,
+        capture_time_ms: int | None = None,
     ) -> Callable[[], AgentResponse]:
         """Execute deterministic operations and prepare a detached provider-only continuation."""
         plan_result = self._composition.execute_intent(intent, sensors=sensors)
@@ -200,12 +201,22 @@ class GroundedAgent:
             last_err = getattr(self._provider, "last_error", None) or fallback.reason
             raise IntentProviderUnavailableError(f"Live intent provider failed: {last_err}")
 
+        sim_time = capture_time_ms
+        if sim_time is None and sensors is not None:
+            sim_time = getattr(sensors, "sim_time_ms", None)
+            if sim_time is None and hasattr(sensors, "read"):
+                try:
+                    sim_time = sensors.read().status.sim_time_ms
+                except Exception:
+                    pass
+
         # 2. Epistemically evaluate against memory and observations
         eval_outcome: EpistemicEvaluation = self._evaluator.evaluate(
             plan_result=plan_result,
             user_question=question,
             memory_repo=self._memory,
             revise_routes=sensors is None,
+            capture_time_ms=sim_time,
         )
 
         # 3. Pull current active projection and facts

@@ -26,7 +26,8 @@ class RuleBasedIntentProvider(IntentProvider):
         """Classify user question into one of the supported GroundTruth intents."""
         proposal = self._classify_intent(user_question)
         self.last_tool_name = str(proposal.get("intent", ""))
-        self.last_tool_call_id = "deterministic_0"
+        if not getattr(self, "last_tool_call_id", None):
+            self.last_tool_call_id = "deterministic_0"
         self.last_tool_args = dict(proposal)
         return proposal
 
@@ -94,7 +95,8 @@ class RuleBasedIntentProvider(IntentProvider):
         ) or bool(re.search(r"\bat\s+-?\d+", q))
 
         if is_obj and is_loc_or_time and not ("where are you" in q or "route" in q):
-            entity = self._extract_entity(q, default="parcel_01")
+            entity = self._extract_entity(q, default=None)
+            mentions = [entity] if entity is not None else []
 
             # A. changes mode: "what changed", "before and what changed", "moved"
             if (
@@ -107,7 +109,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 return {
                     "intent": "object_location_query",
                     "mode": "changes",
-                    "entity_mentions": [entity],
+                    "entity_mentions": mentions,
                     "user_question": user_question,
                 }
 
@@ -125,7 +127,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 return {
                     "intent": "object_location_query",
                     "mode": "last_seen",
-                    "entity_mentions": [entity],
+                    "entity_mentions": mentions,
                     "user_question": user_question,
                 }
 
@@ -151,7 +153,7 @@ class RuleBasedIntentProvider(IntentProvider):
                     "intent": "object_location_query",
                     "mode": "at_time",
                     "at_sim_time_ms": at_sim_time_ms,
-                    "entity_mentions": [entity],
+                    "entity_mentions": mentions,
                     "user_question": user_question,
                 }
 
@@ -160,7 +162,7 @@ class RuleBasedIntentProvider(IntentProvider):
                 return {
                     "intent": "object_location_query",
                     "mode": "history",
-                    "entity_mentions": [entity],
+                    "entity_mentions": mentions,
                     "user_question": user_question,
                 }
 
@@ -168,7 +170,7 @@ class RuleBasedIntentProvider(IntentProvider):
             return {
                 "intent": "object_location_query",
                 "mode": "current",
-                "entity_mentions": [entity],
+                "entity_mentions": mentions,
                 "user_question": user_question,
             }
 
@@ -275,11 +277,12 @@ class RuleBasedIntentProvider(IntentProvider):
             "user_question": user_question,
         }
 
-    def _extract_entity(self, text: str, default: str) -> str:
+    def _extract_entity(self, text: str, default: str | None = None) -> str | None:
         """Helper to extract common entity mentions from query string."""
         # Check known color/article prefixes with parcel/box/route first
         m_phrase = re.search(
-            r"\b((?:red|blue|green|yellow|brown|the|front)\s+(?:parcel|box|route))\b", text
+            r"\b((?:red|blue|green|yellow|brown|the|front)\s+(?:parcel|box|route|item|package))\b",
+            text,
         )
         if m_phrase:
             return m_phrase.group(1)
@@ -300,6 +303,14 @@ class RuleBasedIntentProvider(IntentProvider):
             return "brown box"
         if "the box" in text:
             return "the box"
+        if "the parcel" in text:
+            return "the parcel"
+        if "the item" in text:
+            return "the item"
+        if "the object" in text:
+            return "the object"
+        if "the package" in text:
+            return "the package"
         if "parcel_handoff" in text or "parcel handoff" in text:
             return "parcel_handoff"
 
@@ -320,5 +331,10 @@ class RuleBasedIntentProvider(IntentProvider):
                 "parcel_right_now",
             ):
                 return val
+
+        # Check for pronouns or generic references like "it"
+        m_it = re.search(r"\b(it)\b", text)
+        if m_it:
+            return "it"
 
         return default

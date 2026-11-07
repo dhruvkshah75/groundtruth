@@ -76,6 +76,10 @@ class SimulationRuntime:
     def read(self) -> SimulationSnapshot:
         return self.engine.snapshot()
 
+    @property
+    def sim_time_ms(self) -> int:
+        return self.engine.snapshot().status.sim_time_ms
+
     def checkpoint(self) -> dict:
         return {
             "version": 1,
