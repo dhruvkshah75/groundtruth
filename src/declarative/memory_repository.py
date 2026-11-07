@@ -560,6 +560,40 @@ class MemoryRepository:
             candidates=candidates,
         )
 
+    def get_latest_run_id(self) -> UUID | None:
+        """Return the most recently stored run ID from observation samples or facts."""
+        row = self._conn.execute(
+            """
+            SELECT run_id FROM observation_samples
+            ORDER BY sim_time_ms DESC, sample_sequence DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is not None and row["run_id"]:
+            try:
+                return UUID(row["run_id"])
+            except ValueError:
+                pass
+
+        row_fact = self._conn.execute(
+            "SELECT context_json, evidence_json FROM facts ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if row_fact is not None:
+            ctx = json.loads(row_fact["context_json"])
+            extra = ctx.get("extra_context", {})
+            if "run_id" in extra:
+                try:
+                    return UUID(str(extra["run_id"]))
+                except ValueError:
+                    pass
+            ev = json.loads(row_fact["evidence_json"])
+            if "run_id" in ev:
+                try:
+                    return UUID(str(ev["run_id"]))
+                except ValueError:
+                    pass
+        return None
+
     # ------------------------------------------------------------------
     # private helpers
     # ------------------------------------------------------------------

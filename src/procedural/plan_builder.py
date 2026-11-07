@@ -1,11 +1,14 @@
 """Deterministic mapping from validated intents to typed operations."""
 
+from uuid import UUID
+
 from src.contracts import (
     EntityResolution,
     FactQuery,
     GroundedResult,
     IntentRequest,
     ObservationRequest,
+    TemporalObservationQuery,
 )
 
 from .capability_validator import (
@@ -19,6 +22,7 @@ from .execution_plan import (
     ExecutionPlan,
     MemoryQueryOperation,
     ObservationOperation,
+    TemporalObservationOperation,
 )
 from .fallback_results import FallbackCategory, PlanningFallback, PlanningOutcome
 
@@ -64,6 +68,8 @@ class PlanBuilder:
             return self._build_audit_explanation(intent)
         if intent.intent == "current_robot_pose":
             return self._build_robot_pose(intent)
+        if intent.intent == "object_location_query":
+            return self._build_object_location_query(intent)
         if intent.intent == "environment_action":
             return self._fallback(
                 "unsupported_intent",
@@ -302,6 +308,125 @@ class PlanBuilder:
             )
         return True
 
+    def _build_object_location_query(self, intent: IntentRequest) -> PlanningOutcome:
+        """Build memory and observation ledger operations for an object location question."""
+        entity = self._resolve_one_entity(intent)
+        if isinstance(entity, PlanningFallback):
+            return PlanningOutcome(fallback=entity)
+
+        run_id = intent.run_id
+        if run_id is None and hasattr(self._entity_resolver, "get_latest_run_id"):
+            run_id = self._entity_resolver.get_latest_run_id()
+        if run_id is None:
+            run_id = UUID(int=0)
+
+        memory_ops: list[MemoryQueryOperation] = [
+            MemoryQueryOperation(
+                query=FactQuery(subject=entity, predicate="located_at"),
+                purpose=f"Read stored location belief for {entity}.",
+            )
+        ]
+
+        temporal_ops: list[TemporalObservationOperation] = []
+        mode = intent.mode or "current"
+
+        if mode == "current":
+            temporal_ops.append(
+                TemporalObservationOperation(
+                    query=TemporalObservationQuery(
+                        run_id=run_id,
+                        mode="last_seen",
+                        entity_id=entity,
+                    ),
+                    purpose=f"Query latest positive sighting for {entity}.",
+                )
+            )
+            temporal_ops.append(
+                TemporalObservationOperation(
+                    query=TemporalObservationQuery(
+                        run_id=run_id,
+                        mode="latest",
+                        capability="camera_detect",
+                    ),
+                    purpose="Query latest camera sensor status for current verification.",
+                )
+            )
+        elif mode == "last_seen":
+            temporal_ops.append(
+                TemporalObservationOperation(
+                    query=TemporalObservationQuery(
+                        run_id=run_id,
+                        mode="last_seen",
+                        entity_id=entity,
+                    ),
+                    purpose=f"Query last confirmed sighting for {entity}.",
+                )
+            )
+            temporal_ops.append(
+                TemporalObservationOperation(
+                    query=TemporalObservationQuery(
+                        run_id=run_id,
+                        mode="latest",
+                        capability="camera_detect",
+                    ),
+                    purpose="Query latest camera status for subsequent outage/empty scan context.",
+                )
+            )
+        elif mode == "at_time":
+            temporal_ops.append(
+                TemporalObservationOperation(
+                    query=TemporalObservationQuery(
+                        run_id=run_id,
+                        mode="last_seen",
+                        entity_id=entity,
+                        end_ms=intent.at_sim_time_ms,
+                    ),
+                    purpose=f"Query sighting for {entity} at or before {intent.at_sim_time_ms} ms.",
+                )
+            )
+            temporal_ops.append(
+                TemporalObservationOperation(
+                    query=TemporalObservationQuery(
+                        run_id=run_id,
+                        mode="latest",
+                        capability="camera_detect",
+                    ),
+                    purpose="Query latest camera sensor status to verify simulation time horizon.",
+                )
+            )
+        elif mode in ("history", "changes"):
+            temporal_ops.append(
+                TemporalObservationOperation(
+                    query=TemporalObservationQuery(
+                        run_id=run_id,
+                        mode="history",
+                        entity_id=entity,
+                    ),
+                    purpose=f"Query chronological sighting history for {entity}.",
+                )
+            )
+
+        audit_ops: list[AuditChainOperation] = []
+        if mode == "changes":
+            audit_ops.append(
+                AuditChainOperation(
+                    entity_id=entity,
+                    fact_ids_from_memory_operation=0,
+                    purpose=f"Retrieve revision audit chain for {entity} location changes.",
+                )
+            )
+
+        return self._plan(
+            intent=intent,
+            entity_ids=[entity],
+            memory_operations=memory_ops,
+            temporal_operations=temporal_ops,
+            audit_operations=audit_ops,
+            current_state_verifiable=True,
+            blocking_reasons=[],
+            reason=f"Object location query ({mode}) needs memory facts and temporal evidence.",
+        )
+
     @staticmethod
     def _plan(
         *,
@@ -309,6 +434,7 @@ class PlanBuilder:
         entity_ids: list[str] | None = None,
         memory_operations: list[MemoryQueryOperation] | None = None,
         observation_operations: list[ObservationOperation] | None = None,
+        temporal_operations: list[TemporalObservationOperation] | None = None,
         audit_operations: list[AuditChainOperation] | None = None,
         current_state_verifiable: bool,
         blocking_reasons: list[str] | None = None,
@@ -320,6 +446,7 @@ class PlanBuilder:
             resolved_entity_ids=entity_ids or [],
             memory_operations=memory_operations or [],
             observation_operations=observation_operations or [],
+            temporal_operations=temporal_operations or [],
             audit_operations=audit_operations or [],
             current_state_verifiable=current_state_verifiable,
             blocking_reasons=blocking_reasons or [],

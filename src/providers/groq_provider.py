@@ -376,12 +376,20 @@ class GroqIntentProvider:
                 "arguments": self.last_tool_args,
             }
 
-            return {
+            payload: dict[str, Any] = {
                 "intent": fn_name,
                 "entity_mentions": entity_mentions,
                 "source_agent_mentions": source_agent_mentions,
                 "user_question": user_question,
             }
+            if fn_name == "object_location_query":
+                payload["mode"] = parsed_args.get("mode")
+                if "at_sim_time_ms" in parsed_args:
+                    payload["at_sim_time_ms"] = parsed_args.get("at_sim_time_ms")
+                if "run_id" in parsed_args and parsed_args.get("run_id") is not None:
+                    payload["run_id"] = parsed_args.get("run_id")
+
+            return payload
         except Exception as exc:
             LOGGER.warning("Failed to extract tool call payload: %s", exc)
             return {

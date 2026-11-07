@@ -274,6 +274,7 @@ class GroundedAgent:
         execution_summary = {
             "memory_queries_count": len(getattr(plan_result, "memory_results", [])),
             "observations_count": len(getattr(plan_result, "observation_results", [])),
+            "temporal_queries_count": len(getattr(plan_result, "temporal_results", [])),
             "audit_lookups_count": len(getattr(plan_result, "audit_results", [])),
             "plan_verifiable": plan_verifiable,
         }
@@ -338,6 +339,25 @@ class GroundedAgent:
                         "evidence_ids": obs_id,
                         "returned_values": measurements,
                         "summary": summary,
+                    }
+                )
+
+            for temp_res in plan_result.temporal_results:
+                sample_ids = [str(s.sample_id) for s in temp_res.samples]
+                operations_trace.append(
+                    {
+                        "name": f"temporal_query_{temp_res.mode}",
+                        "purpose": temp_res.purpose,
+                        "ran": True,
+                        "status": "completed",
+                        "evidence_ids": sample_ids,
+                        "returned_values": {
+                            "mode": temp_res.mode,
+                            "entity_id": temp_res.entity_id,
+                            "capability": temp_res.capability,
+                            "samples_count": len(temp_res.samples),
+                        },
+                        "summary": f"Retrieved {len(temp_res.samples)} sample(s)",
                     }
                 )
 

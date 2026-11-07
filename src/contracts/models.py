@@ -349,11 +349,15 @@ class IntentRequest(BaseModel):
         "audit_explanation",
         "current_robot_pose",
         "environment_action",
+        "object_location_query",
         "unsupported",
     ]
     entity_mentions: list[str] = Field(default_factory=list)
     source_agent_mentions: list[str] = Field(default_factory=list)
     user_question: str = Field(min_length=1)
+    mode: Literal["current", "last_seen", "at_time", "history", "changes"] | None = None
+    at_sim_time_ms: int | None = Field(default=None, ge=0)
+    run_id: UUID | None = None
 
     @field_validator("source_agent_mentions")
     @classmethod
@@ -364,6 +368,29 @@ class IntentRequest(BaseModel):
         if len(values) != len(set(values)):
             raise ValueError("source_agent_mentions must not contain duplicates")
         return values
+
+    @model_validator(mode="after")
+    def validate_temporal_query_parameters(self) -> "IntentRequest":
+        """Validate mode and time constraints for object_location_query."""
+        if self.intent == "object_location_query":
+            if self.mode is None:
+                raise ValueError(
+                    "object_location_query requires a mode: 'current', 'last_seen', "
+                    "'at_time', 'history', or 'changes'"
+                )
+            if self.mode == "at_time":
+                if self.at_sim_time_ms is None:
+                    raise ValueError("at_time mode requires an explicit at_sim_time_ms value")
+                if self.at_sim_time_ms < 0:
+                    raise ValueError("at_sim_time_ms must be non-negative")
+            elif self.at_sim_time_ms is not None:
+                raise ValueError("at_sim_time_ms is only permitted for at_time mode")
+        else:
+            if self.mode is not None:
+                raise ValueError(f"mode is not allowed for {self.intent}")
+            if self.at_sim_time_ms is not None:
+                raise ValueError(f"at_sim_time_ms is not allowed for {self.intent}")
+        return self
 
 
 class GroundedResult(BaseModel):

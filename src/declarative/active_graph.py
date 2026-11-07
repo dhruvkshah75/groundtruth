@@ -77,7 +77,10 @@ from src.contracts import (
     EntityResolution,
     FactAssertion,
     FactQuery,
+    ObservationSample,
     StoredFact,
+    StoredObservationSample,
+    TemporalObservationQuery,
 )
 from src.declarative.memory_repository import RevisionOutcome
 
@@ -429,6 +432,32 @@ class GraphSyncedRepository:
         if hasattr(self._repository, "resolve_entity"):
             return self._repository.resolve_entity(mention)
         raise NotImplementedError("Underlying repository does not support resolve_entity")
+
+    def get_latest_run_id(self) -> UUID | None:
+        """Delegate get_latest_run_id to the underlying repository."""
+        if hasattr(self._repository, "get_latest_run_id"):
+            return self._repository.get_latest_run_id()
+        return None
+
+    def query_observations(self, query: TemporalObservationQuery) -> list[StoredObservationSample]:
+        """Delegate query_observations to the underlying repository."""
+        if hasattr(self._repository, "query_observations"):
+            return self._repository.query_observations(query)
+        raise NotImplementedError("Underlying repository does not support query_observations")
+
+    def record_observation_sample(self, sample: ObservationSample) -> StoredObservationSample:
+        """Delegate record_observation_sample to the underlying repository."""
+        if hasattr(self._repository, "record_observation_sample"):
+            return self._repository.record_observation_sample(sample)
+        raise NotImplementedError(
+            "Underlying repository does not support record_observation_sample"
+        )
+
+    def get_observation_sample(self, sample_id: UUID) -> StoredObservationSample | None:
+        """Delegate get_observation_sample to the underlying repository."""
+        if hasattr(self._repository, "get_observation_sample"):
+            return self._repository.get_observation_sample(sample_id)
+        return None
 
     def get_graph(self) -> nx.MultiDiGraph:
         """Return the active belief graph projection."""
