@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
+from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -399,6 +400,16 @@ class GraphSyncedRepository:
         if hasattr(self._repository, "query_facts"):
             return self._repository.query_facts(query)
         raise NotImplementedError("Underlying repository does not support query_facts")
+
+    def observation_ingestion_lock(self) -> AbstractContextManager:
+        """Use the underlying repository's shared ingestion boundary."""
+        return self._repository.observation_ingestion_lock()
+
+    def get_facts_by_sample_id(self, sample_id: UUID) -> list[StoredFact]:
+        """Delegate get_facts_by_sample_id to the underlying repository."""
+        if hasattr(self._repository, "get_facts_by_sample_id"):
+            return self._repository.get_facts_by_sample_id(sample_id)
+        return []
 
     def get_audit_chain(self, fact_id: UUID) -> AuditTrail:
         """Delegate get_audit_chain to the underlying repository."""

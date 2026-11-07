@@ -98,6 +98,9 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_aliases_normalized
             ON aliases(alias);
 
+        CREATE INDEX IF NOT EXISTS idx_facts_sample_id
+            ON facts(json_extract(evidence_json, '$.sample_id'));
+
         CREATE INDEX IF NOT EXISTS idx_obs_run_capability_sim_time
             ON observation_samples(run_id, capability, sim_time_ms, sample_sequence);
 
