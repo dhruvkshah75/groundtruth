@@ -284,7 +284,16 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 .inspector-section-body > * { width: 85%; min-width: 0; }
 .inspector-section-body { padding: 16px; }
 .inspector-card { padding: 12px; }
-.inspector-card .value-label { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.inspector-card .value-label { color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.inspector-fields { display: grid; gap: 8px; margin: 0; }
+.inspector-field { display: grid; grid-template-columns: minmax(120px, 180px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.inspector-field dt { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
+.inspector-field dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.inspector-field dd > .inspector-fields { padding-left: 12px; border-left: 1px solid var(--line-strong); }
+.inspector-value-list { display: grid; gap: 8px; margin: 0; padding-left: 24px; }
+@media (max-width: 700px) {
+  .inspector-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
 @media (max-width: 1000px) {
   .inspector-content { grid-template-columns: minmax(0, 1fr); }
 }
@@ -475,3 +484,16 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 :root[data-theme] .react-trace-toggle:hover { background: color-mix(in srgb, var(--selection) 80%, transparent); }
 :root[data-theme] .react-trace-details { border-top-color: var(--glass-border); }
 :root[data-theme] .react-trace-details .trace-op-item { background: var(--surface-raised); border-color: var(--line); }
+
+.inspector-section-heading { display: flex; width: 100%; min-height: 48px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px; border: 0; border-radius: inherit; color: var(--text); background: transparent; font: inherit; font-size: .875rem; text-align: left; cursor: pointer; }
+.inspector-section-heading svg { color: var(--muted); }
+
+.environment-table-scroll { border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.environment-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.environment-table th, .environment-table td { min-width: 104px; padding: 10px 12px; vertical-align: top; }
+.environment-table thead th { position: static; color: var(--text); background: var(--surface-raised); font-size: .75rem; font-weight: 600; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+.environment-table tbody th { position: sticky; left: 0; z-index: 1; color: var(--text); background: var(--surface); font-size: .8125rem; font-weight: 600; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+.environment-table td { max-width: 280px; color: var(--text); white-space: normal; overflow-wrap: anywhere; }
+.environment-table tbody tr:last-child th, .environment-table tbody tr:last-child td { border-bottom: 0; }
+.environment-table .inspector-fields { min-width: 180px; }
+.environment-table .inspector-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }

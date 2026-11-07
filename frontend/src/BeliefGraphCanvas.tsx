@@ -1,3 +1,4 @@
+import { displayText } from "./display";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -170,13 +171,13 @@ export function BeliefGraphCanvas({
       mesh.userData = { nodeId: node };
       scene.add(mesh);
 
-      const label = makeLabel(node, "belief-node-label");
+      const label = makeLabel(displayText(node), "belief-node-label");
       const name = document.createElement("strong");
-      name.textContent = node;
+      name.textContent = displayText(node);
       const detail = document.createElement("small");
       detail.textContent = `${nodeDegree} connected ${nodeDegree === 1 ? "fact" : "facts"}`;
       label.element.replaceChildren(name, detail);
-      label.element.title = `${node} · ${detail.textContent}`;
+      label.element.title = `${displayText(node)} · ${detail.textContent}`;
       graphLabels.push({ id: `node:${node}`, object: label, kind: "node", anchor: mesh });
       const connector = document.createElementNS("http://www.w3.org/2000/svg", "line");
       connectorLayer.appendChild(connector);
@@ -221,10 +222,10 @@ export function BeliefGraphCanvas({
       arrow.userData = { factId: fact.factId };
       scene.add(arrow);
 
-      const labelObject = makeLabel(fact.predicate.replaceAll("_", " "), fact.active ? "belief-edge-label" : "belief-edge-label superseded");
+      const labelObject = makeLabel(displayText(fact.predicate), fact.active ? "belief-edge-label" : "belief-edge-label superseded");
       labelObject.position.copy(start).lerp(end, 0.5);
       scene.add(labelObject);
-      labelObject.element.title = `${fact.source} ${fact.predicate} ${fact.target} · ${Math.round(fact.confidence * 100)}% confidence · ${fact.sourceAgent}`;
+      labelObject.element.title = `${displayText(fact.source)} ${displayText(fact.predicate)} ${displayText(fact.target)} · ${Math.round(fact.confidence * 100)}% confidence · ${displayText(fact.sourceAgent)}`;
       graphLabels.push({ id: `fact:${fact.factId}`, object: labelObject, kind: "edge" });
       factObjects.set(fact.factId, { line, arrow, label: labelObject.element, active: fact.active });
     }
