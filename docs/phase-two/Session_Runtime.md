@@ -1,6 +1,6 @@
 # Session simulation runtime (P2-07)
 
-[Issue #31](https://github.com/dhruvkshah75/groundtruth/issues/31) · [Implementation branch comparison](https://github.com/dhruvkshah75/groundtruth/compare/main...codex/p2-07-session-runtime)
+[Issue #31](https://github.com/dhruvkshah75/groundtruth/issues/31) · [Implementation PR #43](https://github.com/dhruvkshah75/groundtruth/pull/43)
 
 | Prerequisite | Merged commit | Interface used |
 | --- | --- | --- |
