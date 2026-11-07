@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import UUID
+from time import monotonic
+from typing import Literal, NotRequired, TypedDict
+from uuid import UUID, uuid4
 
 from src.agent import AgentResponse, GroundedAgent
 from src.contracts import FactAssertion, FactQuery, SpatialContext
+from src.contracts.simulation import (
+    ScenarioDefinition,
+    SimulationControl,
+    SimulationSnapshot,
+)
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
+from src.procedural.temporal_belief_ingestion import TemporalBeliefIngestionService
 from src.providers import ProviderConfig, create_provider, get_provider_config
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import (
@@ -21,6 +33,34 @@ from src.sensorimotor.world_models import (
     WorldState,
 )
 from src.web.session_store import SessionStore
+from src.web.simulation_runtime import SimulationRuntime
+
+LOGGER = logging.getLogger(__name__)
+
+
+class StaleRequestError(RuntimeError):
+    """The conversation, run, or session changed while answering."""
+
+
+class SessionSimulationStatus(TypedDict):
+    state: Literal["pending", "running", "paused", "completed", "error"]
+    error: str | None
+    run_id: NotRequired[str]
+    epoch_utc: NotRequired[str]
+    sim_time_ms: NotRequired[int]
+    playback_rate: NotRequired[float]
+    generation: NotRequired[int]
+    backlog_ms: NotRequired[float]
+    last_acquisition_ms: NotRequired[int]
+    patrol_state: NotRequired[str]
+    persistence_error: NotRequired[str | None]
+
+
+class SessionSimulationRead(TypedDict):
+    status: SessionSimulationStatus
+    snapshot: SimulationSnapshot | None
+    llm_ready: bool
+
 
 SCENARIO_A_QUESTION = "Is the front route clear to move forward?"
 SCENARIO_B_QUESTION = (
@@ -145,17 +185,60 @@ class AgentSession:
     suggested_question: str = ""
     lock: threading.RLock = field(default_factory=threading.RLock)
 
+    now: Callable[[], float] = monotonic
+    runtime: SimulationRuntime | None = field(init=False, default=None)
+    load_error: str | None = field(init=False, default=None)
+    _request_lock: threading.Lock = field(init=False, default_factory=threading.Lock)
+    _generation: int = field(init=False, default=0)
+    _conversation_generation: int = field(init=False, default=0)
+    _retired: bool = field(init=False, default=False)
+    _dirty: bool = field(init=False, default=False)
+    _last_save: float = field(init=False, default=0)
+    _last_view: float = field(init=False, default=0)
+    _pending_save: Future | None = field(init=False, default=None)
+
     def __post_init__(self) -> None:
         self.agent = _new_agent(self.config)
+        self.touch()
+
+    def touch(self) -> None:
+        self.require_active()
+        self._last_view = self.now()
+
+    def require_active(self) -> None:
+        if self._retired:
+            raise StaleRequestError("This session was deleted or shut down.")
+
+    def _ingestion(self) -> TemporalBeliefIngestionService:
+        # The agent already registered graph invalidation on this ledger.
+        return TemporalBeliefIngestionService(self.agent.memory)
+
+    def load_simulation(self, scenario: ScenarioDefinition, epoch_utc: datetime) -> None:
+        self.touch()
+        self._generation += 1
+        self.runtime = None
+        self.load_error = None
+        try:
+            self.runtime = SimulationRuntime(
+                scenario, epoch_utc=epoch_utc, ingest=self._ingestion().ingest_sample, now=self.now
+            )
+        except Exception:
+            self.load_error = "Warehouse initialization failed. Reload the run to recover."
+            raise
+        self._dirty = True
 
     def persisted_state(self) -> dict:
         """Capture conversation and world alongside the separately stored ledger."""
-        return {
-            "history": self.history,
-            "audit_history": self.audit_history,
+        state = {
+            "history": deepcopy(self.history),
+            "audit_history": deepcopy(self.audit_history),
             "suggested_question": self.suggested_question,
             "world": self.agent.environment.get_world_state().model_dump(mode="json"),
         }
+
+        if self.runtime is not None:
+            state["simulation_runtime"] = self.runtime.checkpoint()
+        return state
 
     def restore(self, state: dict, memory: bytes) -> None:
         """Restore the exact world version, conversation, and SQLite ledger."""
@@ -166,9 +249,17 @@ class AgentSession:
         self.history = state.get("history", [])
         self.audit_history = state.get("audit_history", {})
         self.suggested_question = state.get("suggested_question", "")
+        if "simulation_runtime" in state:
+            self.runtime = SimulationRuntime.restore(
+                state["simulation_runtime"],
+                ingest=self._ingestion().ingest_sample,
+                now=self.now,
+                memory=self.agent.memory,
+            )
 
     def reset(self) -> None:
         """Clear session activity and restore the neutral facility belief baseline."""
+        self._invalidate_world()
         self.agent.close()
         self.agent = _new_agent(self.config)
         self.audit_history.clear()
@@ -177,11 +268,22 @@ class AgentSession:
 
     def new_chat(self) -> None:
         """Clear the current conversation while preserving the agent and its world."""
+        self.touch()
+        self._conversation_generation += 1
         self.history.clear()
         self.suggested_question = ""
+        self._dirty = True
+
+    def _invalidate_world(self) -> None:
+        self.touch()
+        self._generation += 1
+        self.runtime = None
+        self.load_error = None
+        self._dirty = True
 
     def _reset_without_baseline(self) -> None:
         """Clear all session data before loading a controlled scenario preset."""
+        self._invalidate_world()
         self.agent.close()
         self.agent = _new_agent(self.config, seed_default_beliefs=False)
         self.audit_history.clear()
@@ -574,14 +676,72 @@ class AgentSession:
                 "or set GROUNDTRUTH_PROVIDER_MODE=offline to use offline rule-based mode."
             )
 
-        response = self.agent.ask(cleaned)
-        item = _response_to_dict(response)
-        self.history.append(item)
-        for event in item.get("audit_events", []):
-            if isinstance(event, dict):
-                self.audit_history[str(event["event_id"])] = event
-        self.suggested_question = ""
-        return item
+        with self.lock:
+            self.touch()
+            identity = self._request_identity()
+            request_id = str(uuid4())
+        with self._request_lock:
+            with self.lock:
+                self._validate_request(identity)
+                agent = self.agent
+            try:
+                intent = agent.interpret(cleaned)
+                with self.lock:
+                    self._validate_request(identity)
+                    if self.load_error:
+                        raise RuntimeError(self.load_error)
+                    runtime = self.runtime
+                    snapshot = runtime.read() if runtime else None
+                    capture = agent.capture(cleaned, intent, sensors=runtime)
+                    self._dirty = True
+                item = _response_to_dict(capture())
+                if snapshot is not None:
+                    item["simulation_evidence"] = {
+                        "run_id": str(snapshot.status.run_id),
+                        "sim_time_ms": snapshot.status.sim_time_ms,
+                        "request_id": request_id,
+                    }
+            except Exception:
+                with self.lock:
+                    self._validate_request(identity)
+                raise
+            with self.lock:
+                self._validate_request(identity)
+                self.history.append(item)
+                for event in item.get("audit_events", []):
+                    if isinstance(event, dict):
+                        self.audit_history[str(event["event_id"])] = event
+                self.suggested_question = ""
+                self._dirty = True
+                return item
+
+    def _request_identity(self) -> tuple[int, int, UUID | None]:
+        run = self.runtime.run_id if self.runtime else None
+        return self._generation, self._conversation_generation, run
+
+    def _validate_request(self, identity: tuple[int, int, UUID | None]) -> None:
+        self.require_active()
+        if identity != self._request_identity():
+            raise StaleRequestError("This question belongs to an earlier conversation or run.")
+
+    def simulation_status(self) -> SessionSimulationStatus:
+        runtime = self.runtime
+        if runtime is None:
+            return {"state": "error" if self.load_error else "pending", "error": self.load_error}
+        snapshot = runtime.read()
+        return {
+            "run_id": str(snapshot.status.run_id),
+            "epoch_utc": snapshot.status.epoch_utc.isoformat(),
+            "sim_time_ms": snapshot.status.sim_time_ms,
+            "playback_rate": snapshot.status.playback_rate,
+            "state": "error" if runtime.error else snapshot.status.state,
+            "generation": self._generation,
+            "backlog_ms": runtime.clock.backlog_ms,
+            "last_acquisition_ms": runtime.last_acquisition_ms,
+            "patrol_state": runtime.controller.state,
+            "error": runtime.error,
+            "persistence_error": runtime.persistence_error,
+        }
 
     def snapshot(self) -> dict[str, object]:
         """Read actual environment, graph, active beliefs, and full memory ledger."""
@@ -594,7 +754,7 @@ class AgentSession:
         all_facts = self.agent.memory.query_facts(FactQuery(active_only=False))
         world = self.agent.environment.get_world_state()
 
-        return {
+        result = {
             "history": list(self.history),
             "suggested_question": self.suggested_question,
             "graph": {
@@ -613,60 +773,241 @@ class AgentSession:
             ],
         }
 
+        if self.runtime is not None or self.load_error is not None:
+            result["simulation_status"] = self.simulation_status()
+        return result
+
 
 class AgentService:
     """Thread-safe registry for browser sessions and app metadata."""
 
     def __init__(
-        self, config: ProviderConfig | None = None, store: SessionStore | None = None
+        self,
+        config: ProviderConfig | None = None,
+        store: SessionStore | None = None,
+        *,
+        now: Callable[[], float] = monotonic,
+        background: bool = True,
     ) -> None:
         self._store = store
         self._sessions: dict[str, AgentSession] = {}
         self._lock = threading.Lock()
+        self._lifecycle = threading.Lock()
         self._config = config or get_provider_config()
+        self._now = now
+        self._background = background
+        self._stop = threading.Event()
+        self._runner: threading.Thread | None = None
+        self._writer = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="groundtruth-save")
+            if store
+            else None
+        )
 
     def get_session(self, session_id: str) -> AgentSession:
-        """Return the session identified by a caller-provided UUID."""
-        try:
-            canonical_id = str(UUID(session_id))
-        except (ValueError, TypeError, AttributeError) as exc:
-            raise ValueError("X-Session-ID must be a valid UUID.") from exc
-
+        canonical_id = _canonical_session_id(session_id)
         with self._lock:
-            if canonical_id not in self._sessions:
+            if self._stop.is_set():
+                raise RuntimeError("Agent service is shutting down.")
+            existing = self._sessions.get(canonical_id)
+        if existing is not None:
+            return existing
+        with self._lifecycle:
+            with self._lock:
+                if self._stop.is_set():
+                    raise RuntimeError("Agent service is shutting down.")
+                if canonical_id in self._sessions:
+                    return self._sessions[canonical_id]
                 if len(self._sessions) >= 128:
                     raise RuntimeError("The local demo has reached its 128-session limit.")
-                session = AgentSession(config=self._config)
+            session = AgentSession(config=self._config, now=self._now)
+            try:
                 stored = self._store.load(canonical_id) if self._store else None
                 if stored:
                     session.restore(*stored)
                 elif self._store:
                     self.save_session(canonical_id, session)
+            except Exception:
+                session.runtime = None
+                session.load_error = (
+                    "Could not restore saved session. Reset or load a scenario to recover."
+                )
+                LOGGER.warning("Session restore or initialization failed")
+            with self._lock:
                 self._sessions[canonical_id] = session
-            return self._sessions[canonical_id]
+            if session.runtime is not None:
+                self._ensure_runner()
+            return session
+
+    def _ensure_runner(self) -> None:
+        with self._lock:
+            if self._background and self._runner is None and not self._stop.is_set():
+                self._runner = threading.Thread(
+                    target=self._run, name="groundtruth-simulation", daemon=True
+                )
+                self._runner.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(0.05):
+            self.pump()
+
+    def pump(self) -> None:
+        """Advance due runs once. Never wait for persistence or provider work."""
+        with self._lock:
+            sessions = tuple(self._sessions.items())
+        for key, session in sessions:
+            with session.lock:
+                runtime = session.runtime
+                if session._retired or runtime is None or runtime.error:
+                    continue
+                try:
+                    now = self._now()
+                    idle = runtime.clock.running and now - session._last_view >= 60
+                    if idle:
+                        runtime.pause()
+                        session._dirty = True
+                    elif runtime.pump():
+                        session._dirty = True
+                    if session._dirty and (
+                        idle
+                        or (
+                            now - session._last_save >= 1
+                            and (session._pending_save is None or session._pending_save.done())
+                        )
+                    ):
+                        self._queue_save(key, session)
+                except Exception:
+                    runtime.fail(runtime.error or "Simulation scheduler failed.")
+                    LOGGER.warning("Warehouse scheduler paused a failed run")
+
+    def _queue_save(self, key: str, session: AgentSession) -> Future | None:
+        # Session lock orders capture and submission. All writes/deletes share one
+        # FIFO writer, so a slow old save cannot land after replacement/deletion.
+        if (
+            self._writer is None
+            or session.load_error
+            or (session.runtime and session.runtime.error)
+        ):
+            return None
+        assert self._store is not None
+        state = session.persisted_state()
+        image = session.agent.memory.export_snapshot()
+        runtime = session.runtime
+
+        def write() -> None:
+            try:
+                self._store.save(key, state, image)
+            except Exception:
+                with session.lock:
+                    if not session._retired and session.runtime is runtime and runtime is not None:
+                        runtime.persistence_error = "Simulation checkpoint could not be saved."
+                        runtime.fail(runtime.persistence_error)
+                raise
+
+        future = self._writer.submit(write)
+        session._pending_save = future
+        session._dirty = False
+        session._last_save = self._now()
+        return future
 
     def save_session(self, session_id: str, session: AgentSession) -> None:
-        """Persist a session after an operation while its lock is held."""
-        if self._store:
-            self._store.save(
-                str(UUID(session_id)),
-                session.persisted_state(),
-                session.agent.memory.export_snapshot(),
-            )
+        with session.lock:
+            session.require_active()
+            pending = self._queue_save(_canonical_session_id(session_id), session)
+        if pending is not None:
+            pending.result()
+
+    def load_simulation(
+        self, session_id: str, scenario: ScenarioDefinition, *, epoch_utc: datetime | None = None
+    ) -> SessionSimulationStatus:
+        session = self.get_session(session_id)
+        with session.lock:
+            session.load_simulation(scenario, epoch_utc or datetime.now(UTC))
+            pending = self._queue_save(_canonical_session_id(session_id), session)
+            status = session.simulation_status()
+        self._ensure_runner()
+        if pending is not None:
+            pending.result()
+        return status
+
+    def control_simulation(
+        self, session_id: str, control: SimulationControl
+    ) -> SessionSimulationStatus:
+        control = SimulationControl.model_validate(control.model_dump(mode="json"))
+        session = self.get_session(session_id)
+        with session.lock:
+            session.touch()
+            runtime = session.runtime
+            if runtime is None:
+                raise ValueError("Load a warehouse simulation first.")
+            if control.action == "reset":
+                scenario = runtime.scenario.model_copy(deep=True)
+                scenario.config.playback_rate = runtime.clock.rate
+                session.load_simulation(scenario, datetime.now(UTC))
+            elif control.action == "set_rate":
+                assert control.playback_rate is not None
+                runtime.set_rate(control.playback_rate)
+            else:
+                {"play": runtime.play, "pause": runtime.pause, "step": runtime.step}[
+                    control.action
+                ]()
+            pending = self._queue_save(_canonical_session_id(session_id), session)
+            status = session.simulation_status()
+        if pending is not None:
+            pending.result()
+        return status
+
+    def read_simulation(self, session_id: str) -> SessionSimulationRead:
+        session = self.get_session(session_id)
+        with session.lock:
+            session.touch()
+            return {
+                "status": session.simulation_status(),
+                "snapshot": session.runtime.read() if session.runtime else None,
+                "llm_ready": self._config.is_live and self._config.has_valid_key,
+            }
 
     def delete_session(self, session_id: str) -> None:
-        """Delete a session and its durable snapshot."""
-        try:
-            canonical_id = str(UUID(session_id))
-        except (ValueError, TypeError, AttributeError) as exc:
-            raise ValueError("X-Session-ID must be a valid UUID.") from exc
-        with self._lock:
-            session = self._sessions.pop(canonical_id, None)
-            if session:
+        key = _canonical_session_id(session_id)
+        with self._lifecycle:
+            with self._lock:
+                if self._stop.is_set():
+                    raise RuntimeError("Agent service is shutting down.")
+                session = self._sessions.pop(key, None)
+            if session is not None:
                 with session.lock:
+                    session._retired = True
+                    session.runtime = None
                     session.agent.close()
-            if self._store:
-                self._store.delete(canonical_id)
+            if self._writer is not None and self._store is not None:
+                self._writer.submit(self._store.delete, key).result()
+
+    def shutdown(self) -> None:
+        with self._lifecycle:
+            if self._stop.is_set():
+                return
+            with self._lock:
+                self._stop.set()
+                sessions = tuple(self._sessions.items())
+                self._sessions.clear()
+                runner = self._runner
+            if runner is not None:
+                runner.join()
+            for key, session in sessions:
+                with session.lock:
+                    if session.runtime is not None:
+                        session.runtime.pause()
+                        try:
+                            self._queue_save(key, session)
+                        except Exception:
+                            LOGGER.warning("Failed to capture shutdown checkpoint")
+                    session._retired = True
+            if self._writer is not None:
+                self._writer.shutdown()
+            for _, session in sessions:
+                with session.lock:
+                    session.runtime = None
+                    session.agent.close()
 
     def health(self) -> dict[str, object]:
         """Report this running API and the provider actually wired into the agent."""
@@ -704,6 +1045,13 @@ class AgentService:
                 "model": None,
                 "error": None,
             }
+
+
+def _canonical_session_id(session_id: str) -> str:
+    try:
+        return str(UUID(session_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("X-Session-ID must be a valid UUID.") from exc
 
 
 def _model_to_dict(value: object) -> dict[str, object]:

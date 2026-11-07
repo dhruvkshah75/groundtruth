@@ -40,7 +40,9 @@ class PlanExecutor:
         self._memory = memory_repository
         self._environment = environment
 
-    def execute(self, plan: ExecutionPlan) -> PlanExecutionResult:
+    def execute(
+        self, plan: ExecutionPlan, *, sensors: EnvironmentInterface | None = None
+    ) -> PlanExecutionResult:
         """Execute all memory, observation, and audit operations in the plan."""
         memory_results: list[MemoryExecutionResult] = []
         observation_results: list[ObservationExecutionResult] = []
@@ -55,7 +57,7 @@ class PlanExecutor:
 
         # 2. Execute observations
         for idx, obs_op in enumerate(plan.observation_operations):
-            result = self._environment.observe(obs_op.request)
+            result = (sensors or self._environment).observe(obs_op.request)
             observation_results.append(
                 ObservationExecutionResult(
                     operation_index=idx, purpose=obs_op.purpose, result=result

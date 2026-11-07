@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from src.procedural.intent_provider import IntentProviderUnavailableError
-from src.web.service import AgentService
+from src.web.service import AgentService, StaleRequestError
 from src.web.session_store import SessionStore
 
 LOGGER = logging.getLogger("groundtruth.web")
@@ -36,7 +36,9 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             try:
                 session = self.service.get_session(self.headers.get("X-Session-ID", ""))
                 with session.lock:
-                    self._send_json(200, session.snapshot())
+                    session.touch()
+                    snapshot = session.snapshot()
+                self._send_json(200, snapshot)
             except ValueError as exc:
                 self._send_error_json(400, "invalid_session", str(exc))
             except RuntimeError as exc:
@@ -79,24 +81,27 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         try:
             payload = self._read_json_body()
             session = self.service.get_session(self.headers.get("X-Session-ID", ""))
+            if path == "/api/ask":
+                question = payload.get("question")
+                if not isinstance(question, str):
+                    raise ValueError("'question' must be a string.")
+                session.ask(question)
+            else:
+                with session.lock:
+                    session.touch()
+                    if path == "/api/new-chat":
+                        session.new_chat()
+                    elif path == "/api/reset":
+                        session.reset()
+                    else:
+                        session.load_scenario(path.rsplit("/", 1)[-1])
+            self.service.save_session(self.headers.get("X-Session-ID", ""), session)
             with session.lock:
-                if path == "/api/ask":
-                    question = payload.get("question")
-                    if not isinstance(question, str):
-                        raise ValueError("'question' must be a string.")
-                    session.ask(question)
-                elif path == "/api/new-chat":
-                    session.new_chat()
-                elif path == "/api/reset":
-                    session.reset()
-                elif path in ("/api/scenarios/scenario-a", "/api/scenarios/scenario-b"):
-                    scenario = path.rsplit("/", 1)[-1]
-                    session.load_scenario(scenario)
-                else:
-                    self._send_error_json(404, "not_found", "API endpoint not found.")
-                    return
-                self.service.save_session(self.headers.get("X-Session-ID", ""), session)
-                self._send_json(200, session.snapshot())
+                session.require_active()
+                snapshot = session.snapshot()
+            self._send_json(200, snapshot)
+        except StaleRequestError as exc:
+            self._send_error_json(409, "stale_request", str(exc))
         except (ValueError, json.JSONDecodeError) as exc:
             self._send_error_json(400, "invalid_request", str(exc))
         except IntentProviderUnavailableError as exc:
@@ -155,6 +160,16 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
 
+class AgentHTTPServer(ThreadingHTTPServer):
+    def __init__(self, address, handler, service: AgentService) -> None:
+        super().__init__(address, handler)
+        self.service = service
+
+    def server_close(self) -> None:
+        super().server_close()
+        self.service.shutdown()
+
+
 def create_server(
     host: str = "127.0.0.1",
     port: int = 8765,
@@ -164,7 +179,7 @@ def create_server(
     """Create a server instance, also used by API integration tests."""
     svc = service or AgentService()
     handler = partial(AgentRequestHandler, service=svc, web_root=web_root)
-    server = ThreadingHTTPServer((host, port), handler)
+    server = AgentHTTPServer((host, port), handler, svc)
     server.daemon_threads = True
     return server
 

@@ -69,6 +69,8 @@ class EpistemicEvaluator:
         plan_result: PlanExecutionResult | PlanningOutcome | IntentPlannerOutcome,
         user_question: str,
         memory_repo: EpistemicMemoryInterface,
+        *,
+        revise_routes: bool = True,
     ) -> EpistemicEvaluation:
         """Perform epistemic evaluation of execution results against memory and sensors."""
         # 1. Handle planning-level fallbacks
@@ -162,6 +164,7 @@ class EpistemicEvaluator:
                 lidar_obs=lidar_obs,
                 memory_facts=memory_facts,
                 memory_repo=memory_repo,
+                revise_routes=revise_routes,
             )
 
         # A successful pose observation is direct evidence for current-location
@@ -280,6 +283,7 @@ class EpistemicEvaluator:
         lidar_obs: SensorObservation,
         memory_facts: list[StoredFact],
         memory_repo: EpistemicMemoryInterface,
+        revise_routes: bool = True,
     ) -> EpistemicEvaluation:
         """Scenario A: compare active map belief with live LiDAR and revise if conflicted."""
         measurements = lidar_obs.measurements
@@ -331,6 +335,13 @@ class EpistemicEvaluator:
                 status="unverifiable",
                 explanation="LiDAR did not return a recognized clear/blocked route status.",
                 memory_facts=contextual_facts,
+                sensor_telemetry=telemetry,
+            )
+
+        if not revise_routes:
+            return EpistemicEvaluation(
+                status="grounded",
+                explanation=f"The forward LiDAR scan reported {sensor_status}.",
                 sensor_telemetry=telemetry,
             )
 

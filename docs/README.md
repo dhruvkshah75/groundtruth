@@ -27,6 +27,8 @@
 - [Robot patrol and reactive safety controller (P2-06)](phase-two/Patrol_Controller.md) - deterministic waypoint patrol, front-LiDAR reactive stopping, clearance odometry, and obstacle resumption.
 - [Temporal belief ingestion and epistemic summaries (P2-05)](phase-two/Temporal_Belief_Ingestion.md) - time-aware belief updates, auditable revisions, last-seen tracking, and route verification.
 
+- [Session simulation runtime (P2-07)](phase-two/Session_Runtime.md) - independent warehouse scheduling, evidence capture, checkpoint recovery, and service integration.
+
 ## Supporting context
 
 - [agent Masterplan](I_Agent_Masterplan.md) explains the original assignment vision and three-tier motivation.
