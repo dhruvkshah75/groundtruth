@@ -276,6 +276,12 @@ try {
   assert.ok((await page.getByRole("textbox", { name: "Ask the cognitive Agent" }).boundingBox()).x < (await dock.boundingBox()).x);
   await button("Second chat").waitFor();
   assert.equal(await clock.innerText(), pausedTime);
+  await button("Close Chat pane").click();
+  assert.equal(await divider.count(), 0);
+  assert.equal(await clock.innerText(), pausedTime);
+  assert.equal(await page.getByRole("navigation", { name: "Workspace tabs" }).getByRole("button", { name: "Simulation" }).getAttribute("aria-current"), "page");
+  await dragTab("Chat", "left");
+  await dock.getByRole("region", { name: "Warehouse simulation" }).waitFor();
   await dragTab("Chat");
   await composer.waitFor();
   await button("Second chat").waitFor();

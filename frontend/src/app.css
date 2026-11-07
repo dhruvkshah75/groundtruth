@@ -99,7 +99,7 @@ textarea { caret-color: var(--accent); }
 .workspace-header { display: flex; height: 60px; flex: 0 0 60px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 24px 0 16px; }
 .workspace-heading { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .workspace-heading h1 { min-width: 0; margin: 0; overflow: hidden; font-size: .875rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-visible .workspace-heading > .icon-button { display: none; }
+.sidebar-visible .workspace-heading > .icon-button:first-child { display: none; }
 .workspace-agent-name { padding-left: 12px; border-left: 1px solid var(--line-strong); color: var(--quiet); font-size: .75rem; }
 .chat-workspace { container-type: inline-size; display: flex; min-height: 0; flex: 1; flex-direction: column; }
 .conversation { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
@@ -302,7 +302,7 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
   .workspace-sidebar { position: fixed; z-index: 60; inset: 0 auto 0 0; width: min(280px, calc(100vw - 48px)); box-shadow: 12px 0 40px rgb(42 34 45 / 10%); }
   .workspace.sidebar-hidden .workspace-sidebar { display: none; }
   .workspace-backdrop { position: fixed; z-index: 59; inset: 0; display: block; border: 0; background: rgb(0 0 0 / 28%); }
-  .sidebar-visible .workspace-heading > .icon-button { display: inline-grid; }
+  .sidebar-visible .workspace-heading > .icon-button:first-child { display: inline-grid; }
   .workspace-header { padding: 0 16px 0 12px; }
   .workspace-agent-name { display: none; }
   .conversation-inner { padding: 20px 20px 8px; }
@@ -518,6 +518,7 @@ td small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px;
 .workspace-dock-header h2 { margin: 0 auto 0 0; font-size: .875rem; font-weight: 600; }
 .workspace-header.with-dock { gap: 0; padding-left: 0; }
 .workspace-header.with-dock .workspace-heading { box-sizing: border-box; flex: 0 0 var(--primary-pane-width); min-width: 0; padding-left: 16px; }
+.workspace-close-primary { margin-left: auto; margin-right: 6px; flex-shrink: 0; }
 .workspace-header.with-dock .workspace-dock-header { flex: 1; min-width: 0; align-self: stretch; border-bottom: 0; border-left: 1px solid var(--line); }
 :root[data-theme] .inspector-section {
   border-color: var(--glass-border);

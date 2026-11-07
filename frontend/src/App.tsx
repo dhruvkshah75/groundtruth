@@ -493,6 +493,12 @@ function App() {
           <div className="workspace-heading">
             <button ref={sidebarToggle} type="button" className="icon-button" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}><PanelLeftOpen size={19} /></button>
             <h1 title={activeTab === "chat" && activeChat ? displayText(chatLabel(activeChat)) : undefined}>{activeTab === "chat" && activeChat ? displayText(chatLabel(activeChat)) : tabs.find((tab) => tab.id === activeTab)?.label}</h1>
+            {visibleDock && <button type="button" className="icon-button workspace-close-primary" aria-label={`Close ${tabLabel(activeTab)} pane`}
+              title="Close pane" onClick={() => {
+                const remaining = visibleDock;
+                selectTab(remaining);
+                requestAnimationFrame(() => (sidebarOpen ? document.getElementById(`workspace-tab-${remaining}`) : sidebarToggle.current)?.focus());
+              }}><X size={17} /></button>}
           </div>
           {visibleDock && dockHeader(visibleDock)}
           <button type="button" className="icon-button theme-toggle" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</button>
