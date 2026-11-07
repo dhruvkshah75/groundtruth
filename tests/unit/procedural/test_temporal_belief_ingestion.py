@@ -137,6 +137,22 @@ class FakeMemoryRepository:
                 continue
             if query.source_agent is not None and f.source_agent != query.source_agent:
                 continue
+            if query.context is not None:
+                if (
+                    query.context.location is not None
+                    and f.context.location != query.context.location
+                ):
+                    continue
+                if (
+                    query.context.frame_of_reference is not None
+                    and f.context.frame_of_reference != query.context.frame_of_reference
+                ):
+                    continue
+                if any(
+                    f.context.extra_context.get(k) != v
+                    for k, v in query.context.extra_context.items()
+                ):
+                    continue
             results.append(f)
         return results
 
@@ -244,7 +260,17 @@ class FakeObservationLedger:
         return history[:limit]
 
     def query_observations(self, query: Any) -> list[StoredObservationSample]:
-        return list(self.samples.values())
+        candidates = list(self.samples.values())
+        if hasattr(query, "run_id"):
+            candidates = [s for s in candidates if s.run_id == query.run_id]
+        if hasattr(query, "capability") and query.capability is not None:
+            candidates = [s for s in candidates if s.request.capability == query.capability]
+        if hasattr(query, "end_ms") and query.end_ms is not None:
+            candidates = [s for s in candidates if s.sim_time_ms <= query.end_ms]
+        if hasattr(query, "start_ms") and query.start_ms is not None:
+            candidates = [s for s in candidates if s.sim_time_ms >= query.start_ms]
+        candidates.sort(key=lambda s: (s.sim_time_ms, s.sample_sequence))
+        return candidates
 
 
 # ---------------------------------------------------------------------------
@@ -904,3 +930,265 @@ def test_lidar_wrong_direction_or_unmapped_pose_does_not_update_route() -> None:
     assert res.uncertainty is True
     assert len(res.facts_created) == 0
     assert len(repo.facts) == 0
+
+
+def test_same_zone_confirmation_followed_by_late_changed_zone_sample() -> None:
+    """PR #40 Comment 3 regression:
+
+    Packing sighting t0, same-zone confirmation t2000, then late inspection sighting t1000.
+    The late t1000 sample must NOT revise the active location to inspection because
+    there is newer packing evidence at t2000.
+    """
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_id = uuid4()
+
+    det_packing = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=80.0, y_cm=350.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+    det_inspection = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=150.0, y_cm=390.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+
+    # 1. t0: initial sighting at packing_station
+    s0 = make_camera_sample(sim_time_ms=0, objects=[det_packing], run_id=run_id, sequence=0)
+    res0 = service.ingest_sample(s0)
+    assert res0.status == "applied"
+    assert len(res0.facts_created) == 1
+    assert res0.facts_created[0].object == "packing_station"
+
+    # 2. t2000: same-zone confirmation at packing_station
+    s2000 = make_camera_sample(sim_time_ms=2000, objects=[det_packing], run_id=run_id, sequence=1)
+    res2000 = service.ingest_sample(s2000)
+    assert res2000.status == "applied"
+    assert len(res2000.facts_created) == 0
+    assert len(res2000.revisions_created) == 0
+
+    # 3. t1000: out-of-order sighting at inspection_station
+    s1000 = make_camera_sample(
+        sim_time_ms=1000, objects=[det_inspection], run_id=run_id, sequence=2
+    )
+    res1000 = service.ingest_sample(s1000)
+    assert res1000.status == "retained_as_historical"
+    assert len(res1000.facts_created) == 0
+    assert len(res1000.revisions_created) == 0
+
+    # Active fact must remain packing_station
+    active_facts = repo.query_facts(FactQuery(subject="parcel_01", active_only=True))
+    assert len(active_facts) == 1
+    assert active_facts[0].object == "packing_station"
+
+    # Epistemic summary at t2000 must stay aligned with packing_station
+    summary = service.get_entity_belief_summary(
+        run_id=run_id, entity_id="parcel_01", current_sim_time_ms=2000
+    )
+    assert summary.supported_location == "packing_station"
+    assert summary.verification_status == "verified"
+    assert summary.freshness == "fresh"
+
+
+def test_same_status_route_confirmation_followed_by_late_opposite_status() -> None:
+    """PR #40 Comment 3 route path regression:
+
+    Route clear at t0, same-status confirmation at t2000, then late blocked sighting at t1000.
+    The late t1000 sample must NOT revise the route status to blocked.
+    """
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_id = uuid4()
+    pose = Pose(
+        x_cm=100.0,
+        y_cm=100.0,
+        robot_id="robot_1",
+        direction="north",
+        location="warehouse",
+        frame_of_reference="warehouse_map",
+    )
+
+    # 1. t0: route_A clear
+    s0 = make_lidar_sample(
+        sim_time_ms=0,
+        status="clear",
+        nearest_distance_cm=None,
+        run_id=run_id,
+        pose=pose,
+        sequence=0,
+    )
+    res0 = service.ingest_sample(s0)
+    assert res0.status == "applied"
+    assert len(res0.facts_created) == 1
+    assert res0.facts_created[0].object == "clear"
+
+    # 2. t2000: route_A clear (confirmation)
+    s2000 = make_lidar_sample(
+        sim_time_ms=2000,
+        status="clear",
+        nearest_distance_cm=None,
+        run_id=run_id,
+        pose=pose,
+        sequence=1,
+    )
+    res2000 = service.ingest_sample(s2000)
+    assert res2000.status == "applied"
+    assert len(res2000.facts_created) == 0
+
+    # 3. t1000: late out-of-order route_A blocked
+    s1000 = make_lidar_sample(
+        sim_time_ms=1000,
+        status="blocked",
+        nearest_distance_cm=80.0,
+        run_id=run_id,
+        pose=pose,
+        sequence=2,
+    )
+    res1000 = service.ingest_sample(s1000)
+    assert res1000.status == "retained_as_historical"
+    assert len(res1000.facts_created) == 0
+    assert len(res1000.revisions_created) == 0
+
+    # Summary at t2000 stays clear and verified
+    summary = service.get_route_belief_summary(
+        run_id=run_id, route_id="route_A", current_sim_time_ms=2000
+    )
+    assert summary.status == "clear"
+    assert summary.verification_status == "verified"
+    assert summary.freshness == "fresh"
+
+
+def test_new_runs_reusing_entity_ids_are_isolated() -> None:
+    """PR #40 Comment 2 regression:
+
+    Run A sees parcel_X at inspection_station at t7000.
+    Run B sees parcel_X at packing_station at t0.
+    Run B must NOT treat t0 as historical relative to Run A's t7000.
+    """
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_a = uuid4()
+    run_b = uuid4()
+
+    det_a = CameraDetection(
+        object_id="parcel_reused",
+        apparent_color="blue",
+        position=Point(x_cm=150.0, y_cm=390.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+    det_b = CameraDetection(
+        object_id="parcel_reused",
+        apparent_color="blue",
+        position=Point(x_cm=80.0, y_cm=350.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+
+    # Run A: t7000 at inspection_station
+    s_a = make_camera_sample(sim_time_ms=7000, objects=[det_a], run_id=run_a)
+    res_a = service.ingest_sample(s_a)
+    assert res_a.status == "applied"
+    assert len(res_a.facts_created) == 1
+    assert res_a.facts_created[0].object == "inspection_station"
+
+    # Run B: t0 at packing_station
+    s_b = make_camera_sample(sim_time_ms=0, objects=[det_b], run_id=run_b)
+    res_b = service.ingest_sample(s_b)
+    assert res_b.status == "applied"
+    assert len(res_b.facts_created) == 1
+    assert res_b.facts_created[0].object == "packing_station"
+
+    # Verify summaries for both runs are completely isolated
+    sum_b = service.get_entity_belief_summary(
+        run_id=run_b, entity_id="parcel_reused", current_sim_time_ms=0
+    )
+    assert sum_b.supported_location == "packing_station"
+    assert sum_b.verification_status == "verified"
+    assert sum_b.freshness == "fresh"
+    assert sum_b.last_observed_position == Point(x_cm=80.0, y_cm=350.0)
+
+    sum_a = service.get_entity_belief_summary(
+        run_id=run_a, entity_id="parcel_reused", current_sim_time_ms=7000
+    )
+    assert sum_a.supported_location == "inspection_station"
+    assert sum_a.verification_status == "verified"
+    assert sum_a.freshness == "fresh"
+    assert sum_a.last_observed_position == Point(x_cm=150.0, y_cm=390.0)
+
+
+def test_multi_object_scan_partial_failure_retry_and_duplicate_idempotency() -> None:
+    """PR #40 Comment 1 regression:
+
+    Two-object scan where recording the second object's fact fails.
+    First fact remains, error is caught and returned as recoverable rejection
+    (not unhandled exception).
+    Retry completes the second object without duplicating the first object.
+    Subsequent duplicate call returns duplicate_ignored.
+    """
+    call_count = 0
+
+    class FailingMemoryRepo(FakeMemoryRepository):
+        def record_fact(self, assertion: FactAssertion) -> StoredFact:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("Simulated transient database write failure on second object")
+            return super().record_fact(assertion)
+
+    repo = FailingMemoryRepo()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_id = uuid4()
+
+    det1 = CameraDetection(
+        object_id="parcel_alpha",
+        apparent_color="red",
+        position=Point(x_cm=80.0, y_cm=350.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+    det2 = CameraDetection(
+        object_id="parcel_beta",
+        apparent_color="blue",
+        position=Point(x_cm=150.0, y_cm=390.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+
+    sample = make_camera_sample(sim_time_ms=500, objects=[det1, det2], run_id=run_id)
+
+    # 1. First attempt: parcel_alpha succeeds, parcel_beta fails
+    res1 = service.ingest_sample(sample)
+    assert res1.status == "rejected"
+    assert res1.uncertainty is True
+    assert "Simulated transient database write failure" in (res1.uncertainty_reason or "")
+    assert len(res1.facts_created) == 1
+    assert repo.facts[0].subject == "parcel_alpha"
+
+    # 2. Retry attempt: failure condition cleared (call_count was 2, now 3)
+    res2 = service.ingest_sample(sample)
+    assert res2.status == "applied"
+    assert len(res2.facts_created) == 1
+    assert res2.facts_created[0].subject == "parcel_beta"
+
+    # Both facts now exist in repo without duplicate parcel_alpha
+    active_alpha = repo.query_facts(FactQuery(subject="parcel_alpha", active_only=True))
+    active_beta = repo.query_facts(FactQuery(subject="parcel_beta", active_only=True))
+    assert len(active_alpha) == 1
+    assert len(active_beta) == 1
+    assert len(repo.facts) == 2
+
+    # 3. Duplicate ingestion attempt: all beliefs completed
+    res3 = service.ingest_sample(sample)
+    assert res3.status == "duplicate_ignored"
+    assert len(res3.facts_created) == 0
+    assert len(repo.facts) == 2
