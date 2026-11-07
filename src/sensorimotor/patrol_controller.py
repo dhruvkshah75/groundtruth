@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.contracts.simulation import (
     Direction,
@@ -20,7 +20,6 @@ from src.contracts.simulation import (
     ObservationUnavailable,
     Point,
     Pose,
-    PoseMeasurement,
     SensorObservation,
     SimulationConfig,
 )
@@ -93,19 +92,25 @@ class PatrolCheckpoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
+    schema_version: Literal[2] = 2
+    patrol: list[Point]
+    config: SimulationConfig
+    target_waypoint_index: int = Field(ge=0)
+    pending_decision_time: int | None = Field(default=None, ge=0)
+    fresh_required_at: int | None = Field(default=None, ge=0)
     run_id: UUID
     scenario_id: str | None = None
-    waypoint_index: int
+    waypoint_index: int = Field(ge=0)
     state: PatrolState
     current_pose: Pose
     last_usable_sample_id: UUID | None = None
+    last_lidar_sample: ObservationSample | None = None
     last_capture_sim_time_ms: int | None = None
     last_capture_pose: Pose | None = None
-    distance_travelled_since_capture_cm: float = 0.0
+    distance_travelled_since_capture_cm: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     pending_command: Pose | None = None
     reconciled: bool = True
-    created_at_sim_time_ms: int
+    created_at_sim_time_ms: int = Field(ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +140,8 @@ class PatrolController:
         self._validate_patrol_cardinality(patrol)
 
         self._patrol = [Point(x_cm=p.x_cm, y_cm=p.y_cm) for p in patrol]
-        self._config = config.model_copy(deep=True)
+        self._config = SimulationConfig.model_validate(config.model_dump(mode="json"))
+        self._current_sim_time_ms = 0
         self._run_id = run_id
         self._scenario_id = scenario_id
 
@@ -154,10 +160,13 @@ class PatrolController:
                 raise ValueError("initial pose position does not match first patrol waypoint")
 
         self._state: PatrolState = "waiting_for_sensor"
+        self._pending_decision_time: int | None = None
         self._pending_command: Pose | None = None
         self._reconciled: bool = True
 
         # Sensor tracking for conservative clearance between scans
+        self._fresh_required_at: int | None = None
+        self._last_lidar_sample: ObservationSample | None = None
         self._last_usable_sample_id: UUID | None = None
         self._last_capture_sim_time_ms: int | None = None
         self._last_capture_pose: Pose | None = None
@@ -192,7 +201,7 @@ class PatrolController:
     @property
     def target_waypoint(self) -> Point | None:
         if self._target_waypoint_index < len(self._patrol):
-            return self._patrol[self._target_waypoint_index]
+            return self._patrol[self._target_waypoint_index].model_copy(deep=True)
         return None
 
     # ------------------------------------------------------------------
@@ -202,7 +211,7 @@ class PatrolController:
     def decide(
         self,
         current_sim_time_ms: int,
-        pose_observation: ObservationSample | PoseMeasurement | Pose,
+        pose_observation: ObservationSample | Pose,
         latest_lidar_sample: ObservationSample | None = None,
     ) -> PatrolDecision:
         """Compute the next deterministic robot command and structured record.
@@ -217,10 +226,32 @@ class PatrolController:
             )
 
         pose = self._extract_pose(pose_observation)
+        if type(current_sim_time_ms) is not int or current_sim_time_ms < 0:
+            raise ValueError("current simulation time must be a nonnegative integer")
+        if current_sim_time_ms < self._current_sim_time_ms:
+            raise ValueError("decision time cannot precede the last observed controller time")
+        if self._current_pose is not None and (
+            pose.robot_id,
+            pose.location,
+            pose.frame_of_reference,
+        ) != (
+            self._current_pose.robot_id,
+            self._current_pose.location,
+            self._current_pose.frame_of_reference,
+        ):
+            raise ValueError("pose observer context mismatch")
+        if isinstance(pose_observation, ObservationSample):
+            if pose_observation.sim_time_ms != current_sim_time_ms:
+                raise ValueError("pose sample must be captured at current simulation time")
+            if self._run_id is not None and pose_observation.run_id != self._run_id:
+                raise ValueError("pose sample run mismatch")
+        elif self._run_id is None and latest_lidar_sample is not None:
+            self._run_id = latest_lidar_sample.run_id
         if self._run_id is None:
             if isinstance(pose_observation, ObservationSample):
                 self._run_id = pose_observation.run_id
 
+        self._current_sim_time_ms = current_sim_time_ms
         self._current_pose = pose
 
         # Check if patrol is already completed
@@ -236,7 +267,9 @@ class PatrolController:
                 proposed_command=None,
                 policy_reason="Final waypoint reached. Patrol complete.",
             )
-            return PatrolDecision(status="complete", command=None, record=record)
+            return PatrolDecision(status="complete", command=None, record=record).model_copy(
+                deep=True
+            )
 
         target = self._patrol[self._target_waypoint_index]
 
@@ -256,7 +289,9 @@ class PatrolController:
                     proposed_command=None,
                     policy_reason="Final waypoint reached. Patrol complete.",
                 )
-                return PatrolDecision(status="complete", command=None, record=record)
+                return PatrolDecision(status="complete", command=None, record=record).model_copy(
+                    deep=True
+                )
             target = self._patrol[self._target_waypoint_index]
 
         # 2. Determine required direction to target
@@ -274,11 +309,14 @@ class PatrolController:
                 location=pose.location,
                 frame_of_reference=pose.frame_of_reference,
             )
+            self._pending_decision_time = current_sim_time_ms
             self._pending_command = turn_command
             self._reconciled = False
             self._state = "turning"
 
             # A turn invalidates any previous front scan taken on the old heading
+            self._fresh_required_at = current_sim_time_ms + self._config.step_ms
+            self._last_lidar_sample = None
             self._last_usable_sample_id = None
             self._last_capture_pose = None
             self._last_capture_sim_time_ms = None
@@ -294,7 +332,9 @@ class PatrolController:
                 proposed_command=turn_command,
                 policy_reason=f"Turning from {pose.direction} to align with {required_direction}.",
             )
-            return PatrolDecision(status="turning", command=turn_command, record=record)
+            return PatrolDecision(status="turning", command=turn_command, record=record).model_copy(
+                deep=True
+            )
 
         # 4. Heading is aligned. Evaluate LiDAR safety clearance.
         clearance_eval = self._evaluate_clearance(
@@ -317,7 +357,9 @@ class PatrolController:
                 sensor_sim_time_ms=clearance_eval.get("sample_sim_time_ms"),
                 policy_reason=clearance_eval["reason"],
             )
-            return PatrolDecision(status="waiting_for_sensor", command=None, record=record)
+            return PatrolDecision(
+                status="waiting_for_sensor", command=None, record=record
+            ).model_copy(deep=True)
 
         if clearance_eval["status"] == "blocked":
             self._state = "blocked"
@@ -335,7 +377,9 @@ class PatrolController:
                 sensor_sim_time_ms=clearance_eval.get("sample_sim_time_ms"),
                 policy_reason=clearance_eval["reason"],
             )
-            return PatrolDecision(status="blocked", command=None, record=record)
+            return PatrolDecision(status="blocked", command=None, record=record).model_copy(
+                deep=True
+            )
 
         # 5. Safe to translate. Compute bounded step distance.
         max_tick_distance = (self._config.robot_speed_cm_s * self._config.step_ms) / 1000.0
@@ -370,7 +414,9 @@ class PatrolController:
                 sensor_sim_time_ms=clearance_eval.get("sample_sim_time_ms"),
                 policy_reason=reason,
             )
-            return PatrolDecision(status="blocked", command=None, record=record)
+            return PatrolDecision(status="blocked", command=None, record=record).model_copy(
+                deep=True
+            )
 
         vec = CARDINAL_VECTORS[pose.direction]
         next_x = pose.x_cm + vec[0] * step_distance
@@ -384,6 +430,7 @@ class PatrolController:
             location=pose.location,
             frame_of_reference=pose.frame_of_reference,
         )
+        self._pending_decision_time = current_sim_time_ms
         self._pending_command = move_command
         self._reconciled = False
         self._state = "moving"
@@ -406,7 +453,9 @@ class PatrolController:
                 f"with safe clearance {comp_clear:.1f} cm."
             ),
         )
-        return PatrolDecision(status="moving", command=move_command, record=record)
+        return PatrolDecision(status="moving", command=move_command, record=record).model_copy(
+            deep=True
+        )
 
     # ------------------------------------------------------------------
     # Step 2: Post-Tick Reconciliation
@@ -414,15 +463,34 @@ class PatrolController:
 
     def reconcile(
         self,
-        post_tick_pose_observation: ObservationSample | PoseMeasurement | Pose,
+        post_tick_pose_observation: ObservationSample,
     ) -> PatrolReconciliation:
         """Verify the result of the commanded motion after the engine advances."""
         if self._reconciled:
             raise RuntimeError("No pending command to reconcile; call decide() first.")
 
-        actual_pose = self._extract_pose(post_tick_pose_observation)
+        if not isinstance(post_tick_pose_observation, ObservationSample):
+            raise ValueError("reconciliation requires a timestamped robot_pose sample")
+        sample = ObservationSample.model_validate(
+            post_tick_pose_observation.model_dump(mode="json")
+        )
+        actual_pose = self._extract_pose(sample)
         expected = self._pending_command
+        if (
+            sample.run_id != self._run_id
+            or self._pending_decision_time is None
+            or sample.sim_time_ms != self._pending_decision_time + self._config.step_ms
+        ):
+            raise ValueError("reconciliation run or post-tick capture time mismatch")
+        if expected is None or (
+            actual_pose.robot_id,
+            actual_pose.location,
+            actual_pose.frame_of_reference,
+        ) != (expected.robot_id, expected.location, expected.frame_of_reference):
+            raise ValueError("reconciliation observer context mismatch")
+        self._current_sim_time_ms = sample.sim_time_ms
         self._pending_command = None
+        self._pending_decision_time = None
         self._reconciled = True
 
         if expected is None:
@@ -432,7 +500,7 @@ class PatrolController:
                 status=self._state,
                 actual_pose=actual_pose,
                 expected_command=None,
-            )
+            ).model_copy(deep=True)
 
         # Check translation and direction execution
         pos_match = self._points_equal(actual_pose, expected, tolerance=1e-3)
@@ -455,10 +523,11 @@ class PatrolController:
                 status=self._state,
                 actual_pose=actual_pose,
                 expected_command=expected,
-            )
+            ).model_copy(deep=True)
 
         # Command was rejected or differed (e.g. engine collision backstop)
         self._state = "stalled"
+        self._fresh_required_at = sample.sim_time_ms
         self._current_pose = actual_pose
 
         reason = (
@@ -472,7 +541,7 @@ class PatrolController:
             actual_pose=actual_pose,
             expected_command=expected,
             discrepancy_reason=reason,
-        )
+        ).model_copy(deep=True)
 
     # ------------------------------------------------------------------
     # Clearance and Sensor Evaluation
@@ -485,24 +554,23 @@ class PatrolController:
         sample: ObservationSample | None,
     ) -> dict:
         """Evaluate forward clearance conservatively across scans."""
-        # Check if latest sample reports sensor unavailability
-        if sample is not None and isinstance(sample.result, ObservationUnavailable):
-            return {
-                "status": "waiting_for_sensor",
-                "reason": f"LiDAR sensor is unavailable ({sample.result.reason}).",
-                "sample_id": sample.sample_id,
-                "sample_sim_time_ms": sample.sim_time_ms,
-            }
-
-        # Check if we have a fresh, applicable new sample
         sample_error = None
         if sample is not None:
-            validation_error = self._validate_lidar_sample(sample, current_sim_time_ms, pose)
-            if validation_error is None:
-                # New valid sample: update our active baseline
-                self._update_lidar_baseline(sample)
-            else:
-                sample_error = validation_error
+            try:
+                sample = ObservationSample.model_validate(sample.model_dump(mode="json"))
+                sample_error = self._validate_lidar_sample(sample, current_sim_time_ms, pose)
+            except ValueError:
+                sample_error = "Malformed LiDAR acquisition."
+            if sample_error is not None:
+                self._fresh_required_at = current_sim_time_ms
+                return {"status": "waiting_for_sensor", "reason": sample_error}
+            self._update_lidar_baseline(sample)
+        elif self._last_lidar_sample is not None:
+            sample_error = self._validate_lidar_sample(
+                self._last_lidar_sample, current_sim_time_ms, pose
+            )
+            if sample_error is not None:
+                return {"status": "waiting_for_sensor", "reason": sample_error}
 
         # Do we have a usable baseline scan?
         if (
@@ -630,6 +698,17 @@ class PatrolController:
         pose: Pose,
     ) -> str | None:
         """Validate sample compatibility, scope, direction, and timing."""
+        if self._fresh_required_at is not None and (
+            sample.sim_time_ms < self._fresh_required_at
+            or sample.sample_id == self._last_usable_sample_id
+        ):
+            return "Fresh acquisition required after turn or rejected movement."
+        if self._last_lidar_sample is not None and (sample.sim_time_ms, sample.sample_sequence) < (
+            self._last_lidar_sample.sim_time_ms,
+            self._last_lidar_sample.sample_sequence,
+        ):
+            return "LiDAR acquisition is older than the current baseline."
+
         if sample.request.capability != "lidar_scan":
             return "Capability is not lidar_scan."
 
@@ -651,6 +730,14 @@ class PatrolController:
         if sample.observer_pose.direction != pose.direction:
             return "Observer heading mismatch."
 
+        delta_x = pose.x_cm - sample.observer_pose.x_cm
+        delta_y = pose.y_cm - sample.observer_pose.y_cm
+        forward_x, forward_y = CARDINAL_VECTORS[pose.direction]
+        along = delta_x * forward_x + delta_y * forward_y
+        lateral = delta_x * forward_y - delta_y * forward_x
+        if abs(lateral) > 1e-6 or along < -1e-6:
+            return "Robot path cannot be reconciled with the observed forward ray."
+
         if sample.sim_time_ms > current_sim_time_ms:
             return "Future-dated sample."
 
@@ -661,6 +748,8 @@ class PatrolController:
 
     def _update_lidar_baseline(self, sample: ObservationSample) -> None:
         """Record valid LiDAR sample as the latest observation baseline."""
+        self._fresh_required_at = None
+        self._last_lidar_sample = sample.model_copy(deep=True)
         self._last_usable_sample_id = sample.sample_id
         self._last_capture_sim_time_ms = sample.sim_time_ms
         self._last_capture_pose = sample.observer_pose.model_copy(deep=True)
@@ -694,45 +783,17 @@ class PatrolController:
         return "north" if dy > 0 else "south"
 
     @staticmethod
-    def _extract_pose(obs: ObservationSample | PoseMeasurement | Pose) -> Pose:
+    def _extract_pose(obs: ObservationSample | Pose) -> Pose:
         if isinstance(obs, Pose):
-            return obs.model_copy(deep=True)
-        if isinstance(obs, ObservationSample):
-            if isinstance(obs.result, SensorObservation):
-                meas = obs.result.measurements
-                if isinstance(meas, Pose):
-                    return meas.model_copy(deep=True)
-                if isinstance(meas, PoseMeasurement):
-                    ctx = obs.result.context
-                    return Pose(
-                        x_cm=meas.x_cm,
-                        y_cm=meas.y_cm,
-                        robot_id=meas.robot_id,
-                        direction=meas.direction,
-                        location=ctx.location,
-                        frame_of_reference=ctx.frame_of_reference,
-                    )
-                if isinstance(meas, dict):
-                    ctx = obs.result.context
-                    return Pose(
-                        x_cm=meas["x_cm"],
-                        y_cm=meas["y_cm"],
-                        robot_id=meas.get("robot_id", ctx.observer),
-                        direction=meas["direction"],
-                        location=ctx.location,
-                        frame_of_reference=ctx.frame_of_reference,
-                    )
-            return obs.observer_pose.model_copy(deep=True)
-        if isinstance(obs, PoseMeasurement):
-            return Pose(
-                x_cm=obs.x_cm,
-                y_cm=obs.y_cm,
-                robot_id=obs.robot_id,
-                direction=obs.direction,
-                location="warehouse",
-                frame_of_reference="warehouse_map",
-            )
-        raise ValueError(f"Unsupported pose observation type: {type(obs)}")
+            return Pose.model_validate(obs.model_dump(mode="json"))
+        if not isinstance(obs, ObservationSample):
+            raise ValueError("pose requires explicit observer context")
+        sample = ObservationSample.model_validate(obs.model_dump(mode="json"))
+        if sample.request.capability != "robot_pose" or not isinstance(
+            sample.result, SensorObservation
+        ):
+            raise ValueError("successful robot_pose observation required")
+        return sample.observer_pose.model_copy(deep=True)
 
     # ------------------------------------------------------------------
     # Checkpoint and Restore
@@ -740,13 +801,22 @@ class PatrolController:
 
     def export_checkpoint(self, current_sim_time_ms: int) -> PatrolCheckpoint:
         """Export a versioned, JSON-safe snapshot of the controller state."""
+        if self._current_pose is None or self._run_id is None:
+            raise ValueError("checkpoint requires an initialized pose and run")
+        if current_sim_time_ms != self._current_sim_time_ms:
+            raise ValueError("checkpoint time must match the last observed controller time")
         return PatrolCheckpoint(
-            schema_version=1,
-            run_id=self._run_id or UUID(int=0),
+            patrol=self._patrol,
+            config=self._config,
+            target_waypoint_index=self._target_waypoint_index,
+            pending_decision_time=self._pending_decision_time,
+            fresh_required_at=self._fresh_required_at,
+            run_id=self._run_id,
             scenario_id=self._scenario_id,
             waypoint_index=self._current_waypoint_index,
             state=self._state,
-            current_pose=self._current_pose or self._patrol[0],  # type: ignore[arg-type]
+            current_pose=self._current_pose,
+            last_lidar_sample=self._last_lidar_sample,
             last_usable_sample_id=self._last_usable_sample_id,
             last_capture_sim_time_ms=self._last_capture_sim_time_ms,
             last_capture_pose=self._last_capture_pose,
@@ -754,36 +824,122 @@ class PatrolController:
             pending_command=self._pending_command,
             reconciled=self._reconciled,
             created_at_sim_time_ms=current_sim_time_ms,
-        )
+        ).model_copy(deep=True)
 
-    def restore_checkpoint(self, checkpoint: PatrolCheckpoint) -> None:
-        """Restore controller state from a checkpoint, validating run identity."""
-        if self._run_id is not None and checkpoint.run_id != self._run_id:
-            raise ValueError(
-                f"Checkpoint run_id {checkpoint.run_id} does not match "
-                f"controller run_id {self._run_id}"
-            )
-        if checkpoint.waypoint_index >= len(self._patrol):
-            raise ValueError(
-                f"Checkpoint waypoint index {checkpoint.waypoint_index} exceeds patrol bounds"
-            )
+    def restore_checkpoint(
+        self,
+        checkpoint: PatrolCheckpoint,
+        *,
+        engine_pose_observation: ObservationSample,
+        engine_pending_command: Pose | None = None,
+    ) -> None:
+        """Validate a paired engine/controller checkpoint before replacing state.
 
-        self._run_id = checkpoint.run_id
-        self._current_waypoint_index = checkpoint.waypoint_index
-        self._target_waypoint_index = min(checkpoint.waypoint_index + 1, len(self._patrol) - 1)
-        self._state = checkpoint.state
-        self._current_pose = checkpoint.current_pose.model_copy(deep=True)
-        self._last_usable_sample_id = checkpoint.last_usable_sample_id
-        self._last_capture_sim_time_ms = checkpoint.last_capture_sim_time_ms
-        self._last_capture_pose = (
-            checkpoint.last_capture_pose.model_copy(deep=True)
-            if checkpoint.last_capture_pose is not None
-            else None
+        The runtime holds its session lock while capturing/restoring both owners.
+        It supplies only the engine's robot-pose evidence and pending command here.
+        """
+        saved = PatrolCheckpoint.model_validate(checkpoint.model_dump(mode="json"))
+        if self._run_id is not None and saved.run_id != self._run_id:
+            raise ValueError("checkpoint does not match controller run_id")
+        if (
+            saved.scenario_id != self._scenario_id
+            or saved.patrol != self._patrol
+            or saved.config.model_dump(exclude={"playback_rate"})
+            != self._config.model_dump(exclude={"playback_rate"})
+        ):
+            raise ValueError("checkpoint patrol/config/scenario mismatch")
+        if saved.waypoint_index >= len(self._patrol) or saved.target_waypoint_index != min(
+            saved.waypoint_index + 1, len(self._patrol)
+        ):
+            # A single-point patrol starts and finishes at index zero.
+            if not (
+                len(self._patrol) == 1
+                and saved.waypoint_index == 0
+                and saved.target_waypoint_index in (0, 1)
+            ):
+                raise ValueError("checkpoint waypoint progress mismatch")
+        pose_sample = ObservationSample.model_validate(
+            engine_pose_observation.model_dump(mode="json")
         )
-        self._distance_travelled_since_capture_cm = checkpoint.distance_travelled_since_capture_cm
+        actual = self._extract_pose(pose_sample)
+        if (
+            pose_sample.run_id != saved.run_id
+            or pose_sample.sim_time_ms != saved.created_at_sim_time_ms
+            or actual != saved.current_pose
+            or engine_pending_command != saved.pending_command
+        ):
+            raise ValueError("engine/controller checkpoint mismatch")
+        if saved.reconciled != (saved.pending_command is None):
+            raise ValueError("checkpoint pending state mismatch")
+        if (saved.pending_command is None) != (saved.pending_decision_time is None):
+            raise ValueError("checkpoint pending time mismatch")
+        if (
+            saved.pending_decision_time is not None
+            and saved.pending_decision_time != saved.created_at_sim_time_ms
+        ):
+            raise ValueError("checkpoint pending command time mismatch")
+        if saved.pending_command is not None:
+            pending = saved.pending_command
+            current = saved.current_pose
+            displacement = abs(pending.x_cm - current.x_cm) + abs(pending.y_cm - current.y_cm)
+            if (
+                (pending.robot_id, pending.location, pending.frame_of_reference)
+                != (current.robot_id, current.location, current.frame_of_reference)
+                or (pending.x_cm != current.x_cm and pending.y_cm != current.y_cm)
+                or displacement > self._config.robot_speed_cm_s * self._config.step_ms / 1000 + 1e-9
+                or (displacement > 0 and pending.direction != current.direction)
+            ):
+                raise ValueError("checkpoint pending command violates motion constraints")
+        if saved.state == "complete" and not self._points_equal(
+            saved.current_pose, self._patrol[-1]
+        ):
+            raise ValueError("checkpoint completion pose mismatch")
+        baseline = saved.last_lidar_sample
+        if baseline is not None:
+            baseline = ObservationSample.model_validate(baseline.model_dump(mode="json"))
+            if (
+                baseline.request.capability != "lidar_scan"
+                or not isinstance(baseline.result, SensorObservation)
+                or baseline.run_id != saved.run_id
+                or baseline.sim_time_ms > saved.created_at_sim_time_ms
+                or baseline.sample_id != saved.last_usable_sample_id
+                or baseline.sim_time_ms != saved.last_capture_sim_time_ms
+                or (
+                    baseline.observer_pose.robot_id,
+                    baseline.observer_pose.location,
+                    baseline.observer_pose.frame_of_reference,
+                    baseline.observer_pose.direction,
+                )
+                != (
+                    saved.current_pose.robot_id,
+                    saved.current_pose.location,
+                    saved.current_pose.frame_of_reference,
+                    saved.current_pose.direction,
+                )
+                or baseline.observer_pose != saved.last_capture_pose
+            ):
+                raise ValueError("checkpoint LiDAR evidence mismatch")
+        elif saved.last_usable_sample_id is not None:
+            raise ValueError("checkpoint missing LiDAR evidence")
+        # Commit only after all validation succeeds.
+        self._run_id = saved.run_id
+        self._current_sim_time_ms = saved.created_at_sim_time_ms
+        self._current_waypoint_index = saved.waypoint_index
+        self._target_waypoint_index = saved.target_waypoint_index
+        self._state = saved.state
+        self._current_pose = saved.current_pose.model_copy(deep=True)
+        self._last_lidar_sample = None
+        self._last_usable_sample_id = None
+        self._last_capture_sim_time_ms = None
+        self._last_capture_pose = None
+        self._last_capture_detected = False
+        self._last_capture_measured_distance_cm = None
+        if baseline is not None:
+            self._update_lidar_baseline(baseline)
+        self._fresh_required_at = saved.fresh_required_at
+        self._distance_travelled_since_capture_cm = saved.distance_travelled_since_capture_cm
         self._pending_command = (
-            checkpoint.pending_command.model_copy(deep=True)
-            if checkpoint.pending_command is not None
-            else None
+            saved.pending_command.model_copy(deep=True) if saved.pending_command else None
         )
-        self._reconciled = checkpoint.reconciled
+        self._pending_decision_time = saved.pending_decision_time
+        self._reconciled = saved.reconciled

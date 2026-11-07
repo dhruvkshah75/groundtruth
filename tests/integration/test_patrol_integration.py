@@ -78,7 +78,7 @@ def test_patrol_progresses_along_route():
         eng.command_robot(decision.command)
         eng.advance()
 
-        reconciliation = controller.reconcile(eng.snapshot().robot_pose)
+        reconciliation = controller.reconcile(get_pose(sensors))
         assert reconciliation.executed
 
     # Robot moved north by 30 cm (30 cm/s * 1s)
@@ -139,7 +139,7 @@ def test_obstacle_approach_stop_clear_and_resume():
         assert decision.command is not None
         eng.command_robot(decision.command)
         eng.advance()
-        controller.reconcile(eng.snapshot().robot_pose)
+        controller.reconcile(get_pose(sensors))
 
     assert stopped, "Controller failed to stop before obstacle"
     assert stopped_at_y is not None
@@ -157,7 +157,7 @@ def test_obstacle_approach_stop_clear_and_resume():
     cart.footprint.x_cm = 500.0  # moved far away
 
     # Now take a fresh clear LiDAR scan and verify controller resumes!
-    t_resume = eng.snapshot().status.sim_time_ms + 100
+    t_resume = eng.snapshot().status.sim_time_ms
     lidar_clear = get_front_lidar(sensors)
     dec_resumed = controller.decide(t_resume, get_pose(sensors), lidar_clear)
 
@@ -165,7 +165,7 @@ def test_obstacle_approach_stop_clear_and_resume():
     assert dec_resumed.command is not None
     eng.command_robot(dec_resumed.command)
     eng.advance()
-    rec = controller.reconcile(eng.snapshot().robot_pose)
+    rec = controller.reconcile(get_pose(sensors))
     assert rec.executed
     assert eng.snapshot().robot_pose.y_cm > stopped_at_y
 
@@ -190,7 +190,7 @@ def test_sensor_outage_causes_waiting_and_recovers():
         assert dec.status == "moving"
         eng.command_robot(dec.command)
         eng.advance()
-        controller.reconcile(eng.snapshot().robot_pose)
+        controller.reconcile(get_pose(sensors))
 
     # Disable LiDAR availability
     eng._snap.sensor_availability.lidar_scan = False
@@ -204,7 +204,7 @@ def test_sensor_outage_causes_waiting_and_recovers():
 
     # Restore LiDAR
     eng._snap.sensor_availability.lidar_scan = True
-    t_restored = t_outage + 100
+    t_restored = t_outage
     restored_lidar = get_front_lidar(sensors)
     dec_restored = controller.decide(t_restored, get_pose(sensors), restored_lidar)
 
@@ -243,8 +243,56 @@ def test_playback_rate_independence():
             if dec.command:
                 eng.command_robot(dec.command)
                 eng.advance()
-                controller.reconcile(eng.snapshot().robot_pose)
+                controller.reconcile(get_pose(sensors))
 
         results_by_rate[rate] = trace
 
     assert results_by_rate[0.25] == results_by_rate[0.5] == results_by_rate[1.0]
+
+
+def test_paired_engine_controller_checkpoint_resumes_pending_tick_once():
+    engine, sensors, scene = create_engine_and_sensors()
+    engine.play()
+    controller = PatrolController(
+        scene.patrol,
+        scene.config,
+        initial_pose=scene.robot_pose,
+        run_id=engine.snapshot().status.run_id,
+        scenario_id=scene.scenario_id,
+    )
+    decision = controller.decide(0, get_pose(sensors), get_front_lidar(sensors))
+    engine.command_robot(decision.command)
+    controller_checkpoint = controller.export_checkpoint(0)
+    engine_checkpoint = engine.export_state()
+    restored_engine = SimulationEngine.restore(engine_checkpoint)
+    restored_sensors = WarehouseSensors(restored_engine.snapshot)
+    restored = PatrolController(
+        scene.patrol,
+        scene.config,
+        initial_pose=scene.robot_pose,
+        run_id=restored_engine.snapshot().status.run_id,
+        scenario_id=scene.scenario_id,
+    )
+    pending = restored_engine.pending_robot_command
+    pending.y_cm = 500
+    assert restored_engine.pending_robot_command == decision.command
+    restored.restore_checkpoint(
+        controller_checkpoint,
+        engine_pose_observation=get_pose(restored_sensors),
+        engine_pending_command=restored_engine.pending_robot_command,
+    )
+    with pytest.raises(RuntimeError):
+        restored.decide(0, get_pose(restored_sensors), get_front_lidar(restored_sensors))
+    restored_engine.advance()
+    assert restored.reconcile(get_pose(restored_sensors)).executed
+    with pytest.raises(RuntimeError):
+        restored.reconcile(get_pose(restored_sensors))
+    assert restored_engine.snapshot().robot_pose == decision.command
+
+
+def test_documented_patrol_example_executes():
+    import re
+
+    path = Path(__file__).parents[2] / "docs/phase-two/Patrol_Controller.md"
+    blocks = re.findall(r"```python\n(.*?)```", path.read_text(), re.S)
+    exec(compile(blocks[-1], str(path), "exec"), {})
