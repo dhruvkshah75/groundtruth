@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -195,6 +196,7 @@ class AgentSession:
     _dirty: bool = field(init=False, default=False)
     _last_save: float = field(init=False, default=0)
     _last_view: float = field(init=False, default=0)
+    _save_revision: int = field(init=False, default=0)
     _pending_save: Future | None = field(init=False, default=None)
     _writer: ThreadPoolExecutor | None = field(init=False, default=None)
 
@@ -793,12 +795,30 @@ class AgentService:
         self._store = store
         self._sessions: dict[str, AgentSession] = {}
         self._lock = threading.Lock()
-        self._lifecycle = threading.Lock()
+        self._lifecycle = threading.Condition()
+        self._changing_ids: set[str] = set()
+        self._initializing = 0
+        self._shutdown_lock = threading.Lock()
         self._config = config or get_provider_config()
         self._now = now
         self._background = background
         self._stop = threading.Event()
         self._runner: threading.Thread | None = None
+
+    @contextmanager
+    def _change_session(self, key: str) -> Iterator[None]:
+        """Serialize creation and deletion for this ID, without blocking other IDs."""
+        with self._lifecycle:
+            self._lifecycle.wait_for(lambda: key not in self._changing_ids or self._stop.is_set())
+            if self._stop.is_set():
+                raise RuntimeError("Agent service is shutting down.")
+            self._changing_ids.add(key)
+        try:
+            yield
+        finally:
+            with self._lifecycle:
+                self._changing_ids.remove(key)
+                self._lifecycle.notify_all()
 
     def get_session(self, session_id: str) -> AgentSession:
         canonical_id = _canonical_session_id(session_id)
@@ -808,36 +828,44 @@ class AgentService:
             existing = self._sessions.get(canonical_id)
         if existing is not None:
             return existing
-        with self._lifecycle:
+        with self._change_session(canonical_id):
             with self._lock:
-                if self._stop.is_set():
-                    raise RuntimeError("Agent service is shutting down.")
                 if canonical_id in self._sessions:
                     return self._sessions[canonical_id]
-                if len(self._sessions) >= 128:
+                if len(self._sessions) + self._initializing >= 128:
                     raise RuntimeError("The local demo has reached its 128-session limit.")
-            session = AgentSession(config=self._config, now=self._now)
-            if self._store:
-                session._writer = ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix="groundtruth-save"
-                )
+                self._initializing += 1
             try:
-                stored = self._store.load(canonical_id) if self._store else None
-                if stored:
-                    session.restore(*stored)
-                elif self._store:
-                    self.save_session(canonical_id, session)
-            except Exception:
-                session.runtime = None
-                session.load_error = (
-                    "Could not restore saved session. Reset or load a scenario to recover."
-                )
-                LOGGER.warning("Session restore or initialization failed")
+                session = self._restore_session(canonical_id)
+            except BaseException:
+                with self._lock:
+                    self._initializing -= 1
+                raise
             with self._lock:
+                self._initializing -= 1
                 self._sessions[canonical_id] = session
             if session.runtime is not None:
                 self._ensure_runner()
             return session
+
+    def _restore_session(self, key: str) -> AgentSession:
+        session = AgentSession(config=self._config, now=self._now)
+        if self._store is None:
+            return session
+        session._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="groundtruth-save")
+        try:
+            stored = self._store.load(key)
+            if stored:
+                session.restore(*stored)
+            else:
+                self.save_session(key, session)
+        except Exception:
+            session.runtime = None
+            session.load_error = (
+                "Could not restore saved session. Reset or load a scenario to recover."
+            )
+            LOGGER.warning("Session restore or initialization failed")
+        return session
 
     def _ensure_runner(self) -> None:
         with self._lock:
@@ -877,16 +905,16 @@ class AgentService:
                             and (session._pending_save is None or session._pending_save.done())
                         )
                     ):
-                        self._queue_save(key, session)
+                        self._queue_save(key, session, defer_capture=True)
                 except Exception:
                     runtime.fail(runtime.error or "Simulation scheduler failed.")
                     LOGGER.warning("Warehouse scheduler paused a failed run")
             finally:
                 session.lock.release()
 
-    def _queue_save(self, key: str, session: AgentSession) -> Future | None:
-        # Each session's FIFO writer preserves submission order without holding up
-        # other sessions. Deletion drains it before the ID can be reused.
+    def _queue_save(
+        self, key: str, session: AgentSession, *, defer_capture: bool = False
+    ) -> Future | None:
         if (
             session._writer is None
             or session.load_error
@@ -894,23 +922,54 @@ class AgentService:
         ):
             return None
         assert self._store is not None
-        state = session.persisted_state()
-        image = session.agent.memory.export_snapshot()
+        store = self._store
         runtime = session.runtime
+
+        def capture() -> tuple[dict, bytes]:
+            state = session.persisted_state()
+            image = session.agent.memory.export_snapshot()
+            session._dirty = False
+            return state, image
+
+        def record_failure() -> None:
+            if not session._retired and session.runtime is runtime and runtime is not None:
+                runtime.persistence_error = "Simulation checkpoint could not be saved."
+                runtime.fail(runtime.persistence_error)
+
+        # Immediate controls capture their exact boundary. A periodic capture can
+        # run later, but must be discarded if a newer boundary was already queued.
+        try:
+            checkpoint = None if defer_capture else capture()
+        except Exception:
+            record_failure()
+            raise
+        session._save_revision += 1
+        revision = session._save_revision
+        generation = session._generation
+        conversation = session._conversation_generation
 
         def write() -> None:
             try:
-                self._store.save(key, state, image)
+                payload = checkpoint
+                if payload is None:
+                    with session.lock:
+                        if (
+                            session._retired
+                            or session._save_revision != revision
+                            or session._generation != generation
+                            or session._conversation_generation != conversation
+                            or (runtime is not None and runtime.error)
+                        ):
+                            return
+                        payload = capture()
+                store.save(key, *payload)
             except Exception:
                 with session.lock:
-                    if not session._retired and session.runtime is runtime and runtime is not None:
-                        runtime.persistence_error = "Simulation checkpoint could not be saved."
-                        runtime.fail(runtime.persistence_error)
+                    record_failure()
                 raise
 
         future = session._writer.submit(write)
         session._pending_save = future
-        session._dirty = False
         session._last_save = self._now()
         return future
 
@@ -973,10 +1032,8 @@ class AgentService:
 
     def delete_session(self, session_id: str) -> None:
         key = _canonical_session_id(session_id)
-        with self._lifecycle:
+        with self._change_session(key):
             with self._lock:
-                if self._stop.is_set():
-                    raise RuntimeError("Agent service is shutting down.")
                 session = self._sessions.pop(key, None)
             if session is not None:
                 with session.lock:
@@ -985,17 +1042,22 @@ class AgentService:
                     session.agent.close()
             if self._store is not None:
                 if session is not None and session._writer is not None:
-                    session._writer.submit(self._store.delete, key).result()
-                    session._writer.shutdown()
+                    try:
+                        session._writer.submit(self._store.delete, key).result()
+                    finally:
+                        session._writer.shutdown()
                 else:
                     self._store.delete(key)
 
     def shutdown(self) -> None:
-        with self._lifecycle:
-            if self._stop.is_set():
-                return
-            with self._lock:
+        with self._shutdown_lock:
+            with self._lifecycle:
+                if self._stop.is_set():
+                    return
                 self._stop.set()
+                self._lifecycle.notify_all()
+                self._lifecycle.wait_for(lambda: not self._changing_ids)
+            with self._lock:
                 sessions = tuple(self._sessions.items())
                 self._sessions.clear()
                 runner = self._runner

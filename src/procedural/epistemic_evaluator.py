@@ -291,6 +291,21 @@ class EpistemicEvaluator:
         nearest_dist = measurements.get("nearest_distance_cm")
         telemetry = [lidar_obs.model_dump(mode="json")]
 
+        # Warehouse ingestion owns route beliefs and scopes them to a run.
+        # This answer describes the current scan independently of legacy map facts.
+        if not revise_routes:
+            if sensor_status not in ("clear", "blocked"):
+                return EpistemicEvaluation(
+                    status="unverifiable",
+                    explanation="LiDAR did not return a recognized clear/blocked route status.",
+                    sensor_telemetry=telemetry,
+                )
+            return EpistemicEvaluation(
+                status="grounded",
+                explanation=f"The forward LiDAR scan reported {sensor_status}.",
+                sensor_telemetry=telemetry,
+            )
+
         # A route claim only applies to this observed place and frame of reference.
         map_facts = [
             f
@@ -335,13 +350,6 @@ class EpistemicEvaluator:
                 status="unverifiable",
                 explanation="LiDAR did not return a recognized clear/blocked route status.",
                 memory_facts=contextual_facts,
-                sensor_telemetry=telemetry,
-            )
-
-        if not revise_routes:
-            return EpistemicEvaluation(
-                status="grounded",
-                explanation=f"The forward LiDAR scan reported {sensor_status}.",
                 sensor_telemetry=telemetry,
             )
 

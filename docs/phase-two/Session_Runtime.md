@@ -106,10 +106,11 @@ includes `simulation_evidence.run_id`, `sim_time_ms`, and `request_id` for its
 capture. The current service snapshot can advance while explanation is in progress.
 
 Registry lookup copies references under the registry lock and releases it before
-acquiring a session lock. The separate lifecycle lock serializes creation and deletion
-of registry entries. No session operation acquires that lifecycle lock. The scheduler
-and the checkpoint writer are joined without the registry or session locks. Shutdown
-and deletion retire the session so a provider that returns late cannot touch its ledger.
+acquiring a session lock. Creation and deletion reserve only the affected UUID and
+release the lifecycle condition while doing work. The scheduler skips a busy session
+and revisits it on a later pass. Shutdown joins the scheduler and writers without the
+registry or session locks. Shutdown and deletion retire the session so a provider that
+returns late cannot touch its ledger.
 
 New chat invalidates the conversation and preserves the warehouse. Preset replacement,
 reset, deletion, and shutdown invalidate earlier requests. Retiring the session object
@@ -122,15 +123,21 @@ extend that timer.
 
 A version 1 runtime checkpoint is an additive key in the legacy session JSON. It
 contains the validated engine replay checkpoint, paired controller checkpoint,
-latest patrol evidence, next sequence, and unprocessed clock time. The existing
-SQLite row commits that JSON and its matching memory image together.
+latest patrol evidence, next sequence, and unprocessed clock time. A single SQLite
+transaction commits the JSON and matching memory image in that session's own database
+under `data/chat-sessions.sqlite.sessions/`. Back up that directory with the server
+stopped to preserve saved chats. At startup, legacy rows in `data/chat-sessions.sqlite`
+are copied to the per-session databases and cleared from the legacy table after all
+copies commit. A retry keeps any already committed destination rows.
 
-Capture and queue submission are ordered under the session lock. Each session has
-its own FIFO writer, so an older capture cannot commit after a newer one or recreate
-a deleted session. Session writers share the SQLite store, whose transactions still
-serialize database access. Dirty runs checkpoint at one wall
-second intervals, with immediate captures for controls and lifecycle changes.
-A writer failure pauses the affected run with a persistence diagnostic.
+Each session has a FIFO writer. Dirty runs request a checkpoint at one wall second
+intervals. The scheduler only queues the request. The writer captures state and ledger
+together under that session's lock, then releases it before encoding or writing.
+Controls and lifecycle changes capture their boundary immediately. A deferred capture
+skips itself when a newer capture or generation supersedes it. Deletion drains the
+affected queue before the UUID can be reused. Separate SQLite databases let another
+session commit even if a transaction is held open. A capture or write failure pauses
+the affected run with a persistence diagnostic.
 
 Restore validates engine replay, controller pairing, and saved evidence against the
 ledger. Active runs restore paused and anchor wall time to the new process. An
@@ -145,10 +152,11 @@ An internal ingestion or tick failure pauses the run and requires a reload or re
 
 - Clock and runtime checkpoints are exercised by
   `uv run --locked pytest -q tests/unit/test_simulation_clock.py tests/integration/test_simulation_runtime.py tests/integration/test_session_simulation.py`.
-- The focused suite passed 24 tests. It covers the corrected warehouse replay,
-  blocked interpretation, synthesis and review, stale publication, serialization,
-  pending-command restore, corrupt checkpoints, inactivity, and failed or delayed writes.
-- The locked full suite passed 577 tests with localhost access. The test process
+- The focused suite passed 40 tests across the clock, runtime, session, store and
+  legacy scenario suites. Regression tests block a ledger export and a real SQLite
+  transaction, verify checkpoint ordering across reset, exercise migration, and check
+  that conflicting previous-run route facts cannot override a fresh LiDAR scan.
+- The locked full suite passed 583 tests with localhost access. The test process
   bypassed the repository's default developer `.env` loading so tests could
   select their own provider configuration. The headless example above also ran successfully.
 - Repository-wide Ruff lint and formatting checks passed.

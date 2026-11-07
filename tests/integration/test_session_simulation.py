@@ -215,6 +215,7 @@ def test_slow_checkpoint_does_not_block_other_sessions_or_resurrect_deleted_id(
         clock[0] = 1
         service.pump()
         assert entered.wait(5)
+        service.get_session(second)._pending_save.result(timeout=2)
         clock[0] = 2
         service.pump()
         assert service.read_simulation(second)["status"]["sim_time_ms"] == 1000
@@ -460,3 +461,168 @@ def test_managed_scheduler_is_single_and_joins_on_shutdown(clock, warehouse, mon
     finally:
         service.shutdown()
     assert not worker.is_alive()
+
+
+def test_slow_ledger_export_does_not_stall_scheduler(clock, warehouse, tmp_path, monkeypatch):
+    store = SessionStore(tmp_path / "slow-export.sqlite")
+    service = service_for(clock, store)
+    first, second = str(uuid4()), str(uuid4())
+    load(service, first, warehouse)
+    load(service, second, warehouse)
+    first_session = service.get_session(first)
+    second_session = service.get_session(second)
+    entered, release = Event(), Event()
+    export = first_session.agent.memory.export_snapshot
+
+    def delayed_export():
+        entered.set()
+        assert release.wait(5)
+        return export()
+
+    monkeypatch.setattr(first_session.agent.memory, "export_snapshot", delayed_export)
+    try:
+        with ThreadPoolExecutor() as pool:
+            clock[0] = 1
+            first_pump = pool.submit(service.pump)
+            try:
+                assert entered.wait(5)
+                first_pump.result(timeout=2)
+                second_session._pending_save.result(timeout=2)
+                clock[0] = 2
+                pool.submit(service.pump).result(timeout=2)
+                assert service.read_simulation(second)["status"]["sim_time_ms"] == 1000
+            finally:
+                release.set()
+        first_session._pending_save.result(timeout=2)
+        assert (
+            store.load(first)[0]["simulation_runtime"]["engine"]["snapshot"]["status"][
+                "sim_time_ms"
+            ]
+            == 500
+        )
+    finally:
+        release.set()
+        service.shutdown()
+        store.close()
+
+
+def test_stalled_sqlite_transaction_does_not_block_another_session(
+    clock, warehouse, tmp_path, monkeypatch
+):
+    import sqlite3
+
+    store = SessionStore(tmp_path / "slow-sqlite.sqlite")
+    service = service_for(clock, store)
+    first, second = str(uuid4()), str(uuid4())
+    load(service, first, warehouse)
+    load(service, second, warehouse)
+    entered, release = Event(), Event()
+    connect = sqlite3.connect
+
+    class SlowWrite(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            result = super().execute(sql, parameters)
+            if sql.startswith("INSERT INTO sessions"):
+                assert self.in_transaction
+                entered.set()
+                assert release.wait(5)
+            return result
+
+    def connect_with_stall(path, *args, **kwargs):
+        if Path(path).name == f"{first}.sqlite":
+            kwargs["factory"] = SlowWrite
+        return connect(path, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect_with_stall)
+    try:
+        clock[0] = 1
+        service.pump()
+        assert entered.wait(5)
+        with ThreadPoolExecutor() as pool:
+            try:
+                other_save = pool.submit(
+                    service.control_simulation, second, SimulationControl(action="pause")
+                )
+                assert other_save.result(timeout=2)["state"] == "paused"
+                saved = store.load(second)[0]["simulation_runtime"]["engine"]["snapshot"]
+                assert saved["status"]["state"] == "paused"
+                assert saved["status"]["sim_time_ms"] == 500
+            finally:
+                release.set()
+    finally:
+        release.set()
+        service.shutdown()
+        store.close()
+
+
+def test_fresh_warehouse_lidar_ignores_conflicting_previous_run_facts(clock, warehouse):
+    from src.contracts import FactQuery
+
+    service = service_for(clock)
+    key = str(uuid4())
+    load(service, key, warehouse)
+    session = service.get_session(key)
+    old_run = str(session.runtime.run_id)
+    try:
+        for second in range(1, 13):
+            clock[0] = second * 2
+            service.pump()
+        service.control_simulation(key, SimulationControl(action="reset"))
+        new_run = str(session.runtime.run_id)
+        facts = session.agent.memory.query_facts(FactQuery(subject="route_A", active_only=True))
+        assert {(fact.context.extra_context.get("run_id"), fact.object) for fact in facts} >= {
+            (old_run, "blocked"),
+            (new_run, "clear"),
+        }
+        item = session.ask("Is the front route clear to move forward?")
+        assert item["status"] == "grounded"
+        assert item["answer"] == "The forward LiDAR scan reported clear."
+        assert item["simulation_evidence"]["run_id"] == new_run
+        assert not item["revisions"]
+    finally:
+        service.shutdown()
+
+
+def test_deferred_capture_cannot_overtake_reset_checkpoint(clock, warehouse, tmp_path, monkeypatch):
+    store = SessionStore(tmp_path / "deferred.sqlite")
+    service = service_for(clock, store)
+    key = str(uuid4())
+    load(service, key, warehouse)
+    session = service.get_session(key)
+    old_run = str(session.runtime.run_id)
+    release, reset_queued = Event(), Event()
+    original_queue = service._queue_save
+    original_save = store.save
+    saved_runs = []
+
+    def queue(*args, **kwargs):
+        result = original_queue(*args, **kwargs)
+        if not kwargs.get("defer_capture"):
+            reset_queued.set()
+        return result
+
+    def save(key, state, image):
+        saved_runs.append(state["simulation_runtime"]["engine"]["snapshot"]["status"]["run_id"])
+        original_save(key, state, image)
+
+    monkeypatch.setattr(service, "_queue_save", queue)
+    monkeypatch.setattr(store, "save", save)
+    try:
+        session._writer.submit(release.wait)
+        clock[0] = 1
+        service.pump()
+        periodic = session._pending_save
+        with ThreadPoolExecutor() as pool:
+            reset = pool.submit(service.control_simulation, key, SimulationControl(action="reset"))
+            try:
+                assert reset_queued.wait(2)
+            finally:
+                release.set()
+            new_run = reset.result(timeout=2)["run_id"]
+        periodic.result(timeout=2)
+        assert new_run != old_run
+        assert saved_runs == [new_run]
+    finally:
+        release.set()
+        service.shutdown()
+        store.close()
