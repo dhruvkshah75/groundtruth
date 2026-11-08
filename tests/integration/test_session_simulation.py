@@ -573,7 +573,9 @@ def test_fresh_warehouse_lidar_ignores_conflicting_previous_run_facts(clock, war
             service.pump()
         service.control_simulation(key, SimulationControl(action="reset"))
         new_run = str(session.runtime.run_id)
-        facts = session.agent.memory.query_facts(FactQuery(subject="route_A", active_only=True))
+        facts = session.agent.memory.query_facts(
+            FactQuery(subject="route_A", predicate="status_is", active_only=True)
+        )
         assert {(fact.context.extra_context.get("run_id"), fact.object) for fact in facts} == {
             (new_run, "clear")
         }
@@ -585,7 +587,7 @@ def test_fresh_warehouse_lidar_ignores_conflicting_previous_run_facts(clock, war
             }
         item = session.ask("Is the front route clear to move forward?")
         assert item["status"] == "grounded"
-        assert item["answer"] == "The forward LiDAR scan reported clear."
+        assert item["answer"] == "The forward LiDAR scan on route_A reported clear."
         assert item["simulation_evidence"]["run_id"] == new_run
         assert not item["revisions"]
     finally:

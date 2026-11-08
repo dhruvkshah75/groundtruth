@@ -123,6 +123,7 @@ class PlanExecutor:
             plan_verifiable=plan.current_state_verifiable,
             blocking_reasons=plan.blocking_reasons,
             plan_reason=plan.plan_reason,
+            resolved_entity_ids=plan.resolved_entity_ids,
             memory_results=memory_results,
             observation_results=observation_results,
             temporal_results=temporal_results,

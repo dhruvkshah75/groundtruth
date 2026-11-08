@@ -163,3 +163,65 @@ def test_mock_environment_registers_new_object_names_before_perception():
         assert "x=60 cm" not in answer
     finally:
         service.shutdown()
+
+
+def test_station_nodes_and_front_route_audit_follow_current_heading():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        for _ in range(300):
+            session.runtime.step()
+        snapshot = session.snapshot()
+        assert {"warehouse", "packing_station", "inspection_station"} <= set(
+            snapshot["graph"]["nodes"]
+        )
+        assert any(
+            fact["subject"] == "packing_station"
+            and fact["object"] == "warehouse"
+            and fact["source_agent"] == "scenario_map"
+            for fact in snapshot["active_facts"]
+        )
+        assert session.runtime.read().robot_pose.direction == "east"
+        result = session.ask("Why did the front route belief change?")
+        assert all(
+            fact["subject"] == "route_B"
+            for trail in result["audit_trails"]
+            for fact in trail["facts"]
+        )
+        assert result["audit_trails"]
+        result = session.ask("Is the front route clear now?")
+        assert "route_B" in result["answer"] and "blocked" in result["answer"]
+        named_current = session.ask("Is route A clear now?")
+        assert "not aligned" in named_current["answer"]
+        named = session.ask("Why did route A change?")
+        assert any(
+            fact["subject"] == "route_A"
+            for trail in named["audit_trails"]
+            for fact in trail["facts"]
+        )
+    finally:
+        service.shutdown()
+
+
+def test_route_and_station_evidence_use_the_loaded_scenario_map():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    scenario = warehouse_preset().model_copy(deep=True)
+    station = next(entity for entity in scenario.entities if entity.entity_id == "packing_station")
+    station.entity_id = "dispatch_zone"
+    scenario.routes[0].route_id = "aisle_01"
+    try:
+        service.load_simulation(key, scenario)
+        session = service.get_session(key)
+        assert session.runtime.current_route_id() == "aisle_01"
+        facts = session.agent.memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at")
+        )
+        assert {fact.object for fact in facts} == {"dispatch_zone"}
+        response = session.ask("Is the front route clear?")
+        assert "aisle_01" in response["answer"]
+        assert "packing_station" not in session.snapshot()["graph"]["nodes"]
+    finally:
+        service.shutdown()

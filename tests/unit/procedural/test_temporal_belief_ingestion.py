@@ -929,6 +929,34 @@ def test_lidar_route_blocked_to_clear_revision_chain() -> None:
     assert audit.output_fact_ids == [fact_clear.fact_id]
 
 
+def test_other_route_lidar_cannot_verify_an_unobserved_route() -> None:
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_id = uuid4()
+    east = Pose(
+        x_cm=100,
+        y_cm=450,
+        robot_id="robot_1",
+        direction="east",
+        location="warehouse",
+        frame_of_reference="warehouse_map",
+    )
+    service.ingest_sample(
+        make_lidar_sample(
+            sim_time_ms=1000,
+            status="blocked",
+            nearest_distance_cm=50,
+            run_id=run_id,
+            pose=east,
+            sequence=0,
+        )
+    )
+    summary = service.get_route_belief_summary(run_id, "route_A", current_sim_time_ms=1000)
+    assert summary.verification_status == "unverified"
+    assert summary.latest_lidar_attempt is None
+
+
 def test_lidar_wrong_direction_or_unmapped_pose_does_not_update_route() -> None:
     repo = FakeMemoryRepository()
     ledger = FakeObservationLedger()

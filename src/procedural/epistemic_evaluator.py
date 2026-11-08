@@ -179,6 +179,9 @@ class EpistemicEvaluator:
                 memory_facts=memory_facts,
                 memory_repo=memory_repo,
                 revise_routes=revise_routes,
+                route_id=plan_result.resolved_entity_ids[0]
+                if plan_result.resolved_entity_ids
+                else None,
             )
 
         # A successful pose observation is direct evidence for current-location
@@ -264,6 +267,8 @@ class EpistemicEvaluator:
             explanation = (
                 "Audit history: " + " ".join(event_explanations)
                 if event_explanations
+                else f"No revision history found for {plan_result.resolved_entity_ids[0]}."
+                if plan_result.resolved_entity_ids
                 else "No revision history found for the requested entity."
             )
             return EpistemicEvaluation(
@@ -298,6 +303,7 @@ class EpistemicEvaluator:
         memory_facts: list[StoredFact],
         memory_repo: EpistemicMemoryInterface,
         revise_routes: bool = True,
+        route_id: str | None = None,
     ) -> EpistemicEvaluation:
         """Scenario A: compare active map belief with live LiDAR and revise if conflicted."""
         measurements = lidar_obs.measurements
@@ -316,7 +322,10 @@ class EpistemicEvaluator:
                 )
             return EpistemicEvaluation(
                 status="grounded",
-                explanation=f"The forward LiDAR scan reported {sensor_status}.",
+                explanation=(
+                    f"The forward LiDAR scan{' on ' + route_id if route_id else ''} "
+                    f"reported {sensor_status}."
+                ),
                 sensor_telemetry=telemetry,
             )
 

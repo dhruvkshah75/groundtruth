@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { highlightedFacts } from "./beliefGraphAppearance";
+import { highlightedFacts, visibleGraphNodes } from "./beliefGraphAppearance";
 import {
   BrainCircuit,
   ChevronRight,
@@ -116,7 +116,7 @@ function GraphControls({ state, scope, onScopeChange }: {
     </section>
     <section className="belief-sidebar-section belief-legend" aria-labelledby="graph-legend-title">
       <h2 id="graph-legend-title">Legend</h2>
-      <ul><li><i className="node" />Entity or value node</li><li><i className="edge" />Active stored fact</li><li><i className="edge superseded" />Superseded fact in history</li><li><i className="changed" />New or revised fact</li></ul>
+      <ul><li><i className="node" />Entity or value node</li><li><i className="node historical" />No active relationships</li><li><i className="edge" />Active stored fact</li><li><i className="edge superseded" />Superseded fact in history</li><li><i className="changed" />New or revised fact</li></ul>
     </section>
   </div>;
 }
@@ -124,6 +124,7 @@ function GraphControls({ state, scope, onScopeChange }: {
 function FactDetails({
   fact,
   auditEvent,
+  simTimeMs,
   nodeId,
   nodeFacts,
   open,
@@ -133,6 +134,7 @@ function FactDetails({
 }: {
   fact: DisplayFact | null;
   auditEvent: AuditEvent | null;
+  simTimeMs: number | null;
   nodeId: string | null;
   nodeFacts: DisplayFact[];
   open: boolean;
@@ -153,7 +155,9 @@ function FactDetails({
             <div><span className={`belief-state ${fact.active ? "active" : "superseded"}`}>{fact.active ? "Active fact" : "Superseded fact"}</span><h2>{displayText(fact.predicate)}</h2></div>
             <GitCommitHorizontal size={22} aria-hidden="true" />
           </div>
-          <p className="belief-detail-note">This is a persisted belief with source and observation provenance. It does not expose hidden model reasoning.</p>
+          <p className="belief-detail-note">{fact.sourceAgent === "scenario_map"
+            ? "Declared by the scenario map; this describes room membership, not a sensor observation."
+            : "A stored belief is not necessarily current. Later observations may be out of view or outside a mapped station."}</p>
 
           <dl className="belief-claim">
             <div><dt>Subject</dt><dd>{displayText(fact.source)}</dd></div>
@@ -167,6 +171,7 @@ function FactDetails({
               <div><dt>Source Agent</dt><dd>{displayText(fact.sourceAgent)}</dd></div>
               <div><dt>Confidence</dt><dd><span className="belief-confidence"><i style={{ width: `${Math.round(fact.confidence * 100)}%` }} /></span>{Math.round(fact.confidence * 100)}%</dd></div>
               <div><dt>Observed</dt><dd>{formatTime(fact.observedAt)}</dd></div>
+              {simTimeMs !== null && <div><dt>Simulation time</dt><dd>{(simTimeMs / 1000).toFixed(3)} s</dd></div>}
             </dl>
           </section>
 
@@ -200,7 +205,7 @@ function FactDetails({
             <Network size={22} aria-hidden="true" />
           </div>
           <p className="belief-detail-note">
-            This node appears in {nodeFacts.length} stored {nodeFacts.length === 1 ? "fact" : "facts"}. Select a relationship to inspect its source, confidence, time, and spatial context.
+            {nodeFacts.length ? `This node appears in ${nodeFacts.length} displayed ${nodeFacts.length === 1 ? "fact" : "facts"}. Select a relationship to inspect its evidence.` : "No active relationships remain. Select Belief history to inspect earlier relationships."}
           </p>
           <section className="belief-detail-section">
             <h3>Connected beliefs</h3>
@@ -410,18 +415,14 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
     () => highlightedFacts(highlightedFactIds, state?.ledger ?? [], state?.audit_events ?? []),
     [highlightedFactIds, state],
   );
-  const nodes = useMemo(() => {
-    const values = new Set<string>();
-    facts.forEach((fact) => { values.add(fact.source); values.add(fact.target); });
-    if (scope === "active") state?.graph.nodes.forEach((node) => values.add(node));
-    return [...values].sort();
-  }, [facts, scope, state]);
+  const nodes = useMemo(() => visibleGraphNodes(scope, facts, state?.graph.nodes ?? [], state?.ledger ?? []), [facts, scope, state]);
   const selectedFact = facts.find((fact) => fact.factId === selectedFactId)
     ?? allFacts.find((fact) => fact.factId === selectedFactId)
     ?? null;
   const selectedAuditEvent = selectedFact && state
     ? relevantAuditEvent(selectedFact.factId, state.audit_events)
     : null;
+  const selectedSimTime = state?.ledger.find((item) => item.fact_id === selectedFact?.factId)?.evidence.sim_time_ms;
   const selectedNodeFacts = selectedNodeId
     ? facts.filter((fact) => fact.source === selectedNodeId || fact.target === selectedNodeId)
     : [];
@@ -497,7 +498,7 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
 
       <section className="belief-main" aria-label="Belief network">
         <header className="belief-topbar">
-          <div><div className="belief-title-row"><h1>Stored beliefs</h1><span>Live graph</span></div><p>Select a node or relationship to inspect its evidence.</p></div>
+          <div><div className="belief-title-row"><h1>Stored beliefs</h1><span>Live graph</span></div><p>Active beliefs can be stale. Select a relationship to inspect its evidence.</p></div>
           <div className="belief-top-actions">
             <span><RefreshCw size={13} className={loading ? "spin" : ""} />{lastUpdated ? `Refreshed ${lastUpdated.toLocaleTimeString()}` : "Waiting for graph"}</span>
             {!embedded && <><button className="belief-demo-button" type="button" onClick={() => void prepareScenarioA()} disabled={demoAction !== null}>
@@ -519,7 +520,7 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
         <section className="belief-stage" aria-label="Interactive three-dimensional belief graph">
           {loading ? (
             <div className="belief-stage-state" role="status"><LoaderCircle size={24} className="spin" /><strong>Loading the current belief graph</strong><span>Reading active facts from the Agent API.</span></div>
-          ) : nodes.length && facts.length ? (
+          ) : nodes.length ? (
             <BeliefGraphCanvas
               facts={facts}
               nodes={nodes}
@@ -569,6 +570,7 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
       <FactDetails
         fact={selectedFact}
         auditEvent={selectedAuditEvent}
+        simTimeMs={typeof selectedSimTime === "number" ? selectedSimTime : null}
         nodeId={selectedNodeId}
         nodeFacts={selectedNodeFacts}
         open={detailsOpen && detailsPresence.phase === "open"}

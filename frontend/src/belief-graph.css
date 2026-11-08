@@ -91,6 +91,7 @@
 .belief-legend i.node { width: 10px; height: 10px; border: 1px solid var(--accent); border-radius: 50%; background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .belief-legend i.edge { height: 1px; background: #8b7596; }
 .belief-legend i.superseded { border-top: 1px dashed #6f7271; background: transparent; }
+.belief-legend i.node.historical { background: #817a85; }
 .belief-legend i.changed { width: 19px; height: 2px; border: 0; border-radius: 0; background: #a06a1c; }
 
 .belief-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--surface-raised); }

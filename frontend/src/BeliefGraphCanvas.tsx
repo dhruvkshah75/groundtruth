@@ -175,7 +175,7 @@ export function BeliefGraphCanvas({
       const name = document.createElement("strong");
       name.textContent = displayText(node);
       const detail = document.createElement("small");
-      detail.textContent = `${nodeDegree} connected ${nodeDegree === 1 ? "fact" : "facts"}`;
+      detail.textContent = nodeDegree ? `${nodeDegree} connected ${nodeDegree === 1 ? "fact" : "facts"}` : "No active relationships";
       label.element.replaceChildren(name, detail);
       label.element.title = `${displayText(node)} · ${detail.textContent}`;
       graphLabels.push({ id: `node:${node}`, object: label, kind: "node", anchor: mesh });
@@ -382,7 +382,8 @@ export function BeliefGraphCanvas({
         (fact) => fact.factId === selectedFactId && (fact.source === nodeId || fact.target === nodeId),
       );
       const material = mesh.material as THREE.MeshStandardMaterial;
-      material.color.setHex(document.documentElement.dataset.theme === "dark" ? (related ? 0x91bdb3 : 0x70afa6) : (related ? 0x563064 : 0x765184));
+      const isolated = !facts.some((fact) => fact.source === nodeId || fact.target === nodeId);
+      material.color.setHex(isolated && !related ? 0x817a85 : document.documentElement.dataset.theme === "dark" ? (related ? 0x91bdb3 : 0x70afa6) : (related ? 0x563064 : 0x765184));
       material.emissiveIntensity = 0;
       mesh.scale.setScalar(related ? 1.12 : 1);
       (mesh.userData.labelElement as HTMLElement).classList.toggle("selected", related);

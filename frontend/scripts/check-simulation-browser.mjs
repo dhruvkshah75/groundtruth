@@ -384,6 +384,11 @@ try {
   assert.equal(await page.getByText("Completed", { exact: true }).count(), 0);
   assert.equal(await page.locator(".sim-clock").getByText(/Reload preset/).count(), 0);
   assert.equal(await clock.innerText(), "30.000 s");
+  await button("Belief graph").click();
+  await button("Fact list").click();
+  const factList = page.getByRole("dialog", { name: "Stored belief facts" });
+  await factList.getByRole("button").filter({ hasText: "packing station" }).filter({ hasText: "scenario map" }).first().waitFor();
+  await factList.getByRole("button", { name: "Close fact list" }).click();
   await button("Chat").click();
   await page.getByRole("textbox", { name: "Ask the cognitive Agent" }).fill("Where is parcel 01 now?");
   await button("Send message").click();
