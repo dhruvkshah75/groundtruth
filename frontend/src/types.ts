@@ -52,6 +52,10 @@ export type SimulationEvidence = {
     freshness: string; uncertainty_reason: string | null; supported_location?: string | null;
     status?: string | null; last_positive_sighting?: StoredObservationSample | null;
     last_positive_lidar_sample?: StoredObservationSample | null;
+    latest_sensor_attempt?: StoredObservationSample | null;
+    latest_lidar_attempt?: StoredObservationSample | null;
+    last_observed_position?: { x_cm: number; y_cm: number } | null;
+    last_observed_frame?: string | null;
   };
   samples: StoredObservationSample[]; facts: Fact[]; events: AuditEvent[]; truncated: boolean;
 };

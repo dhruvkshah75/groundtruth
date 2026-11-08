@@ -26,3 +26,12 @@ for (const axis of ["x", "y", "z"]) {
 }
 
 console.log("belief graph layout uses X, Y, and Z space");
+
+const revised = graphPositions(
+  ["route_A", "blocked", "clear"],
+  [{ source: "route_A", target: "clear" }],
+  twoNodePositions,
+);
+assert.deepEqual(revised.get("route_A"), twoNodePositions.get("route_A"));
+assert.deepEqual(revised.get("blocked"), blocked);
+assert.notDeepEqual(revised.get("clear"), blocked);

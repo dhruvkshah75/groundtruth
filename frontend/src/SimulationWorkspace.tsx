@@ -104,6 +104,22 @@ function BeliefPanel({ state, stale }: { state: SimulationStateResponse | null; 
   </section>;
 }
 
+function observationDescription(sample: StoredObservationSample, entity: string) {
+  if ("reason" in sample.result) return displayText(sample.result.reason);
+  const readings = sample.result.measurements;
+  if (sample.request.capability === "camera_detect") {
+    const detection = (readings.objects as CameraDetection[] | undefined)?.find((item) => item.object_id === entity);
+    return detection
+      ? `Seen at (${detection.position.x_cm}, ${detection.position.y_cm}) cm · ${displayText(detection.frame_of_reference)} · Apparent color: ${detection.apparent_color}`
+      : "Not detected in this camera capture";
+  }
+  if (sample.request.capability === "lidar_scan") {
+    const distance = readings.nearest_distance_cm;
+    return typeof distance === "number" ? `Obstacle at ${distance} cm` : "No obstacle in sensor range";
+  }
+  return "Sensor observation recorded";
+}
+
 function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId: string; state: SimulationStateResponse; entity: string; onFocusFact: (factId: string) => void }) {
   const [evidence, setEvidence] = useState<SimulationEvidence | null>(null);
   const [error, setError] = useState("");
@@ -139,6 +155,8 @@ function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId
   ].sort((a, b) => a.time - b.time || Number(!!a.revision) - Number(!!b.revision));
   const summary = evidence?.summary;
   const last = summary?.last_positive_sighting ?? summary?.last_positive_lidar_sample;
+  const latest = summary?.latest_sensor_attempt ?? summary?.latest_lidar_attempt;
+  const position = summary?.last_observed_position;
   return <section className="sim-panel sim-timeline" aria-labelledby="sim-timeline-title">
     <div className="sim-panel-heading"><h2 id="sim-timeline-title"><Activity size={17} />Belief and evidence</h2></div>
     <div className="sim-timeline-body">
@@ -146,15 +164,16 @@ function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId
         <h3>{warehouseLabel(entity)}</h3>
         <p>Stored belief · {summary?.supported_location ? displayText(summary.supported_location) : summary?.status ? displayText(summary.status) : "No stored location or route status"}</p>
         <p>Verification · {displayText(summary?.verification_status ?? "unverified")}{summary?.visibility && ` · ${displayText(summary.visibility)}`} · {displayText(summary?.freshness ?? "unverified")}</p>
-        {last && <p>Last observed · {simTime(last.sim_time_ms)} · {displayText(last.sensor_id)}</p>}
+        {last && <p>Last observed · {simTime(last.sim_time_ms)} · {displayText(last.sensor_id)}{position && <> · ({position.x_cm}, {position.y_cm}) cm{summary?.last_observed_frame && ` · ${displayText(summary.last_observed_frame)}`}</>}</p>}
+        {latest && "reason" in latest.result && latest.result.reason === "sensor_unavailable" && <p>Sensor unavailable · {simTime(latest.sim_time_ms)} · {displayText(latest.sensor_id)}</p>}
         {summary?.uncertainty_reason && <p>{displayText(summary.uncertainty_reason)}</p>}
         <p className="sim-subtle">Run {evidence.run_id} · as of {simTime(evidence.sim_time_ms)}</p>
         <details className="sim-timeline-details"><summary>Observation and revision timeline ({timeline.length})</summary>
           {timeline.length ? <ol className="sim-timeline-list">{timeline.map(({ key, time, sample, revision }) => <li key={key}>
-            <strong>{simTime(time)} · {revision ? "Belief revision" : displayText(sample!.sensor_id)}</strong>
-            {revision ? <><p>{revision.previous && revision.next && <>{displayText(revision.previous.object)} → {displayText(revision.next.object)} · </>}{displayText(revision.event.reason)}</p><p>Rule · {displayText(revision.event.policy_rule)}</p><div className="sim-timeline-actions">{revision.previous && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.previous!.fact_id)}>Focus earlier belief</button>}{revision.next && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.next!.fact_id)}>Focus updated belief</button>}</div></>
-              : <><p>{"reason" in sample!.result ? displayText(sample!.result.reason) : sample!.request.capability === "camera_detect" && Array.isArray(sample!.result.measurements.objects) && !(sample!.result.measurements.objects as CameraDetection[]).some((item) => item.object_id === entity) ? "Not detected in this camera capture" : "Sensor observation recorded"}</p><p>Recorded · {sample!.stored_at}</p></>}
-            <details><summary>Raw record</summary><pre>{JSON.stringify(revision?.event ?? sample, null, 2)}</pre></details>
+            <strong>{simTime(time)} · {revision ? "Belief revision" : displayText(sample!.sensor_id)}{revision?.next && ` · ${displayText(revision.next.source_agent)}`}</strong>
+            {revision ? <>{revision.previous && <p>Earlier belief · {displayText(revision.previous.object)}</p>}<p>{displayText(revision.event.reason)}</p><p>Rule · {displayText(revision.event.policy_rule)}</p>{revision.next && <p>Updated belief · {displayText(revision.next.object)}</p>}<div className="sim-timeline-actions">{revision.previous && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.previous!.fact_id)}>Focus earlier belief</button>}{revision.next && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.next!.fact_id)}>Focus updated belief</button>}</div></>
+              : <><p>{observationDescription(sample!, entity)}</p><p>Received by ledger · <time dateTime={sample!.stored_at}>{new Date(sample!.stored_at).toISOString()}</time> (wall time)</p></>}
+            <details><summary>Raw record</summary><pre>{JSON.stringify(revision ? { audit: revision.event, earlier: revision.previous, updated: revision.next } : sample, null, 2)}</pre></details>
           </li>)}</ol> : <p>No observations or revisions recorded for this selection.</p>}
           {evidence.truncated && <p>Showing a bounded selection of the recorded history.</p>}
         </details>
@@ -230,7 +249,7 @@ function SimulationQuestions({ sessionId, state, renderAnswer, entity, onSelectE
     setError("");
     try {
       const options = { sessionId, signal: controller.signal };
-      const response = await api.ask(text.trim(), options);
+      const response = await api.ask(text.trim(), options, { run_id: state.run_id, generation: state.generation });
       const latest = response.answer;
       const current = await api.simulationState(options);
       if (controller.signal.aborted) return;
@@ -488,7 +507,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
         <aside id="simulation-evidence" className="sim-evidence" aria-label="Simulation evidence">
           <ObservationPanel state={state} stale={stale} />
           <BeliefPanel state={state} stale={stale} />
-          {loaded && state && <EvidenceTimeline sessionId={sessionId} state={state} entity={entity} onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />}
+          {loaded && state && <EvidenceTimeline key={`${state.run_id}:${state.generation}:${entity}`} sessionId={sessionId} state={state} entity={entity} onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />}
         </aside>
       </div>
       {loaded && state && <SimulationQuestions key={`${sessionId}:${state.generation}:${state.run_id}`} sessionId={sessionId} state={state} renderAnswer={renderAnswer} entity={entity} onSelectEntity={selectEntity} />}

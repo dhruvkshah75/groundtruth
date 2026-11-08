@@ -550,6 +550,7 @@ export default function BeliefGraphPage({ embedded = false, sessionId, workspace
             <div className="belief-stage-state" role="status"><LoaderCircle size={24} className="spin" /><strong>Loading the current belief graph</strong><span>Reading active facts from the Agent API.</span></div>
           ) : nodes.length ? (
             <BeliefGraphCanvas
+              preserveLayout={!!state?.simulation_status?.run_id}
               facts={facts}
               nodes={nodes}
               interactionMode={interactionMode}

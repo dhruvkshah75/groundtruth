@@ -31,7 +31,7 @@
 - [Session simulation runtime (P2-07)](phase-two/Session_Runtime.md) - independent warehouse scheduling, evidence capture, checkpoint recovery, and service integration.
 - [Simulation HTTP API (P2-09)](phase-two/Simulation_API.md) - presenter controls, live polling, and the replay exporter interface.
 - [Simulation workspace (P2-10)](phase-two/Simulation_Workspace.md) - live warehouse map, presenter controls, and evidence panels.
-- [Belief timeline and questions (P2-11)](phase-two/Belief_Timeline_UI.md) - in-progress run-scoped evidence, timeline and question integration.
+- [Belief timeline and questions (P2-11)](phase-two/Belief_Timeline_UI.md) - run-scoped evidence, stored belief graph, audit timeline and temporal questions.
 
 ## Supporting context
 

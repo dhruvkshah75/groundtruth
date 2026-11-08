@@ -5,6 +5,7 @@ import type {
   SimulationDisruptResponse,
   SimulationExportBundle,
   SimulationLoadRequest,
+  SimulationRunIdentity,
   SimulationStateResponse,
 } from "./simulationTypes";
 
@@ -78,11 +79,11 @@ function postSimulation<T>(
 export const api = {
   health: () => request<ApiHealth>("/api/health"),
   state: (sessionId?: string) => request<AppState>("/api/state", sessionId ? { headers: { "X-Session-ID": sessionId } } : {}),
-  ask: (question: string, options?: SimulationRequestOptions) =>
+  ask: (question: string, options?: SimulationRequestOptions, expected?: SimulationRunIdentity) =>
     request<AppState>("/api/ask", {
       ...simulationOptions(options),
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, expected }),
     }),
   loadScenario: (scenario: "scenario-a" | "scenario-b") =>
     request<AppState>(`/api/scenarios/${scenario}`, {

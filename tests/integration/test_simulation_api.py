@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from src.contracts.simulation import ObservationSample
 from src.contracts.simulation_api import (
     SimulationControlRequest,
     SimulationDisruptRequest,
@@ -144,6 +145,45 @@ def test_evidence_endpoint_is_run_scoped_and_does_not_expose_unseen_parcel(api):
     code, error, _ = send(BASE + "/evidence", {"expected": identity, "entity_id": "parcel_01"})
     assert code == 409
     assert error["code"] == "stale_run"
+
+
+def test_timeline_keeps_capture_order_when_an_older_observation_arrives_late(api):
+    send, service, _, key = api
+    loaded = load(send)
+    runtime = service.get_session(key).runtime
+    for _ in range(10):
+        runtime.step()
+    body = {"expected": identity(loaded), "entity_id": "parcel_01"}
+    code, original, _ = send(BASE + "/evidence", body)
+    assert code == 200
+    assert original["samples"][-1]["sim_time_ms"] == 1000
+    delayed = original["samples"][0].copy()
+    del delayed["stored_at"]
+    delayed.update(sample_id=str(uuid4()), sample_sequence=1000)
+    sample = ObservationSample.model_validate(delayed)
+    stored = service.get_session(key).agent.memory.record_observation_sample(sample)
+    code, evidence, _ = send(BASE + "/evidence", body)
+    assert code == 200
+    ordered = evidence["samples"]
+    assert ordered[1]["sample_id"] == str(sample.sample_id)
+    assert ordered[1]["sim_time_ms"] == 0
+    assert datetime.fromisoformat(ordered[1]["stored_at"]) == stored.stored_at
+    assert stored.stored_at >= datetime.fromisoformat(ordered[-1]["stored_at"])
+    assert evidence["events"] == original["events"]
+
+
+def test_delayed_simulation_question_cannot_execute_against_new_run(api):
+    send, _, _, _ = api
+    original = load(send)
+    code, new_run, _ = control(send, original, "reset")
+    assert code == 200
+    question = {"question": "Where is parcel 01 now?", "expected": identity(original)}
+    assert_error(send("/api/ask", question), 409, "stale_request")
+    assert send("/api/state")[1]["history"] == []
+    question["expected"] = identity(new_run)
+    code, answer, _ = send("/api/ask", question)
+    assert code == 200
+    assert answer["answer"]["simulation_evidence"]["run_id"] == new_run["run_id"]
 
 
 def test_ask_sanitizes_upstream_request_size_error(api, monkeypatch):

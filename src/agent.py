@@ -407,14 +407,38 @@ def _explain(
     question = response.question
     tool_name, tool_call_id = trace.tool_name, trace.tool_call_id
     final_answer, explanation_source = response.answer, trace.explanation_source
+    history_query = any(
+        operation.get("name") == "temporal_query_history" for operation in trace.operations
+    )
     if hasattr(provider, "generate_grounded_explanation"):
         try:
-            grounded_text = provider.generate_grounded_explanation(
-                user_question=question,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                tool_result=tool_result,
-            )
+            try:
+                grounded_text = provider.generate_grounded_explanation(
+                    user_question=question,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    tool_result=tool_result,
+                )
+            except IntentProviderUnavailableError as exc:
+                cause: BaseException | None = exc
+                while cause is not None and getattr(cause, "status_code", None) != 413:
+                    cause = cause.__cause__
+                if cause is None or not history_query:
+                    raise
+                # The evaluator's timeline already contains every recorded sighting.
+                # Avoid sending the same raw sensor samples and identifiers twice.
+                tool_result = {
+                    "status": eval_outcome.status,
+                    "deterministic_evaluation_summary": re.sub(
+                        r" \(sample ID: [^)]+\)", "", eval_outcome.explanation
+                    ),
+                }
+                grounded_text = provider.generate_grounded_explanation(
+                    user_question=question,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    tool_result=tool_result,
+                )
             exact = validate_grounded_response(grounded_text, eval_outcome)
             reviewed = (
                 bool(grounded_text and grounded_text.strip())
@@ -426,25 +450,23 @@ def _explain(
                 final_answer = grounded_text.strip()
                 explanation_source = "llm"
             else:
+                if history_query:
+                    raise IntentProviderUnavailableError(
+                        "Unable to produce a verified history explanation. Please try again."
+                    )
                 LOGGER.warning(
                     "LLM grounded explanation failed consistency guard or was empty; "
                     "safely using deterministic evaluation outcome"
                 )
                 final_answer = eval_outcome.explanation
                 explanation_source = "deterministic_fallback"
-        except IntentProviderUnavailableError as exc:
-            cause: BaseException | None = exc
-            while cause is not None and getattr(cause, "status_code", None) != 413:
-                cause = cause.__cause__
-            history_query = any(
-                operation.get("name") == "temporal_query_history" for operation in trace.operations
-            )
-            if cause is None or not history_query:
-                raise
-            LOGGER.info("History exceeds provider request limits; returning recorded evaluation.")
-            final_answer = eval_outcome.explanation
-            explanation_source = "deterministic_fallback"
-        except Exception:
+        except IntentProviderUnavailableError:
+            raise
+        except Exception as exc:
+            if history_query:
+                raise IntentProviderUnavailableError(
+                    "Unable to produce a history explanation. Please try again."
+                ) from exc
             LOGGER.warning("LLM explanation call failed. Using deterministic fallback.")
             final_answer = eval_outcome.explanation
             explanation_source = "deterministic_fallback"

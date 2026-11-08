@@ -14,7 +14,7 @@ from src.web.service import AgentService, StaleRequestError
 from src.web.simulation_presets import warehouse_preset
 
 
-def test_history_question_uses_complete_grounded_result_when_provider_request_is_too_large(
+def test_history_question_retries_with_compact_evidence_when_provider_request_is_too_large(
     monkeypatch,
 ):
     service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
@@ -28,23 +28,41 @@ def test_history_question_uses_complete_grounded_result_when_provider_request_is
         class RequestTooLarge(Exception):
             status_code = 413
 
-        def reject_large_result(**_kwargs):
-            try:
-                raise RequestTooLarge("request too large")
-            except RequestTooLarge as cause:
-                raise IntentProviderUnavailableError("explanation rejected") from cause
+        calls = []
+
+        def explain(**kwargs):
+            calls.append(kwargs["tool_result"])
+            if len(calls) == 1:
+                try:
+                    raise RequestTooLarge("request too large")
+                except RequestTooLarge as cause:
+                    raise IntentProviderUnavailableError("explanation rejected") from cause
+            assert "6500 ms" in str(calls[-1])
+            assert "26500 ms" in str(calls[-1])
+            assert "sample ID" not in str(calls[-1])
+            return "Parcel 01 was observed several times, most recently at 26.5 seconds."
 
         monkeypatch.setattr(
-            session.agent.provider,
-            "generate_grounded_explanation",
-            reject_large_result,
-            raising=False,
+            session.agent.provider, "generate_grounded_explanation", explain, raising=False
+        )
+        monkeypatch.setattr(
+            session.agent.provider, "verify_grounded_explanation", lambda *_: True, raising=False
         )
         response = session.ask("show the history of the parcel 01?")
-        assert "Sighting timeline for parcel_01" in response["answer"]
-        assert "6500 ms" in response["answer"]
-        assert "26500 ms" in response["answer"]
-        assert response["react_trace"]["explanation_source"] == "deterministic_fallback"
+        assert len(calls) == 2
+        assert (
+            response["answer"]
+            == "Parcel 01 was observed several times, most recently at 26.5 seconds."
+        )
+        assert response["react_trace"]["explanation_source"] == "llm"
+
+        # An unsupported paraphrase must never expose the raw timeline as an answer.
+        monkeypatch.setattr(
+            session.agent.provider, "verify_grounded_explanation", lambda *_: False, raising=False
+        )
+        calls.clear()
+        with pytest.raises(IntentProviderUnavailableError, match="verified history"):
+            session.ask("show the history of the parcel 01?")
     finally:
         service.shutdown()
 

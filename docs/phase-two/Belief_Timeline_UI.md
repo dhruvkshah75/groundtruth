@@ -1,25 +1,48 @@
 # Belief timeline and questions (P2-11)
 
-[Issue #35](https://github.com/dhruvkshah75/groundtruth/issues/35) · Implementation in progress; implementation PR not yet opened.
+[Issue #35](https://github.com/dhruvkshah75/groundtruth/issues/35) ·
+[Implementation branch](https://github.com/dhruvkshah75/groundtruth/tree/codex/p2-11-belief-timeline).
 
 ## Dependencies
 
-The workspace uses temporal ingestion and summaries from [P2-05](Temporal_Belief_Ingestion.md) (merged in `9add3df`), temporal questions from [P2-08](Temporal_Questions.md) (`13c7ffe`), the [P2-09 simulation API](Simulation_API.md) (`619e420`) and the [P2-10 workspace](Simulation_Workspace.md) (`38ff50e`).
+All four prerequisites are closed and their integrated interfaces are present on the implementation branch:
 
-## Current behavior
+| Issue | Interface | Merged code |
+| --- | --- | --- |
+| [P2-05 / #27](https://github.com/dhruvkshah75/groundtruth/issues/27) | [Temporal ingestion and belief summaries](Temporal_Belief_Ingestion.md) | `9add3df` |
+| [P2-08 / #32](https://github.com/dhruvkshah75/groundtruth/issues/32) | [Temporal questions and grounded answers](Temporal_Questions.md) | `13c7ffe` |
+| [P2-09 / #33](https://github.com/dhruvkshah75/groundtruth/issues/33) | [Run-scoped simulation HTTP API](Simulation_API.md) | `619e420` |
+| [P2-10 / #34](https://github.com/dhruvkshah75/groundtruth/issues/34) | [Warehouse simulation workspace](Simulation_Workspace.md) | `38ff50e` |
 
-Load the warehouse in the Simulation tab, select an entity or route using the question panel or the audience map, and expand **Observation and revision timeline**. The belief panel requests `POST /api/simulation/evidence` with the current `run_id`, `generation`, and `entity_id`. The server checks the run identity, then reads the existing observation ledger, audit chains and P2-05 summary under the session lock. The response is limited to 40 observations and 100 facts and events. The panel presents capture times in simulation seconds, storage times separately, and the recorded policy reason and rule. Raw records remain expandable.
+## Try it locally
 
-Stored station beliefs are not necessarily current positions. Verification, visibility, freshness and last-seen data come from the ingestion summary. A map selection sends only an entity name to the question flow; it never adds audience coordinates to the question. The existing belief graph and its scenario-map relationships remain intact. A graph selection shares focus with the simulation when both show the same run; selecting a timeline revision can focus its predecessor or successor in the graph.
+```bash
+cd frontend
+npm ci
+npm run build
+cd ..
+GROUNDTRUTH_PROVIDER_MODE=offline uv run --locked python -m src.web.server
+```
 
-Questions use `/api/ask`. The server includes the specific answer in the response as well as returning the session snapshot; the question panel checks the captured run and current incarnation before displaying it. The response keeps its capture time as the simulation continues. Previous responses from this run can be opened in the question-history dialog. A run or session change resets the focused panel.
+Open `http://127.0.0.1:8765/simulation` and load the warehouse preset. Drag **Belief graph** beside Simulation. Select **Parcel 01** and play. Open **Observation and revision timeline** and inspect the move from packing to inspection. **Focus earlier belief** selects the predecessor in the stored graph; **Focus updated belief** selects its successor. The selection is retained if the graph is opened afterward. Select **Route A** to inspect the cart's blockage and later clearance. The graph's **Fact list** also supports keyboard selection and sends focus back to the evidence panel and map.
 
-If the provider rejects the grounded explanation for a temporal-history query because its request is too large (HTTP 413), the agent returns its already-evaluated evidence timeline and marks the response as a deterministic fallback. It does not silently substitute an answer for other provider errors. Provider diagnostics are kept out of the web response; size, rate and availability failures have short messages, and the question remains editable for retry.
+In **Ask about the run**, use one of the suggested questions or type e.g. “When was parcel 01 last seen?” or “Show the history of parcel 01.” The answer keeps its original capture time while playback continues. **Show all questions** opens the captured answers for the loaded run.
 
-## Known limitations and remaining validation
+## Data flow and semantics
 
-This is an intermediate handoff. The complete real-backend acceptance matrix—including hidden relocation, stale and unavailable observations, selection of both predecessor and successor, delayed receipt and slow answers across a reset—still needs browser-level verification. Observation retrieval is capped at 1,000 ledger samples before the display limit; pagination for longer runs is not implemented. A standalone relevant graph view inside the simulation tab has not been added; the existing graph can be opened alongside it.
+- The audience map is physical truth. Selecting a map object supplies an entity reference to the question form. Its audience coordinates never enter the question. Camera position, coordinate frame and apparent color come from actual detections; LiDAR distance comes from the matching route observation. Existing user expectations and historical maintenance claims remain separately attributed in the shared answer renderer.
+- `POST /api/simulation/evidence` takes `{ "expected": { "run_id": "...", "generation": 1 }, "entity_id": "parcel_01" }`. Use the identity from `GET /api/simulation/state`. The service validates it under the session lock, then reads P2-05 summaries, the observation ledger and audit chains. The panel separates stored claims from current verification, visibility, freshness and sensor availability. The timeline orders observations and revisions by simulation capture time. Ledger receipt is a separate wall-clock timestamp; its difference from the simulation epoch is not a latency measurement. Audit reasons and rules come from stored events, and raw records can be expanded.
+- The existing graph reads `GET /api/state` and keeps surviving nodes in place when real simulation relationships change. The graph highlights changed facts using persisted revisions and audit events. Audience motion alone does not change any graph relationship. Scenario map nodes and room relationships remain visible.
+- Simulation questions use `POST /api/ask` with `question` and the optional `expected` identity above. Normal chat can omit `expected`. The backend checks the requested identity before executing, captures evidence without holding playback during answer generation, and discards an answer if the session or run changes during execution. The response includes the request-specific `answer` and its `simulation_evidence` capture metadata. The workspace also checks that identity before showing the answer. A new run or session clears its focused evidence and inline question view. No schema migration is required.
+- A provider rejection for an oversized history request triggers one retry with the evaluated sightings and without redundant sensor payloads or sample identifiers. The answer still goes through grounding review. If the retry or review fails, the question stays editable and the UI shows a short error. Markdown tables render in the shared chat renderer with horizontal scrolling when needed and sample ID columns omitted.
 
-## Checks
+The timeline displays at most 40 observations and 100 facts and audit events from a query capped at 1,000 candidate samples. Raw receipt times are available for samples; full-ledger pagination is outside this workspace. Failed or stale requests are surfaced without inventing readings, and a previous run's answers do not appear in the current run's inline history.
 
-With local provider configuration excluded, `python -m pytest -q` passed 664 tests in an isolated copy using the project virtual environment. `ruff check .`, `ruff format --check .`, `npm run build`, `npm run test:graph` and `npm run test:display` passed. `npm run test:simulation` passed against the offline backend at 1440, 1024, 768 and 390 px, including evidence selection, question history, a provider error and timeline-to-graph focus. P2-14 should use actual run evidence rather than audience coordinates when validating the final demo.
+## Verification and handoff
+
+- `uv run --locked pytest -q`: 666 passed in a clean source copy without local provider configuration. The [HTTP tests](../../tests/integration/test_simulation_api.py) include late receipt ordered by capture time and stale ask identity rejection. Existing tests cover separately attributed color perspectives and ingestion policy.
+- `uv run --locked ruff check .`, `uv run --locked ruff format --check .`, and `git diff --check` passed.
+- `npm ci`, `npm run build`, `npm run test:graph`, and `npm run test:display` passed in `frontend`.
+- `npm run test:simulation` passed against the offline backend at 1440, 1024, 768 and 390 px. The [browser test](../../frontend/scripts/check-simulation-browser.mjs) covers visible and unseen relocation, outage and stale sightings, both route transitions, raw records, keyboard graph selection, Markdown history tables, and delayed answers during playback and across a reset. Start the backend as above and set `CHROME_PATH` to an installed Chrome executable if Playwright's Chromium is unavailable.
+
+For P2-14, use the same run's sensor evidence when validating the live demo: compare a visible move with an unseen one, inspect the earlier and updated claims, and ask a temporal question during playback. Use the capture label on the answer when comparing it with the live clock.

@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import type { DisplayFact } from "./BeliefGraphPage";
-import { graphPositions } from "./beliefGraphLayout";
+import { graphPositions, type GraphPoint } from "./beliefGraphLayout";
 import { factColor } from "./beliefGraphAppearance";
 import { placeGraphLabels, type GraphLabel } from "./beliefGraphLabels";
 
@@ -14,6 +14,7 @@ export type CameraAction = {
 };
 
 type Props = {
+  preserveLayout?: boolean;
   facts: DisplayFact[];
   nodes: string[];
   interactionMode: "orbit" | "pan";
@@ -54,6 +55,7 @@ function disposeObject(root: THREE.Object3D): void {
 export function BeliefGraphCanvas({
   facts,
   nodes,
+  preserveLayout = false,
   interactionMode,
   selectedFactId,
   selectedNodeId,
@@ -63,6 +65,7 @@ export function BeliefGraphCanvas({
   onSelectNode,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const previousPositions = useRef<Map<string, GraphPoint>>(new Map());
   const labelsDirtyRef = useRef(true);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -100,7 +103,8 @@ export function BeliefGraphCanvas({
     const theme = getComputedStyle(container);
     scene.background = new THREE.Color(theme.getPropertyValue("--surface-raised").trim() || "#f8f6f9");
 
-    const positions = graphPositions(nodes, facts);
+    const positions = graphPositions(nodes, facts, preserveLayout ? previousPositions.current : undefined);
+    if (preserveLayout) previousPositions.current = positions;
     const radius = Math.max(1, ...[...positions.values()].map(({ x, y, z }) => Math.hypot(x, y, z))) + 0.5;
     const fitDistance = (aspect: number) => {
       const halfFov = Math.min(THREE.MathUtils.degToRad(24), Math.atan(Math.tan(THREE.MathUtils.degToRad(24)) * aspect));
@@ -374,7 +378,7 @@ export function BeliefGraphCanvas({
       nodeMeshesRef.current = new Map();
       factObjectsRef.current = new Map();
     };
-  }, [graphSignature]);
+  }, [graphSignature, preserveLayout]);
 
   useEffect(() => {
     for (const [nodeId, mesh] of nodeMeshesRef.current) {

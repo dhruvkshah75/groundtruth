@@ -153,6 +153,11 @@ textarea { caret-color: var(--accent); }
 .answer-text strong { font-weight: 650; }
 .answer-text a { color: var(--accent); text-underline-offset: 3px; }
 .answer-text pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: var(--surface-raised); }
+.answer-table-scroll { max-width: 100%; margin: 0 0 .8em; overflow-x: auto; border: 1px solid var(--line-strong); border-radius: 8px; }
+.answer-table-scroll table { width: 100%; min-width: max-content; font-size: .8125rem; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.answer-table-scroll th, .answer-table-scroll td { padding: 9px 12px; text-align: left; }
+.answer-table-scroll th { position: static; color: var(--text); font-size: .75rem; letter-spacing: 0; text-transform: none; }
+.answer-table-scroll tbody tr:last-child td { border-bottom: 0; }
 .pose-summary { margin: 17px 0 0 38px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .pose-summary-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .pose-summary-heading strong { color: var(--text); font-size: 13px; font-weight: 600; }

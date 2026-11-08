@@ -17,6 +17,7 @@ from src.contracts.simulation_api import (
     SimulationDisruptRequest,
     SimulationEvidenceRequest,
     SimulationLoadRequest,
+    SimulationRunIdentity,
 )
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.web.service import (
@@ -114,7 +115,11 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 question = payload.get("question")
                 if not isinstance(question, str):
                     raise ValueError("'question' must be a string.")
-                answer = session.ask(question)
+                if "expected" in payload:
+                    expected = SimulationRunIdentity.model_validate(payload["expected"])
+                    answer = session.ask(question, expected=expected)
+                else:
+                    answer = session.ask(question)
             else:
                 with session.lock:
                     session.touch()

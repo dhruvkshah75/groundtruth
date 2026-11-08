@@ -818,7 +818,9 @@ class AgentSession:
 
         raise ValueError("Unknown scenario. Choose 'scenario-a' or 'scenario-b'.")
 
-    def ask(self, question: str) -> dict[str, object]:
+    def ask(
+        self, question: str, *, expected: SimulationRunIdentity | None = None
+    ) -> dict[str, object]:
         """Run a question through the composed Python agent and retain its result."""
         cleaned = question.strip()
         if not cleaned:
@@ -834,6 +836,8 @@ class AgentSession:
 
         with self.lock:
             self.touch()
+            if expected is not None:
+                self.require_simulation_identity(expected)
             identity = self._request_identity()
             request_id = str(uuid4())
         with self._request_lock:

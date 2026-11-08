@@ -1,5 +1,6 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database, Map as MapIcon,
   FlaskConical, LoaderCircle, MessageSquareText, MoreHorizontal, Network, PanelLeftClose,
@@ -647,7 +648,9 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
           </div>
         </div>
 
-        <div className="answer-text"><ReactMarkdown skipHtml remarkPlugins={[formatMarkdownIdentifiers]}>{response.answer}</ReactMarkdown></div>
+        <div className="answer-text"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm, omitSampleIdColumns, formatMarkdownIdentifiers]} components={{
+          table: ({ children }) => <div className="answer-table-scroll" role="region" aria-label="Answer table, scroll horizontally for more columns" tabIndex={0}><table>{children}</table></div>,
+        }}>{response.answer}</ReactMarkdown></div>
         {response.simulation_evidence && <p className="sim-answer-meta">Captured at {(response.simulation_evidence.sim_time_ms / 1000).toFixed(3)} s · Run {response.simulation_evidence.run_id}</p>}
         {response.perspectives && (
           <div className="perspective-cards">
@@ -970,6 +973,25 @@ function formatMarkdownIdentifiers() {
     item.children?.forEach(visit);
   };
   return (tree: unknown) => visit(tree);
+}
+
+function omitSampleIdColumns() {
+  type MarkdownNode = { type?: string; value?: string; children?: MarkdownNode[]; align?: unknown[] };
+  const textContent = (node: MarkdownNode): string => node.value ?? node.children?.map(textContent).join("") ?? "";
+  const visit = (node: MarkdownNode) => {
+    if (node.type === "table" && node.children?.length) {
+      const headings = node.children[0].children ?? [];
+      const removed = new Set(headings.map((cell, index) =>
+        /^sample[\s_-]*(?:id|identifier)$/i.test(textContent(cell).trim()) ? index : -1,
+      ).filter((index) => index >= 0));
+      if (removed.size && removed.size < headings.length) {
+        for (const row of node.children) row.children = row.children?.filter((_, index) => !removed.has(index));
+        node.align = node.align?.filter((_, index) => !removed.has(index));
+      }
+    }
+    node.children?.forEach(visit);
+  };
+  return (tree: MarkdownNode) => visit(tree);
 }
 
 function EnvironmentTable({ records, idField }: { records: Record<string, Record<string, unknown>>; idField: string }) {

@@ -100,8 +100,19 @@ try {
   await questions.getByRole("button", { name: "Where is parcel 01 now?" }).click();
   assert.equal(await questions.getByLabel("Your question").inputValue(), "Where is parcel_01 now?");
   assert.equal(await questions.locator(".answer-text").count(), 0);
+  await page.route("**/api/ask", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.answer.answer = "**Parcel history**\n\n| Time | Sample ID | Location | Observed by |\n| --- | --- | --- | --- |\n| 0.000 s | sample-001 | 80 cm, 350 cm | robot_1 |\n| 0.500 s | sample-002 | 80 cm, 350 cm | robot_1 |";
+    await route.fulfill({ response, json: data });
+  }, { times: 1 });
   await questions.getByRole("button", { name: "Ask", exact: true }).click();
   await questions.locator(".answer-text").waitFor();
+  assert.equal(await questions.locator(".answer-text table tbody tr").count(), 2);
+  assert.equal(await questions.getByRole("columnheader", { name: "Location" }).count(), 1);
+  assert.equal(await questions.getByRole("columnheader", { name: "Sample ID" }).count(), 0);
+  assert.equal(await questions.getByText("sample-001").count(), 0);
+  assert.equal(await questions.locator(".answer-text table tbody tr").first().innerText().then((text) => text.includes("robot 1")), true);
   assert.ok((await questions.locator(".answer-text").innerText()).length > 0);
   assert.match(await questions.locator(".sim-answer-meta").innerText(), /Captured at 0\.000 s · Run/);
   assert.equal(await questions.locator(".answer-text").innerText().then((text) => text.includes("**")), false);
@@ -118,6 +129,7 @@ try {
   const history = page.getByRole("dialog", { name: "Questions and answers" });
   await history.waitFor();
   assert.equal(await history.locator(".conversation-turn").count(), 2);
+  assert.equal(await history.locator(".answer-text table tbody tr").count(), 2);
   assert.equal(await history.locator(".user-message").first().innerText(), "Where is parcel 01 now?");
   await history.getByRole("button", { name: "Close question history" }).click();
   assert.equal(await history.isVisible(), false);
@@ -172,6 +184,11 @@ try {
   await page.getByRole("complementary", { name: "Agent workspace" }).getByText(conflict.error, { exact: true }).waitFor();
   await post("Play", "control");
   await observations.getByText("Camera unavailable", { exact: true }).waitFor();
+  await evidencePanel.getByText(/Verification · unavailable/).waitFor();
+  const outageTime = await evidencePanel.getByText(/Sensor unavailable · [\d.]+ s/).innerText();
+  const lastSeen = await evidencePanel.getByText(/Last observed · [\d.]+ s/).innerText();
+  const seconds = (text) => Number(text.match(/([\d.]+) s/)[1]);
+  assert.ok(seconds(lastSeen) < seconds(outageTime));
   await post("Pause", "control");
   await schedule("camera_on");
   await schedule("lidar_off");
@@ -450,10 +467,39 @@ try {
   const finalEvidence = page.getByRole("region", { name: "Belief and evidence" });
   await finalEvidence.getByRole("heading", { name: "Parcel 01" }).waitFor();
   await finalEvidence.locator(".sim-timeline-details > summary").click();
+  await finalEvidence.getByText(/Verification · last seen · not currently visible · stale/).waitFor();
+  await finalEvidence.getByText("Earlier belief · packing station", { exact: true }).waitFor();
+  await finalEvidence.getByText("Updated belief · inspection station", { exact: true }).waitFor();
+  const receipt = finalEvidence.getByText(/Received by ledger/).first();
+  await receipt.waitFor();
+  await finalEvidence.getByText("Raw record", { exact: true }).first().click();
+  await finalEvidence.locator("details[open] > pre").first().waitFor();
+  assert.equal(await page.getByRole("button", { name: "Show stored belief graph" }).count(), 0);
+  await finalEvidence.getByRole("button", { name: "Focus earlier belief" }).last().click();
+  await dragTab("Belief graph");
+  const graph = dock.locator(".belief-shell");
+  await graph.getByText("Superseded fact", { exact: true }).waitFor();
   await finalEvidence.getByRole("button", { name: "Focus updated belief" }).last().click();
-  await button("Belief graph").click();
-  await page.locator(".belief-details-body").getByText("parcel 01", { exact: true }).first().waitFor();
-  await button("Fact list").click();
+  await graph.getByText("Active fact", { exact: true }).waitFor();
+  const timelineCount = await finalEvidence.locator(".sim-timeline-list > li").count();
+  await graph.getByRole("button", { name: "Fact list", exact: true }).click();
+  const routeFact = page.getByRole("dialog", { name: "Stored belief facts" }).getByRole("button")
+    .filter({ hasText: "route A status is clear" }).last();
+  await routeFact.focus();
+  await page.keyboard.press("Enter");
+  await eventually(async () => (await questions.getByLabel("Entity").inputValue()) === "route_A");
+  await finalEvidence.getByRole("heading", { name: "Route A" }).waitFor();
+  await finalEvidence.locator(".sim-timeline-details > summary").click();
+  await finalEvidence.getByText("Updated belief · blocked", { exact: true }).first().waitFor();
+  await finalEvidence.getByText("Updated belief · clear", { exact: true }).first().waitFor();
+  await graph.getByRole("heading", { name: "Stored beliefs" }).waitFor();
+  assert.ok(await graph.evaluate((element) => element.scrollWidth <= element.clientWidth + 1));
+  await page.getByLabel("Entity").selectOption("parcel_01");
+  await finalEvidence.locator(".sim-timeline-details > summary").click();
+  assert.equal(await finalEvidence.locator(".sim-timeline-list > li").count(), timelineCount);
+  await finalEvidence.getByRole("button", { name: "Focus updated belief" }).last().click();
+  await graph.locator(".belief-details-body").getByText("parcel 01", { exact: true }).first().waitFor();
+  await graph.getByRole("button", { name: "Fact list", exact: true }).click();
   const factList = page.getByRole("dialog", { name: "Stored belief facts" });
   await factList.getByRole("button").filter({ hasText: "packing station" }).filter({ hasText: "scenario map" }).first().waitFor();
   await factList.getByRole("button", { name: "Close fact list" }).click();
@@ -465,6 +511,62 @@ try {
   assert.equal(await traceName.innerText(), "object location query");
   assert.equal(await traceName.evaluate((element) => getComputedStyle(element).fontFamily),
     await traceName.evaluate((element) => getComputedStyle(element.parentElement).fontFamily));
+
+  // Move a parcel outside the initial camera view. Its audience position changes,
+  // but a real answer and the evidence panel must not disclose that position.
+  await button("Simulation").click();
+  const fresh = await post("Reload preset", "load");
+  const secondApi = (path, data) => context.request.post(`${base}/api/simulation/${path}`, {
+    headers: { "X-Session-ID": secondSession }, data,
+  });
+  const move = await secondApi("disrupt", {
+    expected: { run_id: fresh.run_id, generation: fresh.generation }, request_id: randomUUID(),
+    disruption: { kind: "relocate_parcel", entity_id: "parcel_03", to: { x_cm: 735, y_cm: 200 }, duration_ms: 100 },
+  });
+  assert.equal(move.status(), 200, await move.text());
+  await post("2×", "control");
+  await post("Play", "control");
+  await eventually(async () => {
+    const response = await context.request.get(`${base}/api/simulation/state`, { headers: { "X-Session-ID": secondSession } });
+    const current = await response.json();
+    return current.audience.snapshot.entities.some((item) => item.entity_id === "parcel_03" && item.footprint.x_cm === 735);
+  });
+  await questions.getByLabel("Entity").selectOption("parcel_03");
+  await finalEvidence.getByText(/No stored location or route status/).waitFor();
+  assert.equal(await finalEvidence.getByText(/Last observed|735/).count(), 0);
+
+  // Hold a real answer after capture while simulation time continues to advance.
+  async function holdAsk(text) {
+    const captured = deferred();
+    const deliver = deferred();
+    await page.route("**/api/ask", async (route) => {
+      const response = await route.fetch();
+      captured.resolve((await response.json()).answer);
+      await deliver.promise;
+      await route.fulfill({ response }).catch(() => {});
+    }, { times: 1 });
+    await questionInput.fill(text);
+    await questions.getByRole("button", { name: "Ask", exact: true }).click();
+    return { answer: await captured.promise, deliver };
+  }
+
+  const slow = await holdAsk("Where is parcel_03 now?");
+  const capturedMs = slow.answer.simulation_evidence.sim_time_ms;
+  await eventually(async () => Number((await clock.innerText()).split(" ")[0]) * 1000 > capturedMs + 200);
+  slow.deliver.resolve();
+  await questions.getByText(`Captured at ${(capturedMs / 1000).toFixed(3)} s · Run ${fresh.run_id}`).waitFor();
+  assert.equal(await questions.locator(".answer-text").getByText(/735/).count(), 0);
+  const old = await holdAsk("When was parcel_01 last seen?");
+  assert.equal(old.answer.simulation_evidence.run_id, fresh.run_id);
+  await post("Pause", "control");
+  const reset = await secondApi("control", {
+    action: "reset", expected: { run_id: fresh.run_id, generation: fresh.generation },
+  });
+  assert.equal(reset.status(), 200, await reset.text());
+  await eventually(async () => (await clock.innerText()) === "0.000 s");
+  old.deliver.resolve();
+  await questions.getByRole("button", { name: "Where is parcel 01 now?" }).waitFor();
+  assert.equal(await questions.locator(".conversation-turn").count(), 0);
 
   console.log("Simulation browser checks passed on the real backend at 1440, 1024, 768 and 390px.");
 } finally {
