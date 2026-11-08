@@ -32,7 +32,7 @@ from src.contracts.simulation_api import (
     SimulationBeliefChange,
     SimulationDisruptRequest,
 )
-from src.procedural.temporal_belief_ingestion import IngestionResult
+from src.procedural.temporal_belief_ingestion import IngestionResult, StaticRoute, StaticRouteMap
 from src.sensorimotor.patrol_controller import PatrolCheckpoint, PatrolController
 from src.sensorimotor.simulation_engine import SimulationEngine
 from src.sensorimotor.warehouse_sensors import WarehouseSensors
@@ -40,6 +40,22 @@ from src.web.simulation_clock import SimulationClock
 
 MAX_PRESENTER_INPUTS = 64
 EVENT = TypeAdapter(ScenarioEvent)
+
+
+def scenario_route_map(scenario: ScenarioDefinition) -> StaticRouteMap:
+    """Project declared route geometry into the observation matching rules."""
+    return StaticRouteMap(
+        routes=[
+            StaticRoute(
+                route_id=route.route_id,
+                location=route.location,
+                frame_of_reference=scenario.robot_pose.frame_of_reference,
+                start=route.start,
+                end=route.end,
+            )
+            for route in scenario.routes
+        ]
+    )
 
 
 class SimulationRuntime:
@@ -92,6 +108,7 @@ class SimulationRuntime:
             step_ms=snap.config.step_ms, rate=snap.status.playback_rate, now=now
         )
         self._ingest = ingest
+        self._route_map = scenario_route_map(scenario)
         self.last_acquisition_ms = 0
 
     def _allocate_sequence(self, _run_id: UUID) -> int:
@@ -101,6 +118,11 @@ class SimulationRuntime:
 
     def read(self) -> SimulationSnapshot:
         return self.engine.snapshot()
+
+    def current_route_id(self) -> str | None:
+        """Return the uniquely mapped forward route for the last sensed pose."""
+        route, _ = self._route_map.match_route(self._pose.observer_pose)
+        return route.route_id if route else None
 
     @property
     def sim_time_ms(self) -> int:

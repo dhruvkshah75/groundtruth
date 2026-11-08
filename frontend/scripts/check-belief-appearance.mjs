@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { factColor, highlightedFacts } from "../src/beliefGraphAppearance.ts";
+import { factColor, highlightedFacts, visibleGraphNodes } from "../src/beliefGraphAppearance.ts";
+
+assert.deepEqual(visibleGraphNodes("active", [{ source: "parcel", target: "inspection" }], [], [
+  { subject: "parcel", object: "packing", superseded_by: "next" },
+]), ["inspection", "packing", "parcel"]);
 
 assert.equal(factColor(true, false, false, true), 0xa06a1c, "revised facts use the legend's amber color");
 assert.equal(factColor(true, true, false, false), 0x765184, "selection must not look like a revision");

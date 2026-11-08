@@ -1,7 +1,7 @@
 export type GraphPoint = { x: number; y: number; z: number };
 export type GraphLink = { source: string; target: string };
 
-export function graphPositions(nodes: string[], facts: GraphLink[]): Map<string, GraphPoint> {
+export function graphPositions(nodes: string[], facts: GraphLink[], previous?: ReadonlyMap<string, GraphPoint>): Map<string, GraphPoint> {
   const degrees = new Map(nodes.map((node) => [node, 0]));
   for (const fact of facts) {
     degrees.set(fact.source, (degrees.get(fact.source) ?? 0) + 1);
@@ -30,5 +30,23 @@ export function graphPositions(nodes: string[], facts: GraphLink[]): Map<string,
       z: Math.sin(angle) * radiusAtY * distance,
     });
   });
-  return positions;
+  if (!previous?.size) return positions;
+
+  // Keep surviving nodes in place as observations add or revise relationships.
+  const retained = new Map<string, GraphPoint>();
+  for (const node of nodes) {
+    const point = previous.get(node);
+    if (point) retained.set(node, point);
+  }
+  const candidates = [...positions.values()];
+  for (const node of nodes) {
+    if (retained.has(node)) continue;
+    const distance = (point: GraphPoint) => Math.min(...[...retained.values()].map(
+      (other) => (point.x - other.x) ** 2 + (point.y - other.y) ** 2 + (point.z - other.z) ** 2,
+    ));
+    const best = candidates.reduce((left, right) => distance(right) > distance(left) ? right : left);
+    retained.set(node, best);
+    candidates.splice(candidates.indexOf(best), 1);
+  }
+  return retained;
 }

@@ -1,6 +1,8 @@
 /** Format identifiers for display without changing the underlying value. */
 export function displayText(value: string): string {
-  return value.replaceAll("_", " ");
+  return value.replaceAll("_", " ")
+    .replace(/nearest obstacle: None cm/g, "no obstacle in sensor range")
+    .replace(/\b(\d+(?:\.\d+)?)\s*ms\b/g, (_, ms: string) => `${(Number(ms) / 1000).toFixed(3)} s`);
 }
 
 export function formatTimestamp(value: string | null | undefined): string {

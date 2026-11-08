@@ -1,5 +1,6 @@
 """Deterministic mapping from validated intents to typed operations."""
 
+import re
 from uuid import UUID
 
 from src.contracts import (
@@ -60,13 +61,13 @@ class PlanBuilder:
             An approved plan or a safe fallback with no operations.
         """
         if intent.intent == "current_route_status":
-            return self._build_route_status(intent)
+            return self._build_route_status(intent, sensors=sensors)
         if intent.intent == "current_object_perception":
             return self._build_object_perception(intent)
         if intent.intent == "historical_fact_lookup":
             return self._build_historical_lookup(intent)
         if intent.intent == "audit_explanation":
-            return self._build_audit_explanation(intent)
+            return self._build_audit_explanation(intent, sensors=sensors)
         if intent.intent == "current_robot_pose":
             return self._build_robot_pose(intent)
         if intent.intent == "object_location_query":
@@ -81,11 +82,39 @@ class PlanBuilder:
             "The request is outside the supported intent set.",
         )
 
-    def _build_route_status(self, intent: IntentRequest) -> PlanningOutcome:
+    @staticmethod
+    def _relative_route(intent: IntentRequest) -> bool:
+        question = intent.user_question.casefold()
+        if re.search(r"\broute(?:_|\s+)(?:[a-z]|\d+)\b", question):
+            return False
+        if re.search(r"\b(?:front|forward)\s+(?:route|path)\b", question):
+            return True
+        return any(
+            mention.casefold().replace("_", " ").strip()
+            in {"front route", "front path", "forward route", "forward path", "route ahead"}
+            for mention in intent.entity_mentions
+        )
+
+    def _build_route_status(
+        self, intent: IntentRequest, *, sensors: object | None = None
+    ) -> PlanningOutcome:
         """Build memory and LiDAR operations for a current route question."""
-        entity = self._resolve_one_entity(intent)
+        route_lookup = getattr(sensors, "current_route_id", None)
+        current_route = route_lookup() if callable(route_lookup) else None
+        relative = self._relative_route(intent)
+        entity = (
+            current_route
+            if callable(route_lookup) and relative
+            else self._resolve_one_entity(intent)
+        )
         if isinstance(entity, PlanningFallback):
             return PlanningOutcome(fallback=entity)
+        if callable(route_lookup) and not relative and entity != current_route:
+            return self._fallback(
+                "required_capability_unavailable",
+                "The forward LiDAR is not aligned with the requested route; "
+                "its current status cannot be verified.",
+            )
 
         lidar_status = self._sensor_status("lidar_scan")
         if isinstance(lidar_status, PlanningFallback):
@@ -109,13 +138,15 @@ class PlanBuilder:
 
         return self._plan(
             intent=intent,
-            entity_ids=[entity],
+            entity_ids=[entity] if entity else [],
             memory_operations=[
                 MemoryQueryOperation(
                     query=FactQuery(subject=entity, predicate="status_is"),
                     purpose="Read the active route status for context.",
                 )
-            ],
+            ]
+            if entity
+            else [],
             observation_operations=observations,
             current_state_verifiable=has_lidar,
             blocking_reasons=blocking_reasons,
@@ -183,18 +214,35 @@ class PlanBuilder:
             reason="Historical lookup needs stored facts and no live sensor.",
         )
 
-    def _build_audit_explanation(self, intent: IntentRequest) -> PlanningOutcome:
+    def _build_audit_explanation(
+        self, intent: IntentRequest, *, sensors: object | None = None
+    ) -> PlanningOutcome:
         """Build an audit-history operation without creating explanation prose."""
-        entity = self._resolve_one_entity(intent)
+        route_lookup = getattr(sensors, "current_route_id", None)
+        relative = self._relative_route(intent)
+        entity = (
+            route_lookup()
+            if callable(route_lookup) and relative
+            else self._resolve_one_entity(intent)
+        )
         if isinstance(entity, PlanningFallback):
             return PlanningOutcome(fallback=entity)
+        if entity is None:
+            return self._fallback(
+                "missing_entity", "The robot's current heading does not match a named route."
+            )
 
         return self._plan(
             intent=intent,
             entity_ids=[entity],
             memory_operations=[
                 MemoryQueryOperation(
-                    query=FactQuery(subject=entity),
+                    query=FactQuery(
+                        subject=entity,
+                        predicate="status_is"
+                        if relative or "route" in intent.user_question.casefold()
+                        else None,
+                    ),
                     purpose="Find the active fact whose audit history is needed.",
                 )
             ],

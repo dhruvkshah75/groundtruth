@@ -1022,10 +1022,15 @@ class TemporalBeliefIngestionService:
                     "policy_rule": self._config.lidar_policy_rule,
                 },
             )
+            distance_detail = (
+                "no obstacle in sensor range"
+                if measurements.nearest_distance_cm is None
+                else f"nearest obstacle: {measurements.nearest_distance_cm} cm"
+            )
             reason = (
                 f"Front LiDAR at sim_time {sample.sim_time_ms}ms observed {route_id} "
                 f"is {observed_status} "
-                f"(nearest obstacle: {measurements.nearest_distance_cm} cm)"
+                f"({distance_detail})"
             )
             try:
                 outcome = self._repo.record_revision(
@@ -1377,19 +1382,21 @@ class TemporalBeliefIngestionService:
                 pass
 
         if latest_lidar is None and hasattr(self._ledger, "get_latest_sample"):
-            latest_lidar = self._ledger.get_latest_sample(
+            candidate = self._ledger.get_latest_sample(
                 run_id=run_id,
                 capability="lidar_scan",
                 at_sim_time_ms=current_sim_time_ms,
             )
-            if latest_lidar is None:
-                future_lidar = self._ledger.get_latest_sample(
+            if candidate is None:
+                candidate = self._ledger.get_latest_sample(
                     run_id=run_id,
                     capability="lidar_scan",
                     at_sim_time_ms=None,
                 )
-                if future_lidar is not None and future_lidar.sim_time_ms > current_sim_time_ms:
-                    latest_lidar = future_lidar
+            if candidate is not None:
+                matched_route, _ = self._route_map.match_route(candidate.observer_pose)
+                if matched_route is not None and matched_route.route_id == route_id:
+                    latest_lidar = candidate
 
         status_val: Literal["clear", "blocked"] | None = None
         if active_fact and active_fact.object in ("clear", "blocked"):

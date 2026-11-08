@@ -1,5 +1,6 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ArrowUp, BrainCircuit, Check, ChevronDown, CircleAlert, Database, Map as MapIcon,
   FlaskConical, LoaderCircle, MessageSquareText, MoreHorizontal, Network, PanelLeftClose,
@@ -75,6 +76,7 @@ function App() {
     return id;
   });
   const [state, setState] = useState<AppState | null>(null);
+  const [simulationFocus, setSimulationFocus] = useState<{ runId: string; entity: string; factId?: string } | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [question, setQuestion] = useState("");
   const [action, setAction] = useState<Action>(null);
@@ -539,7 +541,7 @@ function App() {
             <div className={`workspace-pane ${tab === visibleDock ? "workspace-dock" : ""}`}>
               {tab === "simulation" && <Suspense fallback={<div className="route-loading">Loading simulation…</div>}>
                 <SimulationWorkspace key={activeChatId} sessionId={activeChatId} chatName={activeChat ? chatLabel(activeChat) : "Current chat"}
-                  presenterTarget={presenterInSidebar ? presenterTarget : null} />
+                  presenterTarget={presenterInSidebar ? presenterTarget : null} renderAnswer={(response) => <ConversationTurn response={response} />} focus={simulationFocus} onFocus={setSimulationFocus} />
               </Suspense>}
               {tab === "chat" && <section className="chat-workspace" aria-label="Chat">
                 <div className="conversation" role="log" aria-label="Conversation" aria-busy={action === "ask"}>
@@ -568,7 +570,7 @@ function App() {
               </section>}
               {tab === "inspector" && <Inspector key={activeChatId} state={state} sessionId={activeChatId} />}
               {tab === "graph" && <Suspense fallback={<div className="route-loading">Loading belief graph…</div>}>
-                <BeliefGraphPage embedded workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} />
+                <BeliefGraphPage key={activeChatId} embedded sessionId={activeChatId} workspaceState={state} workspaceHealth={health} sidebarTarget={graphSidebarTarget} focus={simulationFocus} onFocus={setSimulationFocus} />
               </Suspense>}
             </div>
           </Fragment>)}
@@ -646,7 +648,10 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
           </div>
         </div>
 
-        <div className="answer-text"><ReactMarkdown skipHtml remarkPlugins={[formatMarkdownIdentifiers]}>{response.answer}</ReactMarkdown></div>
+        <div className="answer-text"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm, omitSampleIdColumns, formatMarkdownIdentifiers]} components={{
+          table: ({ children }) => <div className="answer-table-scroll" role="region" aria-label="Answer table, scroll horizontally for more columns" tabIndex={0}><table>{children}</table></div>,
+        }}>{response.answer}</ReactMarkdown></div>
+        {response.simulation_evidence && <p className="sim-answer-meta">Captured at {(response.simulation_evidence.sim_time_ms / 1000).toFixed(3)} s · Run {response.simulation_evidence.run_id}</p>}
         {response.perspectives && (
           <div className="perspective-cards">
             {Object.entries(response.perspectives).map(([key, value]) => (
@@ -968,6 +973,25 @@ function formatMarkdownIdentifiers() {
     item.children?.forEach(visit);
   };
   return (tree: unknown) => visit(tree);
+}
+
+function omitSampleIdColumns() {
+  type MarkdownNode = { type?: string; value?: string; children?: MarkdownNode[]; align?: unknown[] };
+  const textContent = (node: MarkdownNode): string => node.value ?? node.children?.map(textContent).join("") ?? "";
+  const visit = (node: MarkdownNode) => {
+    if (node.type === "table" && node.children?.length) {
+      const headings = node.children[0].children ?? [];
+      const removed = new Set(headings.map((cell, index) =>
+        /^sample[\s_-]*(?:id|identifier)$/i.test(textContent(cell).trim()) ? index : -1,
+      ).filter((index) => index >= 0));
+      if (removed.size && removed.size < headings.length) {
+        for (const row of node.children) row.children = row.children?.filter((_, index) => !removed.has(index));
+        node.align = node.align?.filter((_, index) => !removed.has(index));
+      }
+    }
+    node.children?.forEach(visit);
+  };
+  return (tree: MarkdownNode) => visit(tree);
 }
 
 function EnvironmentTable({ records, idField }: { records: Record<string, Record<string, unknown>>; idField: string }) {

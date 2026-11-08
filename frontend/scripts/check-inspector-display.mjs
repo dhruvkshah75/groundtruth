@@ -13,6 +13,8 @@ assert.equal(result.rows[0].fields.radius_cm, null);
 assert.equal(result.rows[1].fields["bounding_box.width_cm"], 10);
 assert.equal(fieldLabel("bounding_box.width_cm"), "Bounding box width (cm)");
 assert.equal(displayText("lidar_scan robot_1"), "lidar scan robot 1");
+assert.equal(displayText("Front LiDAR at sim_time 21500ms observed route_A"), "Front LiDAR at sim time 21.500 s observed route A");
+assert.equal(displayText("at simulation time 500 ms"), "at simulation time 0.500 s");
 assert.deepEqual(records, before);
 assert.deepEqual(environmentTableData({}, "object_id"), { rows: [], columns: [] });
 assert.deepEqual(environmentTableData({ key: { object_id: "different_id" } }, "object_id").columns, ["object_id"]);

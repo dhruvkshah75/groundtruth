@@ -64,6 +64,7 @@ class PlanExecutionResult(BaseModel):
     plan_verifiable: bool
     blocking_reasons: list[str] = Field(default_factory=list)
     plan_reason: str
+    resolved_entity_ids: list[str] = Field(default_factory=list)
     memory_results: list[MemoryExecutionResult] = Field(default_factory=list)
     observation_results: list[ObservationExecutionResult] = Field(default_factory=list)
     temporal_results: list[TemporalObservationExecutionResult] = Field(default_factory=list)

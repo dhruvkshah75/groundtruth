@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from src.contracts.simulation import ObservationSample
 from src.contracts.simulation_api import (
     SimulationControlRequest,
     SimulationDisruptRequest,
@@ -124,6 +125,90 @@ def load(send, *, key=None):
     return loaded
 
 
+def test_evidence_endpoint_is_run_scoped_and_does_not_expose_unseen_parcel(api):
+    send, _, _, _ = api
+    loaded = load(send)
+    identity = {"run_id": loaded["run_id"], "generation": loaded["generation"]}
+    code, evidence, _ = send(BASE + "/evidence", {"expected": identity, "entity_id": "parcel_03"})
+    assert code == 200
+    assert evidence["summary"]["last_observed_position"] is None
+    assert all(
+        all(
+            obj["object_id"] != "parcel_03"
+            for obj in sample["result"].get("measurements", {}).get("objects", [])
+        )
+        for sample in evidence["samples"]
+    )
+    code, _, _ = send(BASE + "/evidence", {"expected": identity, "entity_id": "unknown_entity"})
+    assert code == 400
+    assert control(send, loaded, "reset")[0] == 200
+    code, error, _ = send(BASE + "/evidence", {"expected": identity, "entity_id": "parcel_01"})
+    assert code == 409
+    assert error["code"] == "stale_run"
+
+
+def test_timeline_keeps_capture_order_when_an_older_observation_arrives_late(api):
+    send, service, _, key = api
+    loaded = load(send)
+    runtime = service.get_session(key).runtime
+    for _ in range(10):
+        runtime.step()
+    body = {"expected": identity(loaded), "entity_id": "parcel_01"}
+    code, original, _ = send(BASE + "/evidence", body)
+    assert code == 200
+    assert original["samples"][-1]["sim_time_ms"] == 1000
+    delayed = original["samples"][0].copy()
+    del delayed["stored_at"]
+    delayed.update(sample_id=str(uuid4()), sample_sequence=1000)
+    sample = ObservationSample.model_validate(delayed)
+    stored = service.get_session(key).agent.memory.record_observation_sample(sample)
+    code, evidence, _ = send(BASE + "/evidence", body)
+    assert code == 200
+    ordered = evidence["samples"]
+    assert ordered[1]["sample_id"] == str(sample.sample_id)
+    assert ordered[1]["sim_time_ms"] == 0
+    assert datetime.fromisoformat(ordered[1]["stored_at"]) == stored.stored_at
+    assert stored.stored_at >= datetime.fromisoformat(ordered[-1]["stored_at"])
+    assert evidence["events"] == original["events"]
+
+
+def test_delayed_simulation_question_cannot_execute_against_new_run(api):
+    send, _, _, _ = api
+    original = load(send)
+    code, new_run, _ = control(send, original, "reset")
+    assert code == 200
+    question = {"question": "Where is parcel 01 now?", "expected": identity(original)}
+    assert_error(send("/api/ask", question), 409, "stale_request")
+    assert send("/api/state")[1]["history"] == []
+    question["expected"] = identity(new_run)
+    code, answer, _ = send("/api/ask", question)
+    assert code == 200
+    assert answer["answer"]["simulation_evidence"]["run_id"] == new_run["run_id"]
+
+
+def test_ask_sanitizes_upstream_request_size_error(api, monkeypatch):
+    from src.procedural.intent_provider import IntentProviderUnavailableError
+
+    send, service, _, key = api
+
+    class UpstreamError(Exception):
+        status_code = 413
+
+    def fail(_question):
+        try:
+            raise UpstreamError("private upstream diagnostic")
+        except UpstreamError as cause:
+            raise IntentProviderUnavailableError("raw upstream response") from cause
+
+    monkeypatch.setattr(service.get_session(key), "ask", fail)
+    code, result, _ = send("/api/ask", {"question": "Show history"})
+    assert code == 503
+    assert result == {
+        "code": "provider_request_too_large",
+        "error": "Request limit exceeded.",
+    }
+
+
 def control(send, state, action, **kwargs):
     return send(BASE + "/control", {"expected": identity(state), "action": action, **kwargs})
 
@@ -191,6 +276,7 @@ def test_http_lifecycle_rates_and_legacy_compatibility(api):
     assert send(BASE + "/load", original_request)[1] == stepped
 
     code, legacy, _ = send("/api/ask", {"question": "Where are you?"})
+    assert legacy["answer"]["question"] == "Where are you?"
     assert code == 200
     assert legacy["history"][-1]["simulation_evidence"]["run_id"] == stepped["run_id"]
     assert legacy["simulation_status"]["sim_time_ms"] == 200

@@ -2,12 +2,114 @@
 
 from uuid import uuid4
 
+import pytest
+
 from src.contracts import FactQuery
+from src.contracts.simulation_api import SimulationEvidenceRequest, SimulationRunIdentity
 from src.declarative.memory_repository import MemoryRepository
+from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.providers import ProviderConfig
 from src.sensorimotor.world_models import SimulatedObject
-from src.web.service import AgentService
+from src.web.service import AgentService, StaleRequestError
 from src.web.simulation_presets import warehouse_preset
+
+
+def test_history_question_retries_with_compact_evidence_when_provider_request_is_too_large(
+    monkeypatch,
+):
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        for _ in range(300):
+            session.runtime.step()
+
+        class RequestTooLarge(Exception):
+            status_code = 413
+
+        calls = []
+
+        def explain(**kwargs):
+            calls.append(kwargs["tool_result"])
+            if len(calls) == 1:
+                try:
+                    raise RequestTooLarge("request too large")
+                except RequestTooLarge as cause:
+                    raise IntentProviderUnavailableError("explanation rejected") from cause
+            assert "6500 ms" in str(calls[-1])
+            assert "26500 ms" in str(calls[-1])
+            assert "sample ID" not in str(calls[-1])
+            return "Parcel 01 was observed several times, most recently at 26.5 seconds."
+
+        monkeypatch.setattr(
+            session.agent.provider, "generate_grounded_explanation", explain, raising=False
+        )
+        monkeypatch.setattr(
+            session.agent.provider, "verify_grounded_explanation", lambda *_: True, raising=False
+        )
+        response = session.ask("show the history of the parcel 01?")
+        assert len(calls) == 2
+        assert (
+            response["answer"]
+            == "Parcel 01 was observed several times, most recently at 26.5 seconds."
+        )
+        assert response["react_trace"]["explanation_source"] == "llm"
+
+        # An unsupported paraphrase must never expose the raw timeline as an answer.
+        monkeypatch.setattr(
+            session.agent.provider, "verify_grounded_explanation", lambda *_: False, raising=False
+        )
+        calls.clear()
+        with pytest.raises(IntentProviderUnavailableError, match="verified history"):
+            session.ask("show the history of the parcel 01?")
+    finally:
+        service.shutdown()
+
+
+def test_run_scoped_evidence_reports_sightings_and_revision_without_hidden_positions():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        identity = SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        )
+        request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        hidden = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_03")
+        )
+        assert all(
+            all(
+                obj["object_id"] != "parcel_03"
+                for obj in sample["result"].get("measurements", {}).get("objects", [])
+            )
+            for sample in hidden["samples"]
+        )
+        assert hidden["summary"]["last_observed_position"] is None
+        for _ in range(75):
+            session.runtime.step()
+        evidence = service.read_simulation_evidence(key, request)
+        assert evidence["summary"]["supported_location"] == "inspection_station"
+        assert evidence["events"]
+        assert all(item["run_id"] == str(identity.run_id) for item in evidence["samples"])
+        assert [s["sim_time_ms"] for s in evidence["samples"]] == sorted(
+            s["sim_time_ms"] for s in evidence["samples"]
+        )
+        for _ in range(225):
+            session.runtime.step()
+        route = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="route_A")
+        )
+        assert route["summary"]["status"] == "clear"
+        assert len(route["events"]) >= 2
+        assert all(sample["request"]["capability"] == "lidar_scan" for sample in route["samples"])
+        service.load_simulation(key, warehouse_preset())
+        with pytest.raises(StaleRequestError):
+            service.read_simulation_evidence(key, request)
+    finally:
+        service.shutdown()
 
 
 def test_warehouse_camera_detections_can_be_queried():
@@ -161,5 +263,67 @@ def test_mock_environment_registers_new_object_names_before_perception():
         )
         answer = session.ask("Where is forklift 07 now?")["answer"]
         assert "x=60 cm" not in answer
+    finally:
+        service.shutdown()
+
+
+def test_station_nodes_and_front_route_audit_follow_current_heading():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        for _ in range(300):
+            session.runtime.step()
+        snapshot = session.snapshot()
+        assert {"warehouse", "packing_station", "inspection_station"} <= set(
+            snapshot["graph"]["nodes"]
+        )
+        assert any(
+            fact["subject"] == "packing_station"
+            and fact["object"] == "warehouse"
+            and fact["source_agent"] == "scenario_map"
+            for fact in snapshot["active_facts"]
+        )
+        assert session.runtime.read().robot_pose.direction == "east"
+        result = session.ask("Why did the front route belief change?")
+        assert all(
+            fact["subject"] == "route_B"
+            for trail in result["audit_trails"]
+            for fact in trail["facts"]
+        )
+        assert result["audit_trails"]
+        result = session.ask("Is the front route clear now?")
+        assert "route_B" in result["answer"] and "blocked" in result["answer"]
+        named_current = session.ask("Is route A clear now?")
+        assert "not aligned" in named_current["answer"]
+        named = session.ask("Why did route A change?")
+        assert any(
+            fact["subject"] == "route_A"
+            for trail in named["audit_trails"]
+            for fact in trail["facts"]
+        )
+    finally:
+        service.shutdown()
+
+
+def test_route_and_station_evidence_use_the_loaded_scenario_map():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    scenario = warehouse_preset().model_copy(deep=True)
+    station = next(entity for entity in scenario.entities if entity.entity_id == "packing_station")
+    station.entity_id = "dispatch_zone"
+    scenario.routes[0].route_id = "aisle_01"
+    try:
+        service.load_simulation(key, scenario)
+        session = service.get_session(key)
+        assert session.runtime.current_route_id() == "aisle_01"
+        facts = session.agent.memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at")
+        )
+        assert {fact.object for fact in facts} == {"dispatch_zone"}
+        response = session.ask("Is the front route clear?")
+        assert "aisle_01" in response["answer"]
+        assert "packing_station" not in session.snapshot()["graph"]["nodes"]
     finally:
         service.shutdown()

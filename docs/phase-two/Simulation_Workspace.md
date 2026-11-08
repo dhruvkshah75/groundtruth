@@ -77,6 +77,15 @@ names to the resolver, but their positions are not sent to the agent as observat
 evidence. The active belief graph and entity resolver are scoped to the current
 run; prior mock and simulation evidence remains stored.
 
+The graph distinguishes scenario-map facts from sensor-backed beliefs. Station,
+route, robot, and object room membership comes from the declared map; it does not
+assert a moving object's current position. A station-location belief can remain
+active after later sightings outside mapped stations, so inspect its simulation
+time and ask for the latest observation before treating it as current. Nodes with
+only superseded relationships remain visible in grey; Belief history shows their
+earlier edges. “Front route” refers to the uniquely mapped segment aligned with
+the robot's current heading, while an explicitly named route retains its identity.
+
 The [workspace](../../frontend/src/SimulationWorkspace.tsx) calls the shared
 [client](../../frontend/src/api.ts) through [useSimulation](../../frontend/src/useSimulation.ts).
 The hook binds requests to the active session ID, orders snapshots by

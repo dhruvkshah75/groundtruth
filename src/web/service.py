@@ -22,6 +22,7 @@ from src.contracts.simulation import (
     ScenarioDefinition,
     SimulationControl,
     SimulationSnapshot,
+    TemporalObservationQuery,
 )
 from src.contracts.simulation_api import (
     SimulationAudience,
@@ -29,6 +30,7 @@ from src.contracts.simulation_api import (
     SimulationControlRequest,
     SimulationDisruptRequest,
     SimulationDisruptResponse,
+    SimulationEvidenceRequest,
     SimulationExportBundle,
     SimulationLoadRequest,
     SimulationObservationState,
@@ -38,7 +40,13 @@ from src.contracts.simulation_api import (
 )
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
-from src.procedural.temporal_belief_ingestion import IngestionResult, TemporalBeliefIngestionService
+from src.procedural.temporal_belief_ingestion import (
+    IngestionConfig,
+    IngestionResult,
+    StationZone,
+    StationZoneMap,
+    TemporalBeliefIngestionService,
+)
 from src.providers import ProviderConfig, create_provider, get_provider_config
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import (
@@ -51,7 +59,7 @@ from src.sensorimotor.world_models import (
 from src.web.session_store import SessionStore
 from src.web.simulation_export import SimulationExporter, SimulationExportTarget
 from src.web.simulation_presets import warehouse_preset
-from src.web.simulation_runtime import MAX_PRESENTER_INPUTS, SimulationRuntime
+from src.web.simulation_runtime import MAX_PRESENTER_INPUTS, SimulationRuntime, scenario_route_map
 
 LOGGER = logging.getLogger(__name__)
 
@@ -253,13 +261,31 @@ class AgentSession:
         if self._retired:
             raise StaleRequestError("This session was deleted or shut down.")
 
-    def _ingestion(self) -> TemporalBeliefIngestionService:
-        # The agent already registered graph invalidation on this ledger.
-        return TemporalBeliefIngestionService(self.agent.memory)
-
-    def _simulation_ingestion(self) -> Callable[[ObservationSample], IngestionResult]:
+    def _simulation_ingestion(
+        self, scenario: ScenarioDefinition
+    ) -> Callable[[ObservationSample], IngestionResult]:
         """Register identities from successful camera observations, not simulator truth."""
-        ingestion = self._ingestion()
+        zones = StationZoneMap(
+            zones=[
+                StationZone.from_center(
+                    zone_id=entity.entity_id,
+                    location=entity.location,
+                    frame_of_reference=scenario.robot_pose.frame_of_reference,
+                    center_x_cm=entity.footprint.x_cm,
+                    center_y_cm=entity.footprint.y_cm,
+                    width_cm=entity.footprint.width_cm,
+                    height_cm=entity.footprint.height_cm,
+                )
+                for entity in scenario.entities
+                if entity.kind == "station"
+            ]
+        )
+        ingestion = TemporalBeliefIngestionService(
+            self.agent.memory,
+            zone_map=zones,
+            route_map=scenario_route_map(scenario),
+            config=IngestionConfig(freshness_ms=scenario.config.freshness_ms),
+        )
 
         def ingest(sample: ObservationSample) -> IngestionResult:
             self.agent.memory.set_active_run(sample.run_id)
@@ -286,11 +312,37 @@ class AgentSession:
 
     def _register_scenario_entities(self, runtime: SimulationRuntime) -> None:
         """Register known names only; observations still establish physical claims."""
-        for entity in runtime.scenario.entities:
-            self.agent.memory.register_simulation_entity(runtime.run_id, entity.entity_id)
-            self._remember_simulation_entity(entity.entity_id)
-            self.agent.memory.add_alias(entity.kind, entity.entity_id)
-            self.agent.memory.add_alias(f"the {entity.kind}", entity.entity_id)
+        scenario = runtime.scenario
+        entities = [
+            (entity.entity_id, entity.kind, entity.location) for entity in scenario.entities
+        ]
+        entities += [(route.route_id, "route", route.location) for route in scenario.routes]
+        entities.append((scenario.robot_pose.robot_id, "robot", scenario.robot_pose.location))
+        for entity_id, kind, location in entities:
+            self.agent.memory.register_simulation_entity(runtime.run_id, entity_id)
+            self._remember_simulation_entity(entity_id)
+            self.agent.memory.add_alias(kind, entity_id)
+            self.agent.memory.add_alias(f"the {kind}", entity_id)
+            existing = self.agent.memory.query_facts(
+                FactQuery(subject=entity_id, predicate="located_in", source_agent="scenario_map")
+            )
+            if not any(fact.object == location for fact in existing):
+                self.agent.memory.record_fact(
+                    FactAssertion(
+                        subject=entity_id,
+                        predicate="located_in",
+                        object=location,
+                        source_agent="scenario_map",
+                        confidence_score=1.0,
+                        observed_at=runtime.read().status.epoch_utc,
+                        context=SpatialContext(
+                            location=location,
+                            frame_of_reference=scenario.robot_pose.frame_of_reference,
+                            extra_context={"run_id": str(runtime.run_id)},
+                        ),
+                        evidence={"run_id": str(runtime.run_id), "basis": "scenario_map"},
+                    )
+                )
 
     def load_simulation(self, scenario: ScenarioDefinition, epoch_utc: datetime) -> None:
         self.touch()
@@ -302,7 +354,7 @@ class AgentSession:
             self.runtime = SimulationRuntime(
                 scenario,
                 epoch_utc=epoch_utc,
-                ingest=self._simulation_ingestion(),
+                ingest=self._simulation_ingestion(scenario),
                 now=self.now,
                 id_factory=self.id_factory,
             )
@@ -343,9 +395,12 @@ class AgentSession:
                 state["simulation_load_request"]
             )
         if "simulation_runtime" in state:
+            scenario = ScenarioDefinition.model_validate(
+                state["simulation_runtime"]["engine"]["scenario"]
+            )
             self.runtime = SimulationRuntime.restore(
                 state["simulation_runtime"],
-                ingest=self._simulation_ingestion(),
+                ingest=self._simulation_ingestion(scenario),
                 now=self.now,
                 memory=self.agent.memory,
                 id_factory=self.id_factory,
@@ -763,7 +818,9 @@ class AgentSession:
 
         raise ValueError("Unknown scenario. Choose 'scenario-a' or 'scenario-b'.")
 
-    def ask(self, question: str) -> dict[str, object]:
+    def ask(
+        self, question: str, *, expected: SimulationRunIdentity | None = None
+    ) -> dict[str, object]:
         """Run a question through the composed Python agent and retain its result."""
         cleaned = question.strip()
         if not cleaned:
@@ -779,6 +836,8 @@ class AgentSession:
 
         with self.lock:
             self.touch()
+            if expected is not None:
+                self.require_simulation_identity(expected)
             identity = self._request_identity()
             request_id = str(uuid4())
         with self._request_lock:
@@ -1410,6 +1469,87 @@ class AgentService:
         with session.lock:
             session.touch()
             return session.live_simulation_state()
+
+    def read_simulation_evidence(
+        self, session_id: str, request: SimulationEvidenceRequest
+    ) -> dict[str, object]:
+        """Read sensor-backed summaries and a bounded, run-scoped evidence timeline."""
+        session = self.get_session(session_id)
+        with session.lock:
+            session.touch()
+            session.require_simulation_identity(request.expected)
+            runtime = session.require_simulation()
+            scenario = runtime.scenario
+            routes = scenario_route_map(scenario)
+            route_ids = {route.route_id for route in scenario.routes}
+            entity_ids = {entity.entity_id for entity in scenario.entities}
+            if request.entity_id not in entity_ids | route_ids:
+                raise SimulationInputRejected("Unknown simulation entity.")
+            current = runtime.read().status.sim_time_ms
+            service = TemporalBeliefIngestionService(
+                session.agent.memory,
+                route_map=routes,
+                config=IngestionConfig(freshness_ms=scenario.config.freshness_ms),
+            )
+            is_route = request.entity_id in route_ids
+            summary = (
+                service.get_route_belief_summary(runtime.run_id, request.entity_id, current)
+                if is_route
+                else service.get_entity_belief_summary(runtime.run_id, request.entity_id, current)
+            )
+            samples = session.agent.memory.query_observations(
+                TemporalObservationQuery(
+                    run_id=runtime.run_id,
+                    mode="samples",
+                    capability="lidar_scan" if is_route else "camera_detect",
+                    entity_id=None if is_route else request.entity_id,
+                    end_ms=current,
+                    limit=1000,
+                )
+            )
+            if is_route:
+                samples = [
+                    sample
+                    for sample in samples
+                    if (match := routes.match_route(sample.observer_pose)[0]) is not None
+                    and match.route_id == request.entity_id
+                ]
+            latest_attempt = (
+                summary.latest_lidar_attempt if is_route else summary.latest_sensor_attempt
+            )
+            if latest_attempt and all(s.sample_id != latest_attempt.sample_id for s in samples):
+                matched = routes.match_route(latest_attempt.observer_pose)[0] if is_route else None
+                if not is_route or (matched and matched.route_id == request.entity_id):
+                    samples.append(latest_attempt)
+                    samples.sort(key=lambda sample: (sample.sim_time_ms, sample.sample_sequence))
+            facts = session.agent.memory.query_facts(
+                FactQuery(subject=request.entity_id, active_only=False)
+            )
+            facts = [
+                fact
+                for fact in facts
+                if fact.context.extra_context.get("run_id") == str(runtime.run_id)
+            ]
+            events = {}
+            seen_facts = set()
+            for fact in facts:
+                if fact.source_agent != "scenario_map" and fact.fact_id not in seen_facts:
+                    chain = session.agent.memory.get_audit_chain(fact.fact_id)
+                    seen_facts.update(item.fact_id for item in chain.facts)
+                    for event in chain.events:
+                        events[str(event.event_id)] = _model_to_dict(event)
+            return {
+                "run_id": str(runtime.run_id),
+                "generation": session._generation,
+                "sim_time_ms": current,
+                "entity_id": request.entity_id,
+                "kind": "route" if is_route else "entity",
+                "summary": summary.model_dump(mode="json"),
+                "samples": [sample.model_dump(mode="json") for sample in samples[-40:]],
+                "facts": [_model_to_dict(fact) for fact in facts[-100:]],
+                "events": list(events.values())[-100:],
+                "truncated": len(samples) > 40 or len(facts) > 100,
+            }
 
     def export_simulation(self, session_id: str) -> SimulationExportBundle:
         key = _canonical_session_id(session_id)
