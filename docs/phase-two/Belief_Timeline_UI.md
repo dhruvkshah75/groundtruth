@@ -1,6 +1,7 @@
 # Belief timeline and questions (P2-11)
 
 [Issue #35](https://github.com/dhruvkshah75/groundtruth/issues/35) ·
+[Pull request #47](https://github.com/dhruvkshah75/groundtruth/pull/47) ·
 [Implementation branch](https://github.com/dhruvkshah75/groundtruth/tree/codex/p2-11-belief-timeline).
 
 ## Dependencies
