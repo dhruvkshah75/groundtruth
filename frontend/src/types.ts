@@ -1,4 +1,4 @@
-import type { SimulationStateResponse } from "./simulationTypes";
+import type { SimulationStateResponse, StoredObservationSample } from "./simulationTypes";
 
 export type SpatialContext = {
   location: string | null;
@@ -42,6 +42,18 @@ export type AuditEvent = {
   reason: string;
   policy_rule: string;
   created_at: string;
+};
+
+export type SimulationEvidence = {
+  run_id: string; generation: number; sim_time_ms: number; entity_id: string; kind: "route" | "entity";
+  summary: {
+    verification_status: "verified" | "last_seen" | "unverified" | "unavailable";
+    visibility?: "currently_visible" | "not_currently_visible" | "unknown";
+    freshness: string; uncertainty_reason: string | null; supported_location?: string | null;
+    status?: string | null; last_positive_sighting?: StoredObservationSample | null;
+    last_positive_lidar_sample?: StoredObservationSample | null;
+  };
+  samples: StoredObservationSample[]; facts: Fact[]; events: AuditEvent[]; truncated: boolean;
 };
 
 export type Revision = {
@@ -107,6 +119,7 @@ export type WorldState = {
 };
 
 export type AppState = {
+  answer?: AgentResponse;
   environment_source?: "warehouse_truth" | "mock";
   simulation_status?: Pick<SimulationStateResponse, "state" | "error"> & Partial<{
     run_id: string;

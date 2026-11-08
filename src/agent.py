@@ -432,8 +432,18 @@ def _explain(
                 )
                 final_answer = eval_outcome.explanation
                 explanation_source = "deterministic_fallback"
-        except IntentProviderUnavailableError:
-            raise
+        except IntentProviderUnavailableError as exc:
+            cause: BaseException | None = exc
+            while cause is not None and getattr(cause, "status_code", None) != 413:
+                cause = cause.__cause__
+            history_query = any(
+                operation.get("name") == "temporal_query_history" for operation in trace.operations
+            )
+            if cause is None or not history_query:
+                raise
+            LOGGER.info("History exceeds provider request limits; returning recorded evaluation.")
+            final_answer = eval_outcome.explanation
+            explanation_source = "deterministic_fallback"
         except Exception:
             LOGGER.warning("LLM explanation call failed. Using deterministic fallback.")
             final_answer = eval_outcome.explanation

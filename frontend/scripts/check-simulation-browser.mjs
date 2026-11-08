@@ -71,13 +71,67 @@ try {
   await robot.waitFor();
   assert.equal(await page.getByRole("complementary", { name: "Agent workspace" })
     .getByRole("button", { name: "Reload preset" }).count(), 1);
-  assert.ok((await page.locator(".warehouse-floor").boundingBox()).height >= 500);
+  assert.ok((await page.locator(".warehouse-floor").boundingBox()).height >= 300);
   assert.equal(await robot.getAttribute("transform"), "translate(100,500)");
   assert.equal(await robot.locator("path").getAttribute("transform"), "rotate(-90)");
   assert.equal(await page.locator("[data-entity=parcel_03]").count(), 1);
   const observations = page.getByRole("region", { name: "Robot observation" });
   assert.equal(await observations.getByText("Parcel 03", { exact: true }).count(), 0);
   const initialCapture = await observations.locator(".sim-time").first().innerText();
+
+  // Questions stay below the simulation evidence and use the normal chat renderer.
+  const questions = page.getByRole("region", { name: "Ask about the run" });
+  assert.equal(await page.locator(".workspace-presenter-target .sim-questions").count(), 0);
+  const questionBox = await questions.boundingBox();
+  const mapBox = await page.locator(".sim-layout").boundingBox();
+  assert.ok(questionBox.x >= mapBox.x + mapBox.width);
+  assert.ok(Math.abs(questionBox.y - mapBox.y) < 2);
+  assert.ok(Math.abs(questionBox.width - mapBox.width) < 2);
+  await questions.getByLabel("Entity").selectOption("parcel_01");
+  const evidencePanel = page.getByRole("region", { name: "Belief and evidence" });
+  await evidencePanel.getByRole("heading", { name: "Parcel 01" }).waitFor();
+  await evidencePanel.getByText(/Verification · verified/).waitFor();
+  await evidencePanel.getByText(/Last observed · 0.000 s/).waitFor();
+  await page.locator("[data-entity=parcel_03]").click({ force: true });
+  await evidencePanel.getByRole("heading", { name: "Parcel 03" }).waitFor();
+  await evidencePanel.getByText(/No stored location or route status/).waitFor();
+  assert.equal(await evidencePanel.getByText(/Last observed/).count(), 0);
+  await questions.getByLabel("Entity").selectOption("parcel_01");
+  await questions.getByRole("button", { name: "Where is parcel 01 now?" }).click();
+  assert.equal(await questions.getByLabel("Your question").inputValue(), "Where is parcel_01 now?");
+  assert.equal(await questions.locator(".answer-text").count(), 0);
+  await questions.getByRole("button", { name: "Ask", exact: true }).click();
+  await questions.locator(".answer-text").waitFor();
+  assert.ok((await questions.locator(".answer-text").innerText()).length > 0);
+  assert.match(await questions.locator(".sim-answer-meta").innerText(), /Captured at 0\.000 s · Run/);
+  assert.equal(await questions.locator(".answer-text").innerText().then((text) => text.includes("**")), false);
+  const questionInput = questions.getByLabel("Your question");
+  const oneLineHeight = (await questionInput.boundingBox()).height;
+  await questionInput.fill("When was parcel_01 last seen?\nPlease explain the evidence.");
+  assert.ok((await questionInput.boundingBox()).height > oneLineHeight);
+  await questionInput.fill("When was parcel_01 last seen?");
+  await questions.getByRole("button", { name: "Ask", exact: true }).click();
+  await eventually(async () => (await questions.locator(".sim-question-answer .conversation-turn").count()) === 2);
+  assert.equal(await questions.locator(".sim-question-answer .user-message").first().innerText(), "When was parcel 01 last seen?");
+  await questions.evaluate((element) => { element.style.maxHeight = "400px"; });
+  await questions.getByRole("button", { name: "Show all questions (2)" }).click();
+  const history = page.getByRole("dialog", { name: "Questions and answers" });
+  await history.waitFor();
+  assert.equal(await history.locator(".conversation-turn").count(), 2);
+  assert.equal(await history.locator(".user-message").first().innerText(), "Where is parcel 01 now?");
+  await history.getByRole("button", { name: "Close question history" }).click();
+  assert.equal(await history.isVisible(), false);
+  await questions.evaluate((element) => { element.style.maxHeight = ""; });
+  assert.ok((await questions.boundingBox()).height <= (await page.locator(".sim-layout").boundingBox()).height + 1);
+  await page.route("**/api/ask", (route) => route.fulfill({
+    status: 503, contentType: "application/json",
+    body: JSON.stringify({ code: "provider_unavailable", error: "private provider diagnostics" }),
+  }), { times: 1 });
+  await questionInput.fill("Show the history of parcel_01");
+  await questions.getByRole("button", { name: "Ask", exact: true }).click();
+  await questions.getByRole("alert").getByText("Answer service unavailable.").waitFor();
+  assert.equal(await questionInput.inputValue(), "Show the history of parcel_01");
+  assert.equal(await questions.getByText("private provider diagnostics").count(), 0);
 
   // An older server rejects 2×: explain how to update it instead of hiding the cause.
   await page.route("**/api/simulation/control", (route) => route.fulfill({
@@ -322,6 +376,14 @@ try {
     const overflow = await page.locator(".simulation-workspace").evaluate((el) => el.scrollWidth > el.clientWidth);
     assert.equal(overflow, false, `Horizontal overflow at ${width}px`);
     assert.ok((await page.locator(".warehouse-map").boundingBox()).width > 240);
+    const paneWidth = await page.locator(".simulation-workspace").evaluate((el) => el.clientWidth);
+    const map = await page.locator(".sim-layout").boundingBox();
+    const questionPanel = await page.locator(".sim-questions").boundingBox();
+    if (paneWidth >= 960) {
+      assert.ok(questionPanel.x >= map.x + map.width, `Questions should be beside the map at ${width}px`);
+    } else {
+      assert.ok(questionPanel.y >= map.y + map.height, `Questions should be below the map at ${width}px`);
+    }
     if (width <= 1024) await dock.waitFor({ state: "detached" });
   }
   await page.locator(".sim-presenter-inline > summary").click();
@@ -384,7 +446,13 @@ try {
   assert.equal(await page.getByText("Completed", { exact: true }).count(), 0);
   assert.equal(await page.locator(".sim-clock").getByText(/Reload preset/).count(), 0);
   assert.equal(await clock.innerText(), "30.000 s");
+  await page.getByLabel("Entity").selectOption("parcel_01");
+  const finalEvidence = page.getByRole("region", { name: "Belief and evidence" });
+  await finalEvidence.getByRole("heading", { name: "Parcel 01" }).waitFor();
+  await finalEvidence.locator(".sim-timeline-details > summary").click();
+  await finalEvidence.getByRole("button", { name: "Focus updated belief" }).last().click();
   await button("Belief graph").click();
+  await page.locator(".belief-details-body").getByText("parcel 01", { exact: true }).first().waitFor();
   await button("Fact list").click();
   const factList = page.getByRole("dialog", { name: "Stored belief facts" });
   await factList.getByRole("button").filter({ hasText: "packing station" }).filter({ hasText: "scenario map" }).first().waitFor();

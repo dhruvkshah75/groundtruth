@@ -205,8 +205,7 @@ def test_api_returns_503_when_configured_live_provider_request_fails(tmp_path: P
         )
         assert status == 503
         assert error_resp["code"] == "provider_unavailable"
-        assert "Live intent provider failed" in error_resp["error"]
-        assert "Groq upstream service error 503" in error_resp["error"]
+        assert error_resp["error"] == "Answer service unavailable."
     finally:
         server.shutdown()
         server.server_close()
@@ -264,7 +263,7 @@ def test_api_returns_503_when_grounded_response_provider_call_fails(tmp_path: Pa
         )
         assert status == 503
         assert response["code"] == "provider_unavailable"
-        assert "grounded explanation call failed" in response["error"]
+        assert response["error"] == "Answer service unavailable."
     finally:
         server.shutdown()
         server.server_close()

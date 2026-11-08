@@ -1,4 +1,4 @@
-import type { ApiErrorPayload, ApiHealth, AppState } from "./types";
+import type { ApiErrorPayload, ApiHealth, AppState, SimulationEvidence } from "./types";
 import type {
   SimulationControlRequest,
   SimulationDisruptRequest,
@@ -78,8 +78,9 @@ function postSimulation<T>(
 export const api = {
   health: () => request<ApiHealth>("/api/health"),
   state: (sessionId?: string) => request<AppState>("/api/state", sessionId ? { headers: { "X-Session-ID": sessionId } } : {}),
-  ask: (question: string) =>
+  ask: (question: string, options?: SimulationRequestOptions) =>
     request<AppState>("/api/ask", {
+      ...simulationOptions(options),
       method: "POST",
       body: JSON.stringify({ question }),
     }),
@@ -104,6 +105,8 @@ export const api = {
   },
   reset: () => request<AppState>("/api/reset", { method: "POST", body: "{}" }),
   simulationState: (options?: SimulationRequestOptions) => request<SimulationStateResponse>("/api/simulation/state", simulationOptions(options)),
+  simulationEvidence: (expected: { run_id: string; generation: number }, entity_id: string, options: SimulationRequestOptions) =>
+    request<SimulationEvidence>("/api/simulation/evidence", { ...simulationOptions(options), method: "POST", body: JSON.stringify({ expected, entity_id }) }),
   loadSimulation: (payload: SimulationLoadRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("load", payload, options),
   controlSimulation: (payload: SimulationControlRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("control", payload, options),
   disruptSimulation: (payload: SimulationDisruptRequest, options?: SimulationRequestOptions) => postSimulation<SimulationDisruptResponse>("disrupt", payload, options),

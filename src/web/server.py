@@ -15,6 +15,7 @@ from src.contracts.simulation_api import (
     SimulationApiError,
     SimulationControlRequest,
     SimulationDisruptRequest,
+    SimulationEvidenceRequest,
     SimulationLoadRequest,
 )
 from src.procedural.intent_provider import IntentProviderUnavailableError
@@ -36,6 +37,7 @@ SIMULATION_POST = {
     "/api/simulation/load": (SimulationLoadRequest, AgentService.load_warehouse),
     "/api/simulation/control": (SimulationControlRequest, AgentService.apply_simulation_control),
     "/api/simulation/disrupt": (SimulationDisruptRequest, AgentService.disrupt_simulation),
+    "/api/simulation/evidence": (SimulationEvidenceRequest, AgentService.read_simulation_evidence),
 }
 
 
@@ -107,11 +109,12 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         try:
             payload = self._read_json_body()
             session = self.service.get_session(self.headers.get("X-Session-ID", ""))
+            answer = None
             if path == "/api/ask":
                 question = payload.get("question")
                 if not isinstance(question, str):
                     raise ValueError("'question' must be a string.")
-                session.ask(question)
+                answer = session.ask(question)
             else:
                 with session.lock:
                     session.touch()
@@ -125,13 +128,45 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             with session.lock:
                 session.require_active()
                 snapshot = session.snapshot()
+                if answer is not None:
+                    snapshot["answer"] = answer
             self._send_json(200, snapshot)
         except StaleRequestError as exc:
             self._send_error_json(409, "stale_request", str(exc))
         except (ValueError, json.JSONDecodeError) as exc:
             self._send_error_json(400, "invalid_request", str(exc))
         except IntentProviderUnavailableError as exc:
-            self._send_error_json(503, "provider_unavailable", str(exc))
+            cause: BaseException | None = exc
+            status = None
+            while cause is not None:
+                status = getattr(cause, "status_code", None)
+                if status in (413, 429):
+                    break
+                cause = cause.__cause__
+            if status == 413:
+                self._send_error_json(
+                    503,
+                    "provider_request_too_large",
+                    "Request limit exceeded.",
+                )
+            elif status == 429:
+                self._send_error_json(
+                    503,
+                    "provider_rate_limited",
+                    "Rate limit exceeded.",
+                )
+            elif str(exc).startswith("GROQ_API_KEY is not configured."):
+                self._send_error_json(
+                    503,
+                    "provider_unavailable",
+                    "GROQ_API_KEY is not configured. Configure the provider or use offline mode.",
+                )
+            else:
+                self._send_error_json(
+                    503,
+                    "provider_unavailable",
+                    "Answer service unavailable.",
+                )
         except RuntimeError as exc:
             self._send_error_json(503, "session_limit", str(exc))
         except Exception:
@@ -166,7 +201,7 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 attachment = f'attachment; filename="groundtruth-replay-{result.run_id}.json"'
             else:
                 result = self.service.read_live_simulation(session_id)
-            payload = result.model_dump(mode="json")
+            payload = result if isinstance(result, dict) else result.model_dump(mode="json")
         except SimulationInputRejected as exc:
             self._send_simulation_error(400, "invalid_request", str(exc))
         except StaleRequestError:

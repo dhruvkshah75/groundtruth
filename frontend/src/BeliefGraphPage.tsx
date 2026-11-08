@@ -318,11 +318,14 @@ function RecentChanges({ events, open, onClose }: { events: AuditEvent[]; open: 
   </dialog>;
 }
 
-export default function BeliefGraphPage({ embedded = false, workspaceState, workspaceHealth, sidebarTarget }: {
+export default function BeliefGraphPage({ embedded = false, sessionId, workspaceState, workspaceHealth, sidebarTarget, focus, onFocus }: {
   embedded?: boolean;
+  sessionId?: string;
   workspaceState?: AppState | null;
   workspaceHealth?: ApiHealth | null;
   sidebarTarget?: HTMLElement | null;
+  focus?: { runId: string; entity: string; factId?: string } | null;
+  onFocus?: (focus: { runId: string; entity: string; factId?: string }) => void;
 }) {
   const [state, setState] = useState<AppState | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
@@ -342,15 +345,17 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
   const [cameraAction, setCameraAction] = useState<CameraAction>({ id: 0, type: "reset" });
   const knownActiveIds = useRef<Set<string> | null>(null);
   const knownAuditIds = useRef<Set<string> | null>(null);
+  const appliedFocus = useRef<string | null>(null);
   const highlightTimer = useRef<number | null>(null);
 
   const refresh = useCallback(async (initial = false) => {
     try {
-      const [nextHealth, nextState] = await Promise.all([api.health(), api.state()]);
+      const [nextHealth, nextState] = await Promise.all([api.health(), api.state(sessionId)]);
       const nextIds = new Set(nextState.graph.edges.map((edge) => edge.fact_id));
       const nextAuditIds = new Set(nextState.audit_events.map((event) => event.event_id));
       if (knownActiveIds.current) {
-        const changed = new Set([...nextIds].filter((id) => !knownActiveIds.current?.has(id)));
+        const revisedIds = new Set(nextState.ledger.map((fact) => fact.superseded_by).filter((id): id is string => id !== null));
+        const changed = new Set([...nextIds].filter((id) => !knownActiveIds.current?.has(id) && revisedIds.has(id)));
         nextState.audit_events.forEach((event) => {
           if (!knownAuditIds.current?.has(event.event_id)) {
             event.output_fact_ids.forEach((id) => { if (nextIds.has(id)) changed.add(id); });
@@ -376,7 +381,7 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
     } finally {
       if (initial) setLoading(false);
     }
-  }, []);
+  }, [sessionId]);
 
   useEffect(() => {
     if (workspaceState) { setState(workspaceState); setLoading(false); }
@@ -431,13 +436,36 @@ export default function BeliefGraphPage({ embedded = false, workspaceState, work
     setSelectedFactId(factId);
     setSelectedNodeId(null);
     setDetailsOpen(true);
-  }, []);
+    const fact = allFacts.find((item) => item.factId === factId);
+    if (fact && state?.simulation_status?.run_id) {
+      appliedFocus.current = `${state.simulation_status.run_id}:${fact.source}:${factId}`;
+      onFocus?.({ runId: state.simulation_status.run_id, entity: fact.source, factId });
+    }
+  }, [allFacts, onFocus, state?.simulation_status?.run_id]);
 
   const selectNode = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
     setSelectedFactId(null);
     setDetailsOpen(true);
-  }, []);
+    if (state?.simulation_status?.run_id) {
+      appliedFocus.current = `${state.simulation_status.run_id}:${nodeId}:`;
+      onFocus?.({ runId: state.simulation_status.run_id, entity: nodeId });
+    }
+  }, [onFocus, state?.simulation_status?.run_id]);
+
+  useEffect(() => {
+    const key = focus ? `${focus.runId}:${focus.entity}:${focus.factId ?? ""}` : null;
+    if (focus && focus.runId === state?.simulation_status?.run_id && nodes.includes(focus.entity) && appliedFocus.current !== key) {
+      if (focus.factId && !allFacts.some((fact) => fact.factId === focus.factId)) {
+        if (state?.ledger.some((fact) => fact.fact_id === focus.factId)) setScope("history");
+        return;
+      }
+      appliedFocus.current = key;
+      setSelectedNodeId(focus.factId ? null : focus.entity);
+      setSelectedFactId(focus.factId ?? null);
+      setDetailsOpen(true);
+    }
+  }, [focus, nodes, allFacts, state?.simulation_status?.run_id]);
 
   const prepareScenarioA = async () => {
     if (demoAction) return;

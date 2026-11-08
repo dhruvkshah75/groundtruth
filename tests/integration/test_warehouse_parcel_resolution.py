@@ -2,12 +2,96 @@
 
 from uuid import uuid4
 
+import pytest
+
 from src.contracts import FactQuery
+from src.contracts.simulation_api import SimulationEvidenceRequest, SimulationRunIdentity
 from src.declarative.memory_repository import MemoryRepository
+from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.providers import ProviderConfig
 from src.sensorimotor.world_models import SimulatedObject
-from src.web.service import AgentService
+from src.web.service import AgentService, StaleRequestError
 from src.web.simulation_presets import warehouse_preset
+
+
+def test_history_question_uses_complete_grounded_result_when_provider_request_is_too_large(
+    monkeypatch,
+):
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        for _ in range(300):
+            session.runtime.step()
+
+        class RequestTooLarge(Exception):
+            status_code = 413
+
+        def reject_large_result(**_kwargs):
+            try:
+                raise RequestTooLarge("request too large")
+            except RequestTooLarge as cause:
+                raise IntentProviderUnavailableError("explanation rejected") from cause
+
+        monkeypatch.setattr(
+            session.agent.provider,
+            "generate_grounded_explanation",
+            reject_large_result,
+            raising=False,
+        )
+        response = session.ask("show the history of the parcel 01?")
+        assert "Sighting timeline for parcel_01" in response["answer"]
+        assert "6500 ms" in response["answer"]
+        assert "26500 ms" in response["answer"]
+        assert response["react_trace"]["explanation_source"] == "deterministic_fallback"
+    finally:
+        service.shutdown()
+
+
+def test_run_scoped_evidence_reports_sightings_and_revision_without_hidden_positions():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        identity = SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        )
+        request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        hidden = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_03")
+        )
+        assert all(
+            all(
+                obj["object_id"] != "parcel_03"
+                for obj in sample["result"].get("measurements", {}).get("objects", [])
+            )
+            for sample in hidden["samples"]
+        )
+        assert hidden["summary"]["last_observed_position"] is None
+        for _ in range(75):
+            session.runtime.step()
+        evidence = service.read_simulation_evidence(key, request)
+        assert evidence["summary"]["supported_location"] == "inspection_station"
+        assert evidence["events"]
+        assert all(item["run_id"] == str(identity.run_id) for item in evidence["samples"])
+        assert [s["sim_time_ms"] for s in evidence["samples"]] == sorted(
+            s["sim_time_ms"] for s in evidence["samples"]
+        )
+        for _ in range(225):
+            session.runtime.step()
+        route = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="route_A")
+        )
+        assert route["summary"]["status"] == "clear"
+        assert len(route["events"]) >= 2
+        assert all(sample["request"]["capability"] == "lidar_scan" for sample in route["samples"])
+        service.load_simulation(key, warehouse_preset())
+        with pytest.raises(StaleRequestError):
+            service.read_simulation_evidence(key, request)
+    finally:
+        service.shutdown()
 
 
 def test_warehouse_camera_detections_can_be_queried():

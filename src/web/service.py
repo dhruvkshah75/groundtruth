@@ -22,6 +22,7 @@ from src.contracts.simulation import (
     ScenarioDefinition,
     SimulationControl,
     SimulationSnapshot,
+    TemporalObservationQuery,
 )
 from src.contracts.simulation_api import (
     SimulationAudience,
@@ -29,6 +30,7 @@ from src.contracts.simulation_api import (
     SimulationControlRequest,
     SimulationDisruptRequest,
     SimulationDisruptResponse,
+    SimulationEvidenceRequest,
     SimulationExportBundle,
     SimulationLoadRequest,
     SimulationObservationState,
@@ -1463,6 +1465,87 @@ class AgentService:
         with session.lock:
             session.touch()
             return session.live_simulation_state()
+
+    def read_simulation_evidence(
+        self, session_id: str, request: SimulationEvidenceRequest
+    ) -> dict[str, object]:
+        """Read sensor-backed summaries and a bounded, run-scoped evidence timeline."""
+        session = self.get_session(session_id)
+        with session.lock:
+            session.touch()
+            session.require_simulation_identity(request.expected)
+            runtime = session.require_simulation()
+            scenario = runtime.scenario
+            routes = scenario_route_map(scenario)
+            route_ids = {route.route_id for route in scenario.routes}
+            entity_ids = {entity.entity_id for entity in scenario.entities}
+            if request.entity_id not in entity_ids | route_ids:
+                raise SimulationInputRejected("Unknown simulation entity.")
+            current = runtime.read().status.sim_time_ms
+            service = TemporalBeliefIngestionService(
+                session.agent.memory,
+                route_map=routes,
+                config=IngestionConfig(freshness_ms=scenario.config.freshness_ms),
+            )
+            is_route = request.entity_id in route_ids
+            summary = (
+                service.get_route_belief_summary(runtime.run_id, request.entity_id, current)
+                if is_route
+                else service.get_entity_belief_summary(runtime.run_id, request.entity_id, current)
+            )
+            samples = session.agent.memory.query_observations(
+                TemporalObservationQuery(
+                    run_id=runtime.run_id,
+                    mode="samples",
+                    capability="lidar_scan" if is_route else "camera_detect",
+                    entity_id=None if is_route else request.entity_id,
+                    end_ms=current,
+                    limit=1000,
+                )
+            )
+            if is_route:
+                samples = [
+                    sample
+                    for sample in samples
+                    if (match := routes.match_route(sample.observer_pose)[0]) is not None
+                    and match.route_id == request.entity_id
+                ]
+            latest_attempt = (
+                summary.latest_lidar_attempt if is_route else summary.latest_sensor_attempt
+            )
+            if latest_attempt and all(s.sample_id != latest_attempt.sample_id for s in samples):
+                matched = routes.match_route(latest_attempt.observer_pose)[0] if is_route else None
+                if not is_route or (matched and matched.route_id == request.entity_id):
+                    samples.append(latest_attempt)
+                    samples.sort(key=lambda sample: (sample.sim_time_ms, sample.sample_sequence))
+            facts = session.agent.memory.query_facts(
+                FactQuery(subject=request.entity_id, active_only=False)
+            )
+            facts = [
+                fact
+                for fact in facts
+                if fact.context.extra_context.get("run_id") == str(runtime.run_id)
+            ]
+            events = {}
+            seen_facts = set()
+            for fact in facts:
+                if fact.source_agent != "scenario_map" and fact.fact_id not in seen_facts:
+                    chain = session.agent.memory.get_audit_chain(fact.fact_id)
+                    seen_facts.update(item.fact_id for item in chain.facts)
+                    for event in chain.events:
+                        events[str(event.event_id)] = _model_to_dict(event)
+            return {
+                "run_id": str(runtime.run_id),
+                "generation": session._generation,
+                "sim_time_ms": current,
+                "entity_id": request.entity_id,
+                "kind": "route" if is_route else "entity",
+                "summary": summary.model_dump(mode="json"),
+                "samples": [sample.model_dump(mode="json") for sample in samples[-40:]],
+                "facts": [_model_to_dict(fact) for fact in facts[-100:]],
+                "events": list(events.values())[-100:],
+                "truncated": len(samples) > 40 or len(facts) > 100,
+            }
 
     def export_simulation(self, session_id: str) -> SimulationExportBundle:
         key = _canonical_session_id(session_id)

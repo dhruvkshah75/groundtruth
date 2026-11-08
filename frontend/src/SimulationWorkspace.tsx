@@ -1,12 +1,14 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Activity, Camera, Check, CircleAlert, Map, Pause, Play, SkipForward, SlidersHorizontal, WifiOff } from "lucide-react";
+import { Activity, ArrowUp, Camera, Check, CircleAlert, LoaderCircle, Map, Pause, Play, SkipForward, SlidersHorizontal, WifiOff, X } from "lucide-react";
 import { api, ApiRequestError } from "./api";
 import type {
   CameraDetection, SimulationControlRequest, SimulationDisruptRequest,
   SimulationStateResponse, StoredObservationSample,
 } from "./simulationTypes";
 import { useSimulation } from "./useSimulation";
+import type { AgentResponse, SimulationEvidence } from "./types";
+import { displayText } from "./display";
 import WarehouseMap, { warehouseLabel } from "./WarehouseMap";
 import "./simulation-workspace.css";
 
@@ -102,6 +104,193 @@ function BeliefPanel({ state, stale }: { state: SimulationStateResponse | null; 
   </section>;
 }
 
+function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId: string; state: SimulationStateResponse; entity: string; onFocusFact: (factId: string) => void }) {
+  const [evidence, setEvidence] = useState<SimulationEvidence | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!state.run_id || !entity) { setEvidence(null); return; }
+    let active = true;
+    let timer: number;
+    let controller: AbortController;
+    setEvidence(null);
+    setError("");
+    const poll = async () => {
+      controller = new AbortController();
+      try {
+        const result = await api.simulationEvidence({ run_id: state.run_id!, generation: state.generation }, entity, { sessionId, signal: controller.signal });
+        if (active) { setEvidence(result); setError(""); }
+      } catch (cause) {
+        if (active && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load evidence.");
+      } finally { if (active) timer = window.setTimeout(poll, 1500); }
+    };
+    void poll();
+    return () => { active = false; window.clearTimeout(timer); controller?.abort(); };
+  }, [sessionId, state.run_id, state.generation, entity]);
+  const facts = evidence?.facts ?? [];
+  const revisions = (evidence?.events ?? []).map((event) => {
+    const next = facts.find((fact) => event.output_fact_ids.includes(fact.fact_id));
+    const previous = facts.find((fact) => event.input_fact_ids.includes(fact.fact_id));
+    const time = next?.evidence.sim_time_ms;
+    return { event, next, previous, time: typeof time === "number" ? time : null };
+  });
+  const timeline = [
+    ...(evidence?.samples ?? []).map((sample) => ({ key: sample.sample_id, time: sample.sim_time_ms, sample, revision: null })),
+    ...revisions.filter((revision) => revision.time !== null).map((revision) => ({ key: revision.event.event_id, time: revision.time!, sample: null, revision })),
+  ].sort((a, b) => a.time - b.time || Number(!!a.revision) - Number(!!b.revision));
+  const summary = evidence?.summary;
+  const last = summary?.last_positive_sighting ?? summary?.last_positive_lidar_sample;
+  return <section className="sim-panel sim-timeline" aria-labelledby="sim-timeline-title">
+    <div className="sim-panel-heading"><h2 id="sim-timeline-title"><Activity size={17} />Belief and evidence</h2></div>
+    <div className="sim-timeline-body">
+      {!entity ? <p>Select an entity to inspect its evidence.</p> : error ? <p role="alert" className="sim-warning">{error}</p> : !evidence ? <p>Loading evidence…</p> : <>
+        <h3>{warehouseLabel(entity)}</h3>
+        <p>Stored belief · {summary?.supported_location ? displayText(summary.supported_location) : summary?.status ? displayText(summary.status) : "No stored location or route status"}</p>
+        <p>Verification · {displayText(summary?.verification_status ?? "unverified")}{summary?.visibility && ` · ${displayText(summary.visibility)}`} · {displayText(summary?.freshness ?? "unverified")}</p>
+        {last && <p>Last observed · {simTime(last.sim_time_ms)} · {displayText(last.sensor_id)}</p>}
+        {summary?.uncertainty_reason && <p>{displayText(summary.uncertainty_reason)}</p>}
+        <p className="sim-subtle">Run {evidence.run_id} · as of {simTime(evidence.sim_time_ms)}</p>
+        <details className="sim-timeline-details"><summary>Observation and revision timeline ({timeline.length})</summary>
+          {timeline.length ? <ol className="sim-timeline-list">{timeline.map(({ key, time, sample, revision }) => <li key={key}>
+            <strong>{simTime(time)} · {revision ? "Belief revision" : displayText(sample!.sensor_id)}</strong>
+            {revision ? <><p>{revision.previous && revision.next && <>{displayText(revision.previous.object)} → {displayText(revision.next.object)} · </>}{displayText(revision.event.reason)}</p><p>Rule · {displayText(revision.event.policy_rule)}</p><div className="sim-timeline-actions">{revision.previous && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.previous!.fact_id)}>Focus earlier belief</button>}{revision.next && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.next!.fact_id)}>Focus updated belief</button>}</div></>
+              : <><p>{"reason" in sample!.result ? displayText(sample!.result.reason) : sample!.request.capability === "camera_detect" && Array.isArray(sample!.result.measurements.objects) && !(sample!.result.measurements.objects as CameraDetection[]).some((item) => item.object_id === entity) ? "Not detected in this camera capture" : "Sensor observation recorded"}</p><p>Recorded · {sample!.stored_at}</p></>}
+            <details><summary>Raw record</summary><pre>{JSON.stringify(revision?.event ?? sample, null, 2)}</pre></details>
+          </li>)}</ol> : <p>No observations or revisions recorded for this selection.</p>}
+          {evidence.truncated && <p>Showing a bounded selection of the recorded history.</p>}
+        </details>
+      </>}
+    </div>
+  </section>;
+}
+
+function SimulationQuestions({ sessionId, state, renderAnswer, entity, onSelectEntity }: {
+  sessionId: string; state: SimulationStateResponse; renderAnswer: (response: AgentResponse) => ReactNode; entity: string; onSelectEntity: (entity: string) => void;
+}) {
+  const entities = state.audience?.snapshot.entities ?? [];
+  const routes = state.audience?.routes ?? [];
+  const [question, setQuestion] = useState("");
+  const [answers, setAnswers] = useState<AgentResponse[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOverflow, setHistoryOverflow] = useState(false);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const request = useRef<AbortController | null>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const answerViewport = useRef<HTMLDivElement>(null);
+  const answerList = useRef<HTMLDivElement>(null);
+  const id = useId();
+  useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => {
+    let active = true;
+    void api.state(sessionId).then((snapshot) => {
+      if (!active || snapshot.simulation_status?.run_id !== state.run_id || snapshot.simulation_status?.generation !== state.generation) return;
+      setAnswers((current) => {
+        const known = new Set(current.map((item) => item.simulation_evidence?.request_id));
+        return [...snapshot.history.filter((item) => item.simulation_evidence?.run_id === state.run_id && !known.has(item.simulation_evidence.request_id)), ...current];
+      });
+    }).catch(() => { /* A question can still be asked if history could not be loaded. */ });
+    return () => { active = false; };
+  }, [sessionId, state.run_id, state.generation]);
+  useLayoutEffect(() => {
+    const field = input.current;
+    if (!field) return;
+    const fit = () => { field.style.height = "auto"; field.style.height = `${field.scrollHeight}px`; };
+    fit();
+    let width = field.clientWidth;
+    const observer = new ResizeObserver(() => { if (field.clientWidth !== width) { width = field.clientWidth; fit(); } });
+    observer.observe(field);
+    return () => observer.disconnect();
+  }, [question]);
+  useEffect(() => {
+    const element = dialog.current;
+    if (historyOpen && element && !element.open) element.showModal();
+    if (!historyOpen && element?.open) element.close();
+  }, [historyOpen]);
+  useLayoutEffect(() => {
+    const viewport = answerViewport.current;
+    const list = answerList.current;
+    if (!viewport || !list) return;
+    const check = () => {
+      if (viewport.scrollHeight > viewport.clientHeight + 1 || answers.length > 8) setHistoryOverflow(true);
+    };
+    const observer = new ResizeObserver(check);
+    observer.observe(viewport);
+    observer.observe(list);
+    check();
+    viewport.scrollTop = 0;
+    return () => observer.disconnect();
+  }, [answers]);
+
+  async function ask(text: string) {
+    if (!text.trim() || request.current || !state.run_id) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setPending(true);
+    setError("");
+    try {
+      const options = { sessionId, signal: controller.signal };
+      const response = await api.ask(text.trim(), options);
+      const latest = response.answer;
+      const current = await api.simulationState(options);
+      if (controller.signal.aborted) return;
+      if (!latest) throw new Error("The backend did not return the answer for this request. Restart the backend and try again.");
+      if (current.run_id !== state.run_id || current.generation !== state.generation || latest.simulation_evidence?.run_id !== state.run_id) {
+        throw new Error("The run changed before the answer arrived. Ask again in the current run.");
+      }
+      setAnswers((previous) => previous.some((item) => item.simulation_evidence?.request_id === latest.simulation_evidence?.request_id) ? previous : [...previous, latest]);
+      setQuestion("");
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        const message = cause instanceof ApiRequestError && cause.code === "provider_request_too_large"
+          ? "Request limit exceeded."
+          : cause instanceof ApiRequestError && cause.code === "provider_rate_limited"
+            ? "Rate limit exceeded."
+            : cause instanceof ApiRequestError && cause.code === "provider_unavailable"
+            ? "Answer service unavailable."
+            : cause instanceof Error ? cause.message : "The question could not be answered.";
+        setError(message);
+      }
+    } finally {
+      if (!controller.signal.aborted) { request.current = null; setPending(false); }
+    }
+  }
+
+  return <section className="sim-panel sim-questions" aria-labelledby={`${id}-title`}>
+    <div className="sim-panel-heading"><h2 id={`${id}-title`}>Ask about the run</h2></div>
+    <div className="sim-question-body">
+      <label className="sim-question-entity" htmlFor={`${id}-entity`}>Entity
+        <select id={`${id}-entity`} value={entity} onChange={(event) => onSelectEntity(event.target.value)}>
+          {entities.map((item) => <option value={item.entity_id} key={item.entity_id}>{warehouseLabel(item.entity_id)}</option>)}
+          {routes.map((route) => <option value={route.route_id} key={route.route_id}>{warehouseLabel(route.route_id)}</option>)}
+        </select>
+      </label>
+      <div className="sim-question-suggestions" role="group" aria-label="Suggested questions">
+        {[`Where is ${entity} now?`, `When was ${entity} last seen?`, `Show the history of ${entity}`, `How did ${entity} change?`].map((text) =>
+          <button type="button" className="sim-button" key={text} disabled={!entity || pending} onClick={() => setQuestion(text)}>{warehouseLabel(text)}</button>)}
+      </div>
+      <form className="sim-question-form" onSubmit={(event) => { event.preventDefault(); void ask(question); }}>
+        <label className="sr-only" htmlFor={`${id}-question`}>Your question</label>
+        <div className="composer">
+          <textarea ref={input} id={`${id}-question`} rows={1} value={question} disabled={pending} placeholder="Ask about the current world…" onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+          }} />
+          <button className="send-button" type="submit" aria-label="Ask" disabled={pending || !question.trim()}>{pending ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={18} />}</button>
+        </div>
+      </form>
+      {error && <p role="alert" className="sim-inline-error"><CircleAlert size={15} aria-hidden="true" />{error}</p>}
+      {historyOverflow && <button type="button" className="sim-history-button" onClick={() => setHistoryOpen(true)}>Show all questions ({answers.length})</button>}
+      {answers.length > 0 && <div ref={answerViewport} className="sim-question-answer" aria-live="polite"><div ref={answerList}>
+        {answers.slice(-8).reverse().map((answer) => <div key={answer.simulation_evidence?.request_id}>{renderAnswer(answer)}</div>)}
+      </div></div>}
+    </div>
+    {createPortal(<dialog ref={dialog} className="sim-history-dialog" aria-labelledby={`${id}-history-title`} onClose={() => setHistoryOpen(false)} onClick={(event) => { if (event.target === event.currentTarget) dialog.current?.close(); }}>
+      <header><div><h2 id={`${id}-history-title`}>Questions and answers</h2><p>Responses captured during this simulation run.</p></div><button type="button" aria-label="Close question history" onClick={() => dialog.current?.close()}><X size={18} /></button></header>
+      <div className="sim-history-list">{answers.map((answer) => <div key={answer.simulation_evidence?.request_id}>{renderAnswer(answer)}</div>)}</div>
+    </dialog>, document.body)}
+  </section>;
+}
+
 function DisruptionControls({ state, disabled, submit }: {
   state: SimulationStateResponse;
   disabled: boolean;
@@ -155,10 +344,28 @@ function DisruptionControls({ state, disabled, submit }: {
   </details>;
 }
 
-export default function SimulationWorkspace({ sessionId, chatName, presenterTarget }: {
-  sessionId: string; chatName: string; presenterTarget: HTMLElement | null;
+export default function SimulationWorkspace({ sessionId, chatName, presenterTarget, renderAnswer, focus, onFocus }: {
+  sessionId: string; chatName: string; presenterTarget: HTMLElement | null; renderAnswer: (response: AgentResponse) => ReactNode;
+  focus: { runId: string; entity: string; factId?: string } | null; onFocus: (focus: { runId: string; entity: string; factId?: string }) => void;
 }) {
   const { state, connection, connectionError, pending, notice, run } = useSimulation(sessionId);
+  const [entity, setEntity] = useState("");
+  useEffect(() => { setEntity(state?.audience?.snapshot.entities[0]?.entity_id ?? ""); }, [state?.run_id, state?.generation]);
+  useEffect(() => {
+    if (focus && focus.runId === state?.run_id && (state?.audience?.snapshot.entities.some((item) => item.entity_id === focus.entity) || state?.audience?.routes.some((item) => item.route_id === focus.entity))) setEntity(focus.entity);
+  }, [focus, state?.run_id, state?.audience]);
+  function selectEntity(value: string) {
+    setEntity(value);
+    if (state?.run_id) onFocus({ runId: state.run_id, entity: value });
+  }
+  const layout = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = layout.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => element.parentElement?.style.setProperty("--simulation-column-height", `${element.offsetHeight}px`));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const live = connection === "live";
   const stale = !live || state?.state === "error";
   const loaded = !!state?.run_id;
@@ -259,7 +466,8 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
       </div>
       {connection === "disconnected" && <p className="sim-banner" role="alert">{connectionError} {state?.audience ? "Showing the last snapshot as stale." : "Retrying the connection."}</p>}
       {state?.state === "error" && <p className="sim-banner" role="alert">{state.persistence_error || state.error || "The warehouse runtime reported an error."}</p>}
-      <div className="sim-layout">
+      <div className={`sim-workspace-columns${loaded ? " has-questions" : ""}`}>
+      <div className="sim-layout" ref={layout}>
         <section className="sim-panel sim-map-panel" aria-labelledby="audience-world-title">
           <div className="sim-panel-heading">
             <h2 id="audience-world-title"><Map size={17} aria-hidden="true" />Audience world</h2>
@@ -271,7 +479,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
               {loaded && <a className="sim-evidence-link" href="#simulation-evidence">Evidence</a>}
             </div>
           </div>
-          {state?.audience ? <WarehouseMap key={`${state.generation}:${state.run_id}`} state={state} live={live} />
+          {state?.audience ? <WarehouseMap key={`${state.generation}:${state.run_id}`} state={state} live={live} selectedEntity={entity} onSelectEntity={selectEntity} />
             : <div className="sim-map-empty">
               <Map size={28} strokeWidth={1.4} aria-hidden="true" />
               <p>{live ? "Load the warehouse preset to see the room and robot." : "Waiting for the warehouse backend."}</p>
@@ -280,7 +488,10 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
         <aside id="simulation-evidence" className="sim-evidence" aria-label="Simulation evidence">
           <ObservationPanel state={state} stale={stale} />
           <BeliefPanel state={state} stale={stale} />
+          {loaded && state && <EvidenceTimeline sessionId={sessionId} state={state} entity={entity} onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />}
         </aside>
+      </div>
+      {loaded && state && <SimulationQuestions key={`${sessionId}:${state.generation}:${state.run_id}`} sessionId={sessionId} state={state} renderAnswer={renderAnswer} entity={entity} onSelectEntity={selectEntity} />}
       </div>
     </div>
   </section>;

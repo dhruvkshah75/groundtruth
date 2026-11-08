@@ -10,6 +10,7 @@ from .simulation import (
     Bounds,
     Contract,
     Finite,
+    Identifier,
     NonNegativeInt,
     PlaybackRate,
     Point,
@@ -31,6 +32,13 @@ ObservationCapability = Literal["camera_detect", "lidar_scan", "ambient_light", 
 class SimulationRunIdentity(Contract):
     run_id: UUID | None
     generation: NonNegativeInt
+
+
+class SimulationEvidenceRequest(Contract):
+    """Read bounded evidence for a catalog entity in one simulation incarnation."""
+
+    expected: SimulationRunIdentity
+    entity_id: Identifier
 
 
 class SimulationLoadRequest(Contract):

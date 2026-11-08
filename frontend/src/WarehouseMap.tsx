@@ -7,9 +7,9 @@ export function warehouseLabel(id: string) {
   return id.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
-type Props = { state: SimulationStateResponse; live: boolean };
+type Props = { state: SimulationStateResponse; live: boolean; selectedEntity?: string; onSelectEntity?: (entity: string) => void };
 
-export default function WarehouseMap({ state, live }: Props) {
+export default function WarehouseMap({ state, live, selectedEntity, onSelectEntity }: Props) {
   const id = useId();
   const [reducedMotion, setReducedMotion] = useState(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
   const previous = useRef<SimulationStateResponse | null>(null);
@@ -86,7 +86,8 @@ export default function WarehouseMap({ state, live }: Props) {
             const { x, y } = position(entity);
             const { width_cm: w, height_cm: h } = entity.footprint;
             return <g key={entity.entity_id} transform={`translate(${x},${y})`}
-              className={`warehouse-object warehouse-${entity.kind}`} data-entity={entity.entity_id}
+              className={`warehouse-object warehouse-${entity.kind}${selectedEntity === entity.entity_id ? " is-selected" : ""}`} data-entity={entity.entity_id}
+              onClick={() => onSelectEntity?.(entity.entity_id)}
               data-color={entity.intrinsic_color}>
               <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={entity.kind === "station" ? 5 : 2} />
               {entity.kind === "shelf" && [-h / 4, 0, h / 4].map((line) =>
@@ -131,7 +132,7 @@ export default function WarehouseMap({ state, live }: Props) {
       <ul className="sim-list">
         <li><strong>Robot</strong><span>{snapshot.robot_pose.x_cm.toFixed(0)}, {snapshot.robot_pose.y_cm.toFixed(0)} cm · {snapshot.robot_pose.direction}</span></li>
         {entities.map(({ entity_id, kind, footprint }) => <li key={entity_id}>
-          <strong>{warehouseLabel(entity_id)}</strong>
+          <strong><button type="button" className="warehouse-select-entity" onClick={() => onSelectEntity?.(entity_id)} aria-pressed={selectedEntity === entity_id}>{warehouseLabel(entity_id)}</button></strong>
           <span>{kind} · {footprint.x_cm.toFixed(0)}, {footprint.y_cm.toFixed(0)} cm</span>
         </li>)}
       </ul>

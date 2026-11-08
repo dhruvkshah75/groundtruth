@@ -124,6 +124,51 @@ def load(send, *, key=None):
     return loaded
 
 
+def test_evidence_endpoint_is_run_scoped_and_does_not_expose_unseen_parcel(api):
+    send, _, _, _ = api
+    loaded = load(send)
+    identity = {"run_id": loaded["run_id"], "generation": loaded["generation"]}
+    code, evidence, _ = send(BASE + "/evidence", {"expected": identity, "entity_id": "parcel_03"})
+    assert code == 200
+    assert evidence["summary"]["last_observed_position"] is None
+    assert all(
+        all(
+            obj["object_id"] != "parcel_03"
+            for obj in sample["result"].get("measurements", {}).get("objects", [])
+        )
+        for sample in evidence["samples"]
+    )
+    code, _, _ = send(BASE + "/evidence", {"expected": identity, "entity_id": "unknown_entity"})
+    assert code == 400
+    assert control(send, loaded, "reset")[0] == 200
+    code, error, _ = send(BASE + "/evidence", {"expected": identity, "entity_id": "parcel_01"})
+    assert code == 409
+    assert error["code"] == "stale_run"
+
+
+def test_ask_sanitizes_upstream_request_size_error(api, monkeypatch):
+    from src.procedural.intent_provider import IntentProviderUnavailableError
+
+    send, service, _, key = api
+
+    class UpstreamError(Exception):
+        status_code = 413
+
+    def fail(_question):
+        try:
+            raise UpstreamError("private upstream diagnostic")
+        except UpstreamError as cause:
+            raise IntentProviderUnavailableError("raw upstream response") from cause
+
+    monkeypatch.setattr(service.get_session(key), "ask", fail)
+    code, result, _ = send("/api/ask", {"question": "Show history"})
+    assert code == 503
+    assert result == {
+        "code": "provider_request_too_large",
+        "error": "Request limit exceeded.",
+    }
+
+
 def control(send, state, action, **kwargs):
     return send(BASE + "/control", {"expected": identity(state), "action": action, **kwargs})
 
@@ -191,6 +236,7 @@ def test_http_lifecycle_rates_and_legacy_compatibility(api):
     assert send(BASE + "/load", original_request)[1] == stepped
 
     code, legacy, _ = send("/api/ask", {"question": "Where are you?"})
+    assert legacy["answer"]["question"] == "Where are you?"
     assert code == 200
     assert legacy["history"][-1]["simulation_evidence"]["run_id"] == stepped["run_id"]
     assert legacy["simulation_status"]["sim_time_ms"] == 200
