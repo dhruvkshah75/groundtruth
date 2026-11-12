@@ -39,3 +39,8 @@ skills-lock.json
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
+
+# additionals for coding agent skills
+.code-review-graph/
+.mcp.json
+AGENTS.md
