@@ -6,6 +6,8 @@ ObservationSample is the bounded evidence envelope around the legacy result unio
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, Protocol, Self, runtime_checkable
 from uuid import UUID
@@ -89,6 +91,94 @@ class Rectangle(Point):
 
     width_cm: Positive
     height_cm: Positive
+
+
+CARDINAL_VECTORS: dict[Direction, tuple[int, int]] = {
+    "north": (0, 1),
+    "east": (1, 0),
+    "south": (0, -1),
+    "west": (-1, 0),
+}
+
+
+def heading_vector(direction: Direction | str) -> tuple[int, int]:
+    """Unit vector along cardinal heading."""
+    return CARDINAL_VECTORS[direction]  # type: ignore[index]
+
+
+def rectangle_entry(start: Point, end: Point, shape: Rectangle) -> float | None:
+    """First segment intersection fraction, including boundary/tangent contacts."""
+    lo, hi = 0.0, 1.0
+    for origin, delta, center, half in (
+        (start.x_cm, end.x_cm - start.x_cm, shape.x_cm, shape.width_cm / 2),
+        (start.y_cm, end.y_cm - start.y_cm, shape.y_cm, shape.height_cm / 2),
+    ):
+        if delta == 0:
+            if abs(origin - center) > half:
+                return None
+        else:
+            a, b = sorted(((center - half - origin) / delta, (center + half - origin) / delta))
+            lo, hi = max(lo, a), min(hi, b)
+            if lo > hi:
+                return None
+    return lo
+
+
+def point_distance_and_angle(
+    origin: Point, target: Point, direction: Direction | str
+) -> tuple[float, float]:
+    """Euclidean distance in cm and absolute bearing angle in degrees from heading."""
+    forward = heading_vector(direction)
+    dx = target.x_cm - origin.x_cm
+    dy = target.y_cm - origin.y_cm
+    distance = math.hypot(dx, dy)
+    if distance == 0:
+        return 0.0, 0.0
+    along = dx * forward[0] + dy * forward[1]
+    side = dx * forward[1] - dy * forward[0]
+    angle = math.degrees(math.atan2(abs(side), along))
+    return distance, angle
+
+
+def in_camera_view(
+    origin: Point,
+    target: Point,
+    direction: Direction | str,
+    range_cm: float,
+    fov_deg: float,
+    *,
+    tolerance: float = 1e-9,
+) -> bool:
+    """Deterministic camera sector containment check."""
+    distance, angle = point_distance_and_angle(origin, target, direction)
+    if distance == 0:
+        return False
+    return distance <= range_cm + tolerance and angle <= fov_deg / 2.0 + tolerance
+
+
+def is_line_of_sight_blocked(
+    origin: Point,
+    target: Point,
+    occluders: Iterable[Rectangle],
+) -> bool:
+    """True if any occluder footprint intersects the segment from origin to target."""
+    return any(rectangle_entry(origin, target, shape) is not None for shape in occluders)
+
+
+def find_line_of_sight_blocker(
+    origin: Point,
+    target: Point,
+    occluders: Iterable[Rectangle],
+) -> Rectangle | None:
+    """Return the nearest occluder intersecting the line of sight, or None."""
+    nearest: Rectangle | None = None
+    min_entry: float = float("inf")
+    for shape in occluders:
+        entry = rectangle_entry(origin, target, shape)
+        if entry is not None and entry < min_entry:
+            min_entry = entry
+            nearest = shape
+    return nearest
 
 
 class SceneEntity(Contract):

@@ -327,3 +327,39 @@ def test_route_and_station_evidence_use_the_loaded_scenario_map():
         assert "packing_station" not in session.snapshot()["graph"]["nodes"]
     finally:
         service.shutdown()
+
+
+def test_off_station_parcel_verification_bug_at_25_5_seconds():
+    """Reproduce default preset at 25.5s: off-station sample cannot verify old station."""
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        # Step to 25.5 simulated seconds (255 steps * 100ms)
+        for _ in range(255):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 25500
+
+        identity = SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        )
+        request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        evidence = service.read_simulation_evidence(key, request)
+
+        summary = evidence["summary"]
+        # Verified off-station coordinates with null station
+        assert summary["verification_status"] == "verified"
+        assert summary["supported_location"] is None
+        assert summary["current_location"] is None
+        assert summary["last_observed_position"] == {"x_cm": 372.5, "y_cm": 367.5}
+        assert summary["earlier_station"] == "inspection_station"
+
+        # SQLite fact retains earlier station in history without mutation
+        active_facts = session.agent.memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(active_facts) == 1
+        assert active_facts[0].object == "inspection_station"
+    finally:
+        service.shutdown()

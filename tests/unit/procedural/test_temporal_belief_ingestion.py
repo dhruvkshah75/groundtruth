@@ -34,6 +34,7 @@ from src.contracts import (
     ObservationUnavailable,
     Point,
     Pose,
+    Rectangle,
     SensorObservation,
     SpatialContext,
     StoredFact,
@@ -1242,3 +1243,305 @@ def test_multi_object_scan_partial_failure_retry_and_duplicate_idempotency() -> 
     assert res3.status == "duplicate_ignored"
     assert len(res3.facts_created) == 0
     assert len(repo.facts) == 2
+
+
+def test_off_station_aisle_detection_verifies_coordinates_with_null_station() -> None:
+    """Aisle detection verifies coordinates only, leaving station unset."""
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_id = uuid4()
+
+    # Sighting 1 at packing_station (80, 350)
+    det1 = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=80.0, y_cm=350.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
+    )
+    s1 = make_camera_sample(sim_time_ms=0, objects=[det1], run_id=run_id, sequence=0)
+    service.ingest_sample(s1)
+
+    # Sighting 2 in corridor / aisle outside all station zones (372.5, 367.5)
+    det2 = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=372.5, y_cm=367.5),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
+    )
+    s2 = make_camera_sample(sim_time_ms=25500, objects=[det2], run_id=run_id, sequence=1)
+    res2 = service.ingest_sample(s2)
+
+    assert res2.status == "unmapped"
+    assert len(res2.facts_created) == 0
+
+    # Summary: coordinates verified, station is null, earlier station retained
+    summary = service.get_entity_belief_summary(run_id, "parcel_01", 25500)
+    assert summary.verification_status == "verified"
+    assert summary.supported_location is None
+    assert summary.current_location is None
+    assert summary.last_observed_position == Point(x_cm=372.5, y_cm=367.5)
+    assert summary.earlier_station == "packing_station"
+    assert summary.visibility == "currently_visible"
+
+    # Direct assessment API
+    assessment = service.assess_entity_location(run_id, "parcel_01", 25500)
+    assert assessment.verification_status == "verified"
+    assert assessment.current_location is None
+    assert assessment.earlier_station == "packing_station"
+    assert assessment.current_sighting is not None
+    assert assessment.current_sighting.position == Point(x_cm=372.5, y_cm=367.5)
+    assert assessment.current_sighting.station_id is None
+
+    # SQLite fact untouched
+    active = repo.query_facts(FactQuery(subject="parcel_01", active_only=True))
+    assert len(active) == 1
+    assert active[0].object == "packing_station"
+
+
+def test_station_a_to_aisle_to_station_b_atomic_revision() -> None:
+    """A -> aisle -> B sensing produces one A-to-B revision and stores aisle sighting."""
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_id = uuid4()
+
+    # 1. Seen at packing_station (80, 350)
+    det_a = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=80.0, y_cm=350.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
+    )
+    s_a = make_camera_sample(sim_time_ms=1000, objects=[det_a], run_id=run_id, sequence=0)
+    res_a = service.ingest_sample(s_a)
+    assert res_a.status == "applied"
+    assert len(res_a.facts_created) == 1
+    assert res_a.facts_created[0].object == "packing_station"
+
+    # 2. Seen in aisle (300, 300)
+    det_aisle = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=300.0, y_cm=300.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
+    )
+    s_aisle = make_camera_sample(sim_time_ms=5000, objects=[det_aisle], run_id=run_id, sequence=1)
+    res_aisle = service.ingest_sample(s_aisle)
+    assert res_aisle.status == "unmapped"
+    assert len(res_aisle.facts_created) == 0
+
+    # 3. Seen at inspection_station (150, 390)
+    det_b = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=150.0, y_cm=390.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
+    )
+    s_b = make_camera_sample(sim_time_ms=10000, objects=[det_b], run_id=run_id, sequence=2)
+    res_b = service.ingest_sample(s_b)
+    assert res_b.status == "applied"
+    assert len(res_b.revisions_created) == 1
+    assert len(res_b.facts_created) == 1
+    assert res_b.facts_created[0].object == "inspection_station"
+
+    # Active fact in repo is now inspection_station
+    active = repo.query_facts(FactQuery(subject="parcel_01", active_only=True))
+    assert len(active) == 1
+    assert active[0].object == "inspection_station"
+
+    # Aisle sample is stored in ledger and independently inspectable
+    aisle_sample = ledger.get_observation_sample(s_aisle.sample_id)
+    assert aisle_sample is not None
+    assert aisle_sample.sim_time_ms == 5000
+
+
+def test_distinguish_sensor_outage_from_target_not_visible_and_empty_scan() -> None:
+    """Outage yields 'unavailable', target_not_visible and empty scans yield 'last_seen'."""
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger)
+    run_id = uuid4()
+
+    # Step 1: initial sighting at packing_station
+    det = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=80.0, y_cm=350.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
+    )
+    s1 = make_camera_sample(sim_time_ms=0, objects=[det], run_id=run_id, sequence=0)
+    service.ingest_sample(s1)
+
+    # Step 2: Target not visible (target="parcel_01", reason="target_not_visible")
+    epoch = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    not_visible_sample = ObservationSample(
+        sample_id=uuid4(),
+        run_id=run_id,
+        sample_sequence=1,
+        epoch_utc=epoch,
+        sim_time_ms=500,
+        captured_at=epoch + timedelta(milliseconds=500),
+        sensor_id="camera_detect",
+        observer_pose=Pose(
+            x_cm=100.0,
+            y_cm=100.0,
+            robot_id="robot_1",
+            direction="north",
+            location="warehouse",
+            frame_of_reference="warehouse_map",
+        ),
+        world_version=0,
+        request=ObservationRequest(capability="camera_detect", target="parcel_01"),
+        result=ObservationUnavailable(
+            capability="camera_detect",
+            reason="target_not_visible",
+            message="Observation unavailable.",
+            reported_at=epoch + timedelta(milliseconds=500),
+        ),
+    )
+    service.ingest_sample(not_visible_sample)
+
+    sum_nv = service.get_entity_belief_summary(run_id, "parcel_01", 500)
+    assert sum_nv.verification_status == "last_seen"  # NOT unavailable!
+    assert sum_nv.visibility == "not_currently_visible"
+    assert sum_nv.supported_location == "packing_station"
+    assert sum_nv.last_positive_sighting.sample_id == s1.sample_id
+    assert sum_nv.latest_sensor_attempt.sample_id == not_visible_sample.sample_id
+
+    # Step 3: Sensor Outage (reason="sensor_unavailable")
+    outage_sample = ObservationSample(
+        sample_id=uuid4(),
+        run_id=run_id,
+        sample_sequence=2,
+        epoch_utc=epoch,
+        sim_time_ms=1000,
+        captured_at=epoch + timedelta(milliseconds=1000),
+        sensor_id="camera_detect",
+        observer_pose=Pose(
+            x_cm=100.0,
+            y_cm=100.0,
+            robot_id="robot_1",
+            direction="north",
+            location="warehouse",
+            frame_of_reference="warehouse_map",
+        ),
+        world_version=0,
+        request=ObservationRequest(capability="camera_detect"),
+        result=ObservationUnavailable(
+            capability="camera_detect",
+            reason="sensor_unavailable",
+            message="Observation unavailable.",
+            reported_at=epoch + timedelta(milliseconds=1000),
+        ),
+    )
+    service.ingest_sample(outage_sample)
+
+    sum_outage = service.get_entity_belief_summary(run_id, "parcel_01", 1000)
+    assert sum_outage.verification_status == "unavailable"
+    assert sum_outage.visibility == "unknown"
+    assert sum_outage.last_positive_sighting.sample_id == s1.sample_id
+    assert sum_outage.latest_sensor_attempt.sample_id == outage_sample.sample_id
+
+    # No mutation occurred in SQLite facts
+    facts = repo.query_facts(FactQuery(subject="parcel_01"))
+    assert len(facts) == 1
+    assert facts[0].object == "packing_station"
+
+
+def test_overlapping_zones_verifies_coordinates_only_with_null_station() -> None:
+    """Overlapping zones verify coordinates only, leaving station unset."""
+    zone_map = StationZoneMap(
+        zones=[
+            StationZone.from_center("zone_1", "warehouse", "warehouse_map", 100, 100, 50, 50),
+            StationZone.from_center("zone_2", "warehouse", "warehouse_map", 110, 110, 50, 50),
+        ]
+    )
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    service = TemporalBeliefIngestionService(repo, ledger, zone_map=zone_map)
+    run_id = uuid4()
+
+    # Point at (105, 105) falls inside both zone_1 and zone_2
+    det = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=105.0, y_cm=105.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+    sample = make_camera_sample(sim_time_ms=100, objects=[det], run_id=run_id)
+    res = service.ingest_sample(sample)
+    assert res.status == "ambiguous"
+    assert len(res.facts_created) == 0
+
+    summary = service.get_entity_belief_summary(run_id, "parcel_01", 100)
+    assert summary.verification_status == "verified"
+    assert summary.supported_location is None
+    assert summary.current_location is None
+    assert summary.uncertainty is True
+    assert "overlaps multiple station zones" in (summary.uncertainty_reason or "")
+    assert summary.last_observed_position == Point(x_cm=105.0, y_cm=105.0)
+
+
+def test_known_shelf_occlusion_and_outside_view_explanations() -> None:
+    """Verify geometric visibility explanations for occluded vs out of view."""
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    shelves = [Rectangle(x_cm=100.0, y_cm=150.0, width_cm=40.0, height_cm=40.0)]
+    service = TemporalBeliefIngestionService(
+        repo,
+        ledger,
+        camera_range_cm=200.0,
+        camera_fov_deg=90.0,
+        shelves=shelves,
+    )
+    run_id = uuid4()
+
+    # Parcel 1 at (100, 200) behind shelf at (100, 150) from robot at (100, 100) facing north
+    det1 = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=100.0, y_cm=200.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+    s1 = make_camera_sample(sim_time_ms=0, objects=[det1], run_id=run_id, sequence=0)
+    service.ingest_sample(s1)
+
+    # Robot at (100, 100) facing north takes empty broad scan at 500 ms
+    empty_scan_1 = make_camera_sample(sim_time_ms=500, objects=[], run_id=run_id, sequence=1)
+    service.ingest_sample(empty_scan_1)
+
+    sum1 = service.get_entity_belief_summary(run_id, "parcel_01", 500)
+    assert sum1.verification_status == "last_seen"
+    assert sum1.lost_verification_reason is not None
+    assert "occluded by shelf" in sum1.lost_verification_reason
+
+    # Robot at (100, 100) facing south (looking away) takes empty broad scan at 1000 ms
+    empty_scan_south = make_camera_sample(
+        sim_time_ms=1000,
+        objects=[],
+        run_id=run_id,
+        sequence=2,
+        pose=Pose(
+            x_cm=100.0,
+            y_cm=100.0,
+            robot_id="robot_1",
+            direction="south",
+            location="warehouse",
+            frame_of_reference="warehouse_map",
+        ),
+    )
+    service.ingest_sample(empty_scan_south)
+
+    sum2 = service.get_entity_belief_summary(run_id, "parcel_01", 1000)
+    assert sum2.verification_status == "last_seen"
+    assert sum2.lost_verification_reason is not None
+    assert "outside camera field of view" in sum2.lost_verification_reason

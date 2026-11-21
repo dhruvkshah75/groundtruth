@@ -458,6 +458,7 @@ def _camera_attempt(
     empty=False,
     target=None,
     unavailable=False,
+    reason=None,
     pose_changes=None,
 ):
     """Build deterministic acquisition variants from the shared contract fixture."""
@@ -475,7 +476,7 @@ def _camera_attempt(
     if unavailable:
         payload["result"] = {
             "capability": "camera_detect",
-            "reason": "target_not_visible",
+            "reason": reason or "sensor_unavailable",
             "message": "Observation unavailable.",
             "reported_at": captured.isoformat(),
         }

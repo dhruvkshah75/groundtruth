@@ -8,6 +8,7 @@ and injected protocols; never imports concrete SQLite, NetworkX, or sensor code.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -17,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.contracts import (
     AuditEvent,
+    BoundingBox,
     CameraDetection,
     CameraScan,
     Direction,
@@ -28,11 +30,14 @@ from src.contracts import (
     ObservationUnavailable,
     Point,
     Pose,
+    Rectangle,
     SensorObservation,
     SpatialContext,
     StoredFact,
     StoredObservationSample,
     TemporalObservationQuery,
+    in_camera_view,
+    is_line_of_sight_blocked,
 )
 
 
@@ -280,11 +285,56 @@ class IngestionConfig(BaseModel):
     position_tolerance_cm: float = Field(default=5.0, ge=0.0)
     camera_policy_rule: str = "camera_observation_revision"
     lidar_policy_rule: str = "lidar_observation_route_status"
+    camera_range_cm: float | None = None
+    camera_fov_deg: float | None = None
 
 
 # ---------------------------------------------------------------------------
 # Output Summary Models
 # ---------------------------------------------------------------------------
+
+
+class LocationSighting(BaseModel):
+    """Timestamped positive detection of an entity from a camera observation sample."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sample_id: UUID
+    sim_time_ms: int
+    captured_at: datetime
+    frame_of_reference: str
+    position: Point
+    station_id: str | None = None
+    bounding_box: BoundingBox | dict[str, float] | None = None
+    apparent_color: str | None = None
+
+
+class LocationAssessment(BaseModel):
+    """Run-scoped location assessment for an entity at a given simulation timestamp."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: str
+    run_id: UUID
+    as_of_sim_time_ms: int
+
+    verification_status: Literal["verified", "last_seen", "unverified", "unavailable"]
+    current_location: str | None = None
+    current_sighting: LocationSighting | None = None
+    last_sighting: LocationSighting | None = None
+    lost_verification_reason: str | None = None
+    lost_verification_sample: StoredObservationSample | None = None
+    earlier_station: str | None = None
+
+    visibility: Literal["currently_visible", "not_currently_visible", "unknown"]
+    freshness: Literal["fresh", "stale", "future_dated", "incompatible", "unverified"]
+    age_ms: int | None = None
+
+    last_observed_position: Point | None = None
+    last_observed_frame: str | None = None
+
+    uncertainty: bool
+    uncertainty_reason: str | None = None
 
 
 class EntityBeliefSummary(BaseModel):
@@ -297,12 +347,17 @@ class EntityBeliefSummary(BaseModel):
     as_of_sim_time_ms: int
 
     supported_location: str | None = None
+    current_location: str | None = None
+    earlier_station: str | None = None
     active_fact_id: UUID | None = None
     predecessor_fact_id: UUID | None = None
     revision_event_id: UUID | None = None
 
     last_positive_sighting: StoredObservationSample | None = None
     latest_sensor_attempt: StoredObservationSample | None = None
+    current_sighting: LocationSighting | None = None
+    lost_verification_reason: str | None = None
+    lost_verification_sample: StoredObservationSample | None = None
 
     verification_status: Literal["verified", "last_seen", "unverified", "unavailable"]
     visibility: Literal["currently_visible", "not_currently_visible", "unknown"]
@@ -375,6 +430,289 @@ class IngestionResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Assessment Functions
+# ---------------------------------------------------------------------------
+
+
+def explain_lost_visibility(
+    *,
+    entity_id: str,
+    last_position: Point | None,
+    last_sighting_sim_time_ms: int | None,
+    last_station: str | None,
+    attempt: StoredObservationSample,
+    camera_range_cm: float | None = None,
+    camera_fov_deg: float | None = None,
+    shelves: Sequence[Rectangle] | None = None,
+) -> str:
+    """Generate an evidence-backed reason for a non-detection."""
+    pose = attempt.observer_pose
+    sim_time = attempt.sim_time_ms
+
+    if last_position is None or camera_range_cm is None or camera_fov_deg is None:
+        last_desc = f"last seen at {last_station}" if last_station else "last known position"
+        return (
+            f"Entity {entity_id} not detected in broad scan at {sim_time} ms; "
+            f"{last_desc} ({last_sighting_sim_time_ms} ms)."
+        )
+
+    if not in_camera_view(pose, last_position, pose.direction, camera_range_cm, camera_fov_deg):
+        return (
+            f"Last known position of {entity_id} was outside camera field of view at {sim_time} ms."
+        )
+
+    if shelves and is_line_of_sight_blocked(pose, last_position, shelves):
+        return (
+            f"Line of sight to {entity_id} at last known position was occluded by shelf at "
+            f"{sim_time} ms."
+        )
+
+    return (
+        f"Entity {entity_id} not detected in broad scan at {sim_time} ms; "
+        f"last seen at {last_station or f'({last_position.x_cm}, {last_position.y_cm})'} "
+        f"({last_sighting_sim_time_ms} ms)."
+    )
+
+
+def assess_location(
+    *,
+    entity_id: str,
+    run_id: UUID,
+    as_of_sim_time_ms: int,
+    last_sighting_sample: StoredObservationSample | None,
+    latest_attempt_sample: StoredObservationSample | None,
+    zone_map: StationZoneMap,
+    freshness_ms: int,
+    active_fact_station: str | None = None,
+    camera_range_cm: float | None = None,
+    camera_fov_deg: float | None = None,
+    shelves: Sequence[Rectangle] | None = None,
+) -> LocationAssessment:
+    """Deterministic location assessment from sensor evidence and configured geometry."""
+    # 1. Parse sighting if available
+    sighting: LocationSighting | None = None
+    pos: Point | None = None
+    frame: str | None = None
+    station: str | None = None
+    zone_status: Literal["matched", "unmapped", "ambiguous"] = "unmapped"
+
+    if last_sighting_sample is not None and isinstance(
+        last_sighting_sample.result, SensorObservation
+    ):
+        scan = CameraScan.model_validate(last_sighting_sample.result.measurements)
+        for det in scan.objects:
+            if det.object_id == entity_id:
+                pos = det.position
+                frame = det.frame_of_reference
+                zone_id, zone_status = zone_map.resolve_zone(
+                    point=pos,
+                    location=last_sighting_sample.observer_pose.location,
+                    frame=frame,
+                )
+                station = zone_id if zone_status == "matched" else None
+                sighting = LocationSighting(
+                    sample_id=last_sighting_sample.sample_id,
+                    sim_time_ms=last_sighting_sample.sim_time_ms,
+                    captured_at=last_sighting_sample.captured_at,
+                    frame_of_reference=frame,
+                    position=pos,
+                    station_id=station,
+                    bounding_box=det.bounding_box,
+                    apparent_color=det.apparent_color,
+                )
+                break
+
+    # 2. No positive sighting in this run
+    if last_sighting_sample is None or sighting is None:
+        if active_fact_station is not None:
+            reason = (
+                f"Entity {entity_id} has historical belief but no positive sighting in this run."
+            )
+            return LocationAssessment(
+                entity_id=entity_id,
+                run_id=run_id,
+                as_of_sim_time_ms=as_of_sim_time_ms,
+                verification_status="last_seen",
+                current_location=None,
+                current_sighting=None,
+                last_sighting=None,
+                lost_verification_reason=reason,
+                lost_verification_sample=None,
+                earlier_station=active_fact_station,
+                visibility="unknown",
+                freshness="unverified",
+                age_ms=None,
+                last_observed_position=None,
+                last_observed_frame=None,
+                uncertainty=True,
+                uncertainty_reason=reason,
+            )
+        reason = f"No sighting or belief found for entity {entity_id}."
+        return LocationAssessment(
+            entity_id=entity_id,
+            run_id=run_id,
+            as_of_sim_time_ms=as_of_sim_time_ms,
+            verification_status="unverified",
+            current_location=None,
+            current_sighting=None,
+            last_sighting=None,
+            lost_verification_reason=reason,
+            lost_verification_sample=None,
+            earlier_station=None,
+            visibility="unknown",
+            freshness="unverified",
+            age_ms=None,
+            last_observed_position=None,
+            last_observed_frame=None,
+            uncertainty=True,
+            uncertainty_reason=reason,
+        )
+
+    # 3. Check future-dated simulation time
+    diff_ms = as_of_sim_time_ms - last_sighting_sample.sim_time_ms
+    if diff_ms < 0:
+        reason = "Query simulation time is earlier than the sighting capture time."
+        return LocationAssessment(
+            entity_id=entity_id,
+            run_id=run_id,
+            as_of_sim_time_ms=as_of_sim_time_ms,
+            verification_status="unverified",
+            current_location=None,
+            current_sighting=None,
+            last_sighting=sighting,
+            lost_verification_reason=reason,
+            lost_verification_sample=None,
+            earlier_station=active_fact_station,
+            visibility="unknown",
+            freshness="future_dated",
+            age_ms=0,
+            last_observed_position=pos,
+            last_observed_frame=frame,
+            uncertainty=True,
+            uncertainty_reason=reason,
+        )
+
+    # 4. Epistemic Freshness and Age
+    age_ms = diff_ms
+    is_fresh = age_ms <= freshness_ms
+    freshness: Literal["fresh", "stale", "future_dated", "incompatible", "unverified"] = (
+        "fresh" if is_fresh else "stale"
+    )
+
+    is_newer_attempt = latest_attempt_sample is not None and (
+        latest_attempt_sample.sim_time_ms,
+        latest_attempt_sample.sample_sequence,
+    ) > (
+        last_sighting_sample.sim_time_ms,
+        last_sighting_sample.sample_sequence,
+    )
+
+    verification_status: Literal["verified", "last_seen", "unverified", "unavailable"]
+    visibility: Literal["currently_visible", "not_currently_visible", "unknown"]
+    lost_reason: str | None = None
+    lost_sample: StoredObservationSample | None = None
+
+    if is_newer_attempt and latest_attempt_sample is not None:
+        if (
+            isinstance(latest_attempt_sample.result, ObservationUnavailable)
+            and latest_attempt_sample.result.reason != "target_not_visible"
+        ):
+            verification_status = "unavailable"
+            visibility = "unknown"
+            lost_reason = f"Camera unavailable at {latest_attempt_sample.sim_time_ms} ms."
+            lost_sample = latest_attempt_sample
+        elif (
+            isinstance(latest_attempt_sample.result, ObservationUnavailable)
+            and latest_attempt_sample.result.reason == "target_not_visible"
+        ) or (
+            latest_attempt_sample.request.target is None
+            and isinstance(latest_attempt_sample.result, SensorObservation)
+        ):
+            verification_status = "last_seen"
+            visibility = "not_currently_visible"
+            lost_sample = latest_attempt_sample
+            lost_reason = explain_lost_visibility(
+                entity_id=entity_id,
+                last_position=pos,
+                last_sighting_sim_time_ms=last_sighting_sample.sim_time_ms,
+                last_station=station or active_fact_station,
+                attempt=latest_attempt_sample,
+                camera_range_cm=camera_range_cm,
+                camera_fov_deg=camera_fov_deg,
+                shelves=shelves,
+            )
+        else:
+            if is_fresh:
+                verification_status = "verified"
+                visibility = "currently_visible"
+            else:
+                verification_status = "last_seen"
+                visibility = "not_currently_visible"
+                lost_reason = f"Sighting is stale (age: {age_ms} ms > {freshness_ms} ms)."
+    else:
+        if is_fresh:
+            verification_status = "verified"
+            visibility = "currently_visible"
+        else:
+            verification_status = "last_seen"
+            visibility = "not_currently_visible"
+            lost_reason = f"Sighting is stale (age: {age_ms} ms > {freshness_ms} ms)."
+
+    # 5. Station / location resolution
+    current_location: str | None = None
+    current_sighting: LocationSighting | None = None
+    earlier_station: str | None = None
+    uncertainty = False
+    uncertainty_reason: str | None = None
+
+    if verification_status == "verified":
+        current_sighting = sighting
+        if zone_status == "matched":
+            current_location = station
+            earlier_station = active_fact_station if active_fact_station != station else None
+            uncertainty = False
+            uncertainty_reason = None
+        elif zone_status == "ambiguous":
+            current_location = None
+            earlier_station = active_fact_station
+            uncertainty = True
+            uncertainty_reason = (
+                f"Entity {entity_id} at ({pos.x_cm}, {pos.y_cm}) overlaps multiple station zones."
+            )
+        else:  # unmapped (aisle)
+            current_location = None
+            earlier_station = active_fact_station
+            uncertainty = False
+            uncertainty_reason = None
+    else:
+        current_sighting = None
+        current_location = None
+        earlier_station = active_fact_station
+        uncertainty = True
+        uncertainty_reason = lost_reason
+
+    return LocationAssessment(
+        entity_id=entity_id,
+        run_id=run_id,
+        as_of_sim_time_ms=as_of_sim_time_ms,
+        verification_status=verification_status,
+        current_location=current_location,
+        current_sighting=current_sighting,
+        last_sighting=sighting,
+        lost_verification_reason=lost_reason,
+        lost_verification_sample=lost_sample,
+        earlier_station=earlier_station,
+        visibility=visibility,
+        freshness=freshness,
+        age_ms=age_ms,
+        last_observed_position=pos,
+        last_observed_frame=frame,
+        uncertainty=uncertainty,
+        uncertainty_reason=uncertainty_reason,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Temporal Belief Ingestion Service
 # ---------------------------------------------------------------------------
 
@@ -393,6 +731,9 @@ class TemporalBeliefIngestionService:
         zone_map: StationZoneMap | None = None,
         route_map: StaticRouteMap | None = None,
         config: IngestionConfig | None = None,
+        camera_range_cm: float | None = None,
+        camera_fov_deg: float | None = None,
+        shelves: Sequence[Rectangle] | None = None,
     ) -> None:
         self._repo = fact_repository
         # If observation_ledger is not provided separately, fact_repository might implement it
@@ -406,6 +747,13 @@ class TemporalBeliefIngestionService:
         self._zone_map = zone_map or StationZoneMap.default_warehouse_zones()
         self._route_map = route_map or StaticRouteMap.default_warehouse_routes()
         self._config = config or IngestionConfig()
+        self._camera_range_cm = (
+            camera_range_cm if camera_range_cm is not None else self._config.camera_range_cm
+        )
+        self._camera_fov_deg = (
+            camera_fov_deg if camera_fov_deg is not None else self._config.camera_fov_deg
+        )
+        self._shelves = list(shelves) if shelves is not None else []
         self._lock = fact_repository.observation_ingestion_lock()
         self._latest_entity_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
         self._latest_route_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
@@ -579,6 +927,10 @@ class TemporalBeliefIngestionService:
                     f"Entity {det.object_id} at ({det.position.x_cm}, {det.position.y_cm}) "
                     "is outside all known station zones."
                 )
+                self._latest_entity_sighting[(sample.run_id, det.object_id)] = (
+                    sample.sim_time_ms,
+                    sample.sample_sequence,
+                )
                 continue
 
             if zone_status == "ambiguous":
@@ -587,6 +939,10 @@ class TemporalBeliefIngestionService:
                 uncertainty_reasons.append(
                     f"Entity {det.object_id} at ({det.position.x_cm}, {det.position.y_cm}) "
                     "overlaps multiple station zones."
+                )
+                self._latest_entity_sighting[(sample.run_id, det.object_id)] = (
+                    sample.sim_time_ms,
+                    sample.sample_sequence,
                 )
                 continue
 
@@ -1131,13 +1487,22 @@ class TemporalBeliefIngestionService:
         with self._lock:
             return self._locked_get_entity_belief_summary(run_id, entity_id, current_sim_time_ms)
 
-    def _locked_get_entity_belief_summary(
+    def assess_entity_location(
         self,
         run_id: UUID,
         entity_id: str,
         current_sim_time_ms: int,
-    ) -> EntityBeliefSummary:
-        # 1. Query active fact for this entity's location scoped to run_id
+    ) -> LocationAssessment:
+        """Evaluate run-scoped location assessment from evidence and configured geometry."""
+        with self._lock:
+            return self._locked_assess_entity_location(run_id, entity_id, current_sim_time_ms)
+
+    def _locked_assess_entity_location(
+        self,
+        run_id: UUID,
+        entity_id: str,
+        current_sim_time_ms: int,
+    ) -> LocationAssessment:
         active_facts = self._repo.query_facts(
             FactQuery(
                 subject=entity_id,
@@ -1156,7 +1521,6 @@ class TemporalBeliefIngestionService:
         ]
         active_fact = active_facts[0] if active_facts else None
 
-        # 2. Query observation ledger if reader protocol is available
         last_sighting: StoredObservationSample | None = None
         latest_attempt: StoredObservationSample | None = None
 
@@ -1169,7 +1533,6 @@ class TemporalBeliefIngestionService:
                 capability="camera_detect",
                 at_sim_time_ms=current_sim_time_ms,
             )
-            # Check if there is a future-dated sighting in this run
             if last_sighting is None:
                 future_sighting = self._ledger.get_last_sighting(
                     run_id=run_id,
@@ -1183,146 +1546,138 @@ class TemporalBeliefIngestionService:
                 ):
                     last_sighting = future_sighting
 
-        if last_sighting is not None:
+        if last_sighting is not None and hasattr(self._ledger, "get_latest_camera_attempt"):
             latest_attempt = self._ledger.get_latest_camera_attempt(
                 run_id, entity_id, last_sighting.observer_pose, current_sim_time_ms
             )
+        elif hasattr(self._ledger, "get_latest_sample"):
+            latest_attempt = self._ledger.get_latest_sample(
+                run_id=run_id,
+                capability="camera_detect",
+                at_sim_time_ms=current_sim_time_ms,
+            )
 
-        # 3. Determine location and coordinates
+        return assess_location(
+            entity_id=entity_id,
+            run_id=run_id,
+            as_of_sim_time_ms=current_sim_time_ms,
+            last_sighting_sample=last_sighting,
+            latest_attempt_sample=latest_attempt,
+            zone_map=self._zone_map,
+            freshness_ms=self._config.freshness_ms,
+            active_fact_station=active_fact.object if active_fact else None,
+            camera_range_cm=self._camera_range_cm,
+            camera_fov_deg=self._camera_fov_deg,
+            shelves=self._shelves,
+        )
+
+    def _locked_get_entity_belief_summary(
+        self,
+        run_id: UUID,
+        entity_id: str,
+        current_sim_time_ms: int,
+    ) -> EntityBeliefSummary:
+        assessment = self._locked_assess_entity_location(run_id, entity_id, current_sim_time_ms)
+
+        active_facts = self._repo.query_facts(
+            FactQuery(
+                subject=entity_id,
+                predicate="located_at",
+                active_only=True,
+                context=SpatialContext(extra_context={"run_id": str(run_id)}),
+            )
+        )
+        active_facts = [
+            f
+            for f in active_facts
+            if (
+                f.context.extra_context.get("run_id") == str(run_id)
+                or f.evidence.get("run_id") == str(run_id)
+            )
+        ]
+        active_fact = active_facts[0] if active_facts else None
+
+        last_sighting: StoredObservationSample | None = None
+        latest_attempt: StoredObservationSample | None = None
+        if hasattr(self._ledger, "get_last_sighting") and hasattr(
+            self._ledger, "get_latest_sample"
+        ):
+            last_sighting = self._ledger.get_last_sighting(
+                run_id=run_id,
+                entity_id=entity_id,
+                capability="camera_detect",
+                at_sim_time_ms=current_sim_time_ms,
+            )
+            if last_sighting is None:
+                future_sighting = self._ledger.get_last_sighting(
+                    run_id=run_id,
+                    entity_id=entity_id,
+                    capability="camera_detect",
+                    at_sim_time_ms=None,
+                )
+                if (
+                    future_sighting is not None
+                    and future_sighting.sim_time_ms > current_sim_time_ms
+                ):
+                    last_sighting = future_sighting
+
+        if last_sighting is not None and hasattr(self._ledger, "get_latest_camera_attempt"):
+            latest_attempt = self._ledger.get_latest_camera_attempt(
+                run_id, entity_id, last_sighting.observer_pose, current_sim_time_ms
+            )
+        elif hasattr(self._ledger, "get_latest_sample"):
+            latest_attempt = self._ledger.get_latest_sample(
+                run_id=run_id,
+                capability="camera_detect",
+                at_sim_time_ms=current_sim_time_ms,
+            )
+
         supported_location: str | None = None
-        last_pos: Point | None = None
-        last_frame: str | None = None
+        if assessment.verification_status == "verified":
+            supported_location = assessment.current_location
+        elif assessment.verification_status == "last_seen":
+            if assessment.last_sighting and assessment.last_sighting.station_id:
+                supported_location = assessment.last_sighting.station_id
+            elif active_fact is not None and (
+                assessment.last_sighting is None or assessment.last_sighting.station_id is not None
+            ):
+                supported_location = active_fact.object
 
-        if active_fact is not None:
-            supported_location = active_fact.object
+        last_pos = assessment.last_observed_position
+        last_frame = assessment.last_observed_frame
+        if last_pos is None and active_fact is not None:
             if "x_cm" in active_fact.evidence and "y_cm" in active_fact.evidence:
                 last_pos = Point(
-                    x_cm=float(active_fact.evidence["x_cm"]),  # type: ignore[arg-type]
-                    y_cm=float(active_fact.evidence["y_cm"]),  # type: ignore[arg-type]
+                    x_cm=float(active_fact.evidence["x_cm"]),
+                    y_cm=float(active_fact.evidence["y_cm"]),
                 )
                 last_frame = str(
                     active_fact.evidence.get("frame", active_fact.context.frame_of_reference or "")
                 )
-
-        if last_sighting is not None and isinstance(last_sighting.result, SensorObservation):
-            scan = CameraScan.model_validate(last_sighting.result.measurements)
-            for det in scan.objects:
-                if det.object_id == entity_id:
-                    last_pos = det.position
-                    last_frame = det.frame_of_reference
-                    break
-
-        # 4. Epistemic Freshness and Age
-        freshness: Literal["fresh", "stale", "future_dated", "incompatible", "unverified"]
-        age_ms: int | None = None
-        uncertainty = False
-        uncertainty_reason: str | None = None
-
-        if last_sighting is None:
-            if active_fact is not None:
-                # Historical fact without ledger sample in this run
-                freshness = "unverified"
-                verification_status: Literal[
-                    "verified", "last_seen", "unverified", "unavailable"
-                ] = "last_seen"
-                visibility: Literal["currently_visible", "not_currently_visible", "unknown"] = (
-                    "unknown"
-                )
-                uncertainty = True
-                uncertainty_reason = (
-                    f"Entity {entity_id} has historical belief "
-                    "but no positive sighting in this run."
-                )
-            else:
-                freshness = "unverified"
-                verification_status = "unverified"
-                visibility = "unknown"
-                uncertainty = True
-                uncertainty_reason = f"No sighting or belief found for entity {entity_id}."
-        else:
-            diff_ms = current_sim_time_ms - last_sighting.sim_time_ms
-            if diff_ms < 0:
-                freshness = "future_dated"
-                age_ms = 0  # Spec: Never assign negative age
-                verification_status = "unverified"
-                visibility = "unknown"
-                uncertainty = True
-                uncertainty_reason = (
-                    "Query simulation time is earlier than the sighting capture time."
-                )
-            else:
-                age_ms = diff_ms
-                if age_ms <= self._config.freshness_ms:
-                    freshness = "fresh"
-                else:
-                    freshness = "stale"
-
-                # Check latest camera attempt
-                if latest_attempt is not None and (
-                    latest_attempt.sim_time_ms,
-                    latest_attempt.sample_sequence,
-                ) > (last_sighting.sim_time_ms, last_sighting.sample_sequence):
-                    if isinstance(latest_attempt.result, ObservationUnavailable):
-                        verification_status = "unavailable"
-                        visibility = "unknown"
-                        uncertainty = True
-                        uncertainty_reason = (
-                            f"Camera unavailable at {latest_attempt.sim_time_ms} ms."
-                        )
-                    elif latest_attempt.request.target is None:
-                        # Successful broad scan that lacked entity
-                        verification_status = "last_seen"
-                        visibility = "not_currently_visible"
-                        uncertainty = True
-                        uncertainty_reason = (
-                            f"Entity {entity_id} not detected in broad scan at "
-                            f"{latest_attempt.sim_time_ms} ms; last seen at "
-                            f"{supported_location} ({last_sighting.sim_time_ms} ms)."
-                        )
-                    else:
-                        # Targeted attempt for something else
-                        if freshness == "fresh":
-                            verification_status = "verified"
-                            visibility = "currently_visible"
-                        else:
-                            verification_status = "last_seen"
-                            visibility = "not_currently_visible"
-                            uncertainty = True
-                            uncertainty_reason = (
-                                f"Sighting is stale (age: {age_ms} ms > "
-                                f"{self._config.freshness_ms} ms)."
-                            )
-                else:
-                    if freshness == "fresh":
-                        verification_status = "verified"
-                        visibility = "currently_visible"
-                    else:
-                        verification_status = "last_seen"
-                        visibility = "not_currently_visible"
-                        uncertainty = True
-                        uncertainty_reason = (
-                            f"Sighting is stale (age: {age_ms} ms > "
-                            f"{self._config.freshness_ms} ms)."
-                        )
 
         return EntityBeliefSummary(
             entity_id=entity_id,
             run_id=run_id,
             as_of_sim_time_ms=current_sim_time_ms,
             supported_location=supported_location,
+            current_location=assessment.current_location,
+            earlier_station=assessment.earlier_station,
             active_fact_id=active_fact.fact_id if active_fact else None,
             predecessor_fact_id=None,
             revision_event_id=None,
             last_positive_sighting=last_sighting,
             latest_sensor_attempt=latest_attempt,
-            verification_status=verification_status,
-            visibility=visibility,
-            freshness=freshness,
-            age_ms=age_ms,
+            current_sighting=assessment.current_sighting,
+            lost_verification_reason=assessment.lost_verification_reason,
+            lost_verification_sample=assessment.lost_verification_sample,
+            verification_status=assessment.verification_status,
+            visibility=assessment.visibility,
+            freshness=assessment.freshness,
+            age_ms=assessment.age_ms,
             last_observed_position=last_pos,
             last_observed_frame=last_frame,
-            uncertainty=uncertainty,
-            uncertainty_reason=uncertainty_reason,
+            uncertainty=assessment.uncertainty,
+            uncertainty_reason=assessment.uncertainty_reason,
         )
 
     def get_route_belief_summary(
