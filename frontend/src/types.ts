@@ -50,6 +50,19 @@ export type SimulationEvidence = {
     verification_status: "verified" | "last_seen" | "unverified" | "unavailable";
     visibility?: "currently_visible" | "not_currently_visible" | "unknown";
     freshness: string; uncertainty_reason: string | null; supported_location?: string | null;
+    current_location?: string | null;
+    earlier_station?: string | null;
+    lost_verification_reason?: string | null;
+    lost_verification_sample?: StoredObservationSample | null;
+    current_sighting?: {
+      sample_id: string;
+      sim_time_ms: number;
+      captured_at?: string;
+      frame_of_reference?: string;
+      position: { x_cm: number; y_cm: number };
+      station_id?: string | null;
+      apparent_color?: string | null;
+    } | null;
     status?: string | null; last_positive_sighting?: StoredObservationSample | null;
     last_positive_lidar_sample?: StoredObservationSample | null;
     latest_sensor_attempt?: StoredObservationSample | null;

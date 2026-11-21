@@ -327,3 +327,151 @@ def test_route_and_station_evidence_use_the_loaded_scenario_map():
         assert "packing_station" not in session.snapshot()["graph"]["nodes"]
     finally:
         service.shutdown()
+
+
+def test_off_station_parcel_verification_bug_at_25_5_seconds():
+    """Reproduce default preset at 25.5s: off-station sample cannot verify old station."""
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        # Step to 25.5 simulated seconds (255 steps * 100ms)
+        for _ in range(255):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 25500
+
+        identity = SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        )
+        request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        evidence = service.read_simulation_evidence(key, request)
+
+        summary = evidence["summary"]
+        # Verified off-station coordinates with null station
+        assert summary["verification_status"] == "verified"
+        assert summary["supported_location"] is None
+        assert summary["current_location"] is None
+        assert summary["last_observed_position"] == {"x_cm": 372.5, "y_cm": 367.5}
+        assert summary["earlier_station"] == "inspection_station"
+
+        # SQLite fact retains earlier station in history without mutation
+        active_facts = session.agent.memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(active_facts) == 1
+        assert active_facts[0].object == "inspection_station"
+    finally:
+        service.shutdown()
+
+
+def test_full_acceptance_station_a_to_aisle_to_station_b_sqlite_periodic_sensing():
+    """Full acceptance from #48: A -> aisle -> B with periodic camera acquisition and SQLite.
+
+    Asserts:
+    1. Chat history remains empty throughout (no chat questions asked).
+    2. At Station A (5.0s): initial fact packing_station in SQLite.
+    3. In aisle (6.0s): independently retrievable aisle sample in SQLite ledger;
+       leaves the SQLite station fact chain intact (packing_station); 0 revisions.
+    4. At Station B (7.0s): B sample produces exactly 1 atomic A-to-B revision in SQLite audit.
+    """
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        memory = session.agent.memory
+
+        # Ensure empty chat history
+        assert len(session.history) == 0
+
+        # Step to 5.0 simulated seconds (50 steps * 100ms): Station A (packing_station)
+        for _ in range(50):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 5000
+
+        identity = SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        )
+        ev_a = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        )
+        assert ev_a["summary"]["verification_status"] == "verified"
+        assert ev_a["summary"]["current_location"] == "packing_station"
+
+        # Check SQLite facts at Station A
+        facts_a = memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(facts_a) == 1
+        assert facts_a[0].object == "packing_station"
+        trail_a = memory.get_audit_chain(facts_a[0].fact_id)
+        assert len(trail_a.events) == 0
+        assert len(ev_a["events"]) == 0
+
+        # Step to 6.0 simulated seconds (10 steps): Corridor/Aisle at (115, 370)
+        for _ in range(10):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 6000
+
+        ev_aisle = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        )
+        assert ev_aisle["summary"]["verification_status"] == "verified"
+        assert ev_aisle["summary"]["current_location"] is None
+        assert ev_aisle["summary"]["earlier_station"] == "packing_station"
+        assert ev_aisle["summary"]["last_observed_position"] == {"x_cm": 115.0, "y_cm": 370.0}
+
+        # Assert independently retrievable aisle sample in SQLite observation ledger
+        aisle_sighting = memory.get_last_sighting(
+            run_id=session.runtime.run_id,
+            entity_id="parcel_01",
+            capability="camera_detect",
+            at_sim_time_ms=6000,
+        )
+        assert aisle_sighting is not None
+        assert aisle_sighting.sim_time_ms == 6000
+
+        # Assert station chain in SQLite is left intact (no mutation, still packing_station)
+        facts_aisle = memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(facts_aisle) == 1
+        assert facts_aisle[0].object == "packing_station"
+        assert facts_aisle[0].fact_id == facts_a[0].fact_id
+        trail_aisle = memory.get_audit_chain(facts_aisle[0].fact_id)
+        assert len(trail_aisle.events) == 0
+        assert len(ev_aisle["events"]) == 0
+
+        # Step to 7.0 simulated seconds (10 steps): Station B (inspection_station)
+        for _ in range(10):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 7000
+
+        ev_b = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        )
+        assert ev_b["summary"]["verification_status"] == "verified"
+        assert ev_b["summary"]["current_location"] == "inspection_station"
+
+        # Assert SQLite active fact is now Station B
+        facts_b = memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(facts_b) == 1
+        assert facts_b[0].object == "inspection_station"
+
+        # Assert exactly ONE revision was produced from Station A to Station B
+        trail_b = memory.get_audit_chain(facts_b[0].fact_id)
+        assert len(trail_b.events) == 1
+        assert trail_b.events[0].input_fact_ids == [facts_a[0].fact_id, facts_b[0].fact_id]
+        assert trail_b.events[0].output_fact_ids == [facts_b[0].fact_id]
+        assert "revising previous location packing_station" in trail_b.events[0].reason
+        assert len(ev_b["events"]) == 1
+        assert ev_b["events"][0]["policy_rule"] == "camera_observation_revision"
+        assert "revising previous location packing_station" in ev_b["events"][0]["reason"]
+
+        # Verify chat history remained completely empty throughout
+        assert len(session.history) == 0
+    finally:
+        service.shutdown()

@@ -41,10 +41,7 @@ from src.contracts.simulation_api import (
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.procedural.temporal_belief_ingestion import (
-    IngestionConfig,
     IngestionResult,
-    StationZone,
-    StationZoneMap,
     TemporalBeliefIngestionService,
 )
 from src.providers import ProviderConfig, create_provider, get_provider_config
@@ -59,7 +56,11 @@ from src.sensorimotor.world_models import (
 from src.web.session_store import SessionStore
 from src.web.simulation_export import SimulationExporter, SimulationExportTarget
 from src.web.simulation_presets import warehouse_preset
-from src.web.simulation_runtime import MAX_PRESENTER_INPUTS, SimulationRuntime, scenario_route_map
+from src.web.simulation_runtime import (
+    MAX_PRESENTER_INPUTS,
+    SimulationRuntime,
+    scenario_observation_context,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -265,26 +266,10 @@ class AgentSession:
         self, scenario: ScenarioDefinition
     ) -> Callable[[ObservationSample], IngestionResult]:
         """Register identities from successful camera observations, not simulator truth."""
-        zones = StationZoneMap(
-            zones=[
-                StationZone.from_center(
-                    zone_id=entity.entity_id,
-                    location=entity.location,
-                    frame_of_reference=scenario.robot_pose.frame_of_reference,
-                    center_x_cm=entity.footprint.x_cm,
-                    center_y_cm=entity.footprint.y_cm,
-                    width_cm=entity.footprint.width_cm,
-                    height_cm=entity.footprint.height_cm,
-                )
-                for entity in scenario.entities
-                if entity.kind == "station"
-            ]
-        )
+        context = scenario_observation_context(scenario)
         ingestion = TemporalBeliefIngestionService(
             self.agent.memory,
-            zone_map=zones,
-            route_map=scenario_route_map(scenario),
-            config=IngestionConfig(freshness_ms=scenario.config.freshness_ms),
+            observation_context=context,
         )
 
         def ingest(sample: ObservationSample) -> IngestionResult:
@@ -1480,7 +1465,8 @@ class AgentService:
             session.require_simulation_identity(request.expected)
             runtime = session.require_simulation()
             scenario = runtime.scenario
-            routes = scenario_route_map(scenario)
+            context = scenario_observation_context(scenario)
+            routes = context.route_map
             route_ids = {route.route_id for route in scenario.routes}
             entity_ids = {entity.entity_id for entity in scenario.entities}
             if request.entity_id not in entity_ids | route_ids:
@@ -1488,8 +1474,7 @@ class AgentService:
             current = runtime.read().status.sim_time_ms
             service = TemporalBeliefIngestionService(
                 session.agent.memory,
-                route_map=routes,
-                config=IngestionConfig(freshness_ms=scenario.config.freshness_ms),
+                observation_context=context,
             )
             is_route = request.entity_id in route_ids
             summary = (

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from time import monotonic
 from uuid import UUID, uuid4
@@ -19,6 +20,7 @@ from src.contracts.simulation import (
     MoveEvent,
     ObservationSample,
     Point,
+    Rectangle,
     ScenarioDefinition,
     ScenarioEvent,
     SensorAvailabilityEvent,
@@ -32,7 +34,13 @@ from src.contracts.simulation_api import (
     SimulationBeliefChange,
     SimulationDisruptRequest,
 )
-from src.procedural.temporal_belief_ingestion import IngestionResult, StaticRoute, StaticRouteMap
+from src.procedural.temporal_belief_ingestion import (
+    IngestionResult,
+    StaticRoute,
+    StaticRouteMap,
+    StationZone,
+    StationZoneMap,
+)
 from src.sensorimotor.patrol_controller import PatrolCheckpoint, PatrolController
 from src.sensorimotor.simulation_engine import SimulationEngine
 from src.sensorimotor.warehouse_sensors import WarehouseSensors
@@ -55,6 +63,69 @@ def scenario_route_map(scenario: ScenarioDefinition) -> StaticRouteMap:
             )
             for route in scenario.routes
         ]
+    )
+
+
+def scenario_station_map(scenario: ScenarioDefinition) -> StationZoneMap:
+    """Project declared station geometry into the zone matching rules."""
+    return StationZoneMap(
+        zones=[
+            StationZone.from_center(
+                zone_id=entity.entity_id,
+                location=entity.location,
+                frame_of_reference=scenario.robot_pose.frame_of_reference,
+                center_x_cm=entity.footprint.x_cm,
+                center_y_cm=entity.footprint.y_cm,
+                width_cm=entity.footprint.width_cm,
+                height_cm=entity.footprint.height_cm,
+            )
+            for entity in scenario.entities
+            if entity.kind == "station"
+        ]
+    )
+
+
+def scenario_shelf_footprints(scenario: ScenarioDefinition) -> list[Rectangle]:
+    """Extract applicable opaque static shelf footprints matching the observer's location."""
+    observer_location = scenario.robot_pose.location
+    return [
+        entity.footprint
+        for entity in scenario.entities
+        if entity.opaque
+        and entity.location == observer_location
+        and (entity.kind == "shelf" or entity.kind not in ("station", "parcel"))
+    ]
+
+
+@dataclass(frozen=True)
+class ScenarioObservationContext:
+    """Run-scoped observation and assessment configuration derived from scenario definition."""
+
+    scenario_id: str
+    zone_map: StationZoneMap
+    route_map: StaticRouteMap
+    camera_range_cm: float
+    camera_fov_deg: float
+    freshness_ms: int
+    observer_robot_id: str
+    observer_location: str
+    observer_frame: str
+    shelves: list[Rectangle]
+
+
+def scenario_observation_context(scenario: ScenarioDefinition) -> ScenarioObservationContext:
+    """Build the unified observation and assessment context from scenario definition."""
+    return ScenarioObservationContext(
+        scenario_id=scenario.scenario_id,
+        zone_map=scenario_station_map(scenario),
+        route_map=scenario_route_map(scenario),
+        camera_range_cm=scenario.config.camera_range_cm,
+        camera_fov_deg=scenario.config.camera_fov_deg,
+        freshness_ms=scenario.config.freshness_ms,
+        observer_robot_id=scenario.robot_pose.robot_id,
+        observer_location=scenario.robot_pose.location,
+        observer_frame=scenario.robot_pose.frame_of_reference,
+        shelves=scenario_shelf_footprints(scenario),
     )
 
 

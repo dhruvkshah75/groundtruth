@@ -48,6 +48,12 @@ from .simulation import (
     SimulationStatus,
     StoredObservationSample,
     TemporalObservationQuery,
+    find_line_of_sight_blocker,
+    heading_vector,
+    in_camera_view,
+    is_line_of_sight_blocked,
+    point_distance_and_angle,
+    rectangle_entry,
 )
 from .simulation_api import (
     SimulationApiError,
@@ -109,7 +115,17 @@ __all__ += [
     "TemporalObservationQuery",
 ]
 
-__all__ += ["PlaybackRate", "Rectangle", "ScenarioEvent"]
+__all__ += [
+    "PlaybackRate",
+    "Rectangle",
+    "ScenarioEvent",
+    "find_line_of_sight_blocker",
+    "heading_vector",
+    "in_camera_view",
+    "is_line_of_sight_blocked",
+    "point_distance_and_angle",
+    "rectangle_entry",
+]
 
 __all__ += [
     "SimulationApiError",

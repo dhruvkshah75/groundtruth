@@ -17,25 +17,13 @@ from src.contracts import (
     SimulationSnapshot,
     SpatialContext,
 )
-from src.contracts.simulation import Point, Rectangle
-
-
-def rectangle_entry(start: Point, end: Point, shape: Rectangle) -> float | None:
-    """First segment intersection fraction, including boundary/tangent contacts."""
-    lo, hi = 0.0, 1.0
-    for origin, delta, center, half in (
-        (start.x_cm, end.x_cm - start.x_cm, shape.x_cm, shape.width_cm / 2),
-        (start.y_cm, end.y_cm - start.y_cm, shape.y_cm, shape.height_cm / 2),
-    ):
-        if delta == 0:
-            if abs(origin - center) > half:
-                return None
-        else:
-            a, b = sorted(((center - half - origin) / delta, (center + half - origin) / delta))
-            lo, hi = max(lo, a), min(hi, b)
-            if lo > hi:
-                return None
-    return lo
+from src.contracts.simulation import (
+    Point,
+    heading_vector,
+    in_camera_view,
+    is_line_of_sight_blocked,
+    rectangle_entry,
+)
 
 
 def apparent_color(intrinsic: str, cast: str) -> str:
@@ -161,9 +149,7 @@ class WarehouseSensors:
             return pose.model_dump(include={"robot_id", "x_cm", "y_cm", "direction"})
         if cap == "ambient_light":
             return {"intensity": snap.light_intensity, "color_cast": snap.color_cast}
-        forward = {"north": (0, 1), "east": (1, 0), "south": (0, -1), "west": (-1, 0)}[
-            pose.direction
-        ]
+        forward = heading_vector(pose.direction)
         if cap == "lidar_scan":
             distance = snap.config.lidar_range_cm
             end = Point(
@@ -199,21 +185,16 @@ class WarehouseSensors:
             if distance == 0:
                 # Invalid projection geometry: no arbitrary bearing/position disclosure.
                 return None
-            along = dx * forward[0] + dy * forward[1]
-            side = dx * forward[1] - dy * forward[0]
-            angle = math.degrees(math.atan2(abs(side), along))
-            if (
-                distance > snap.config.camera_range_cm + 1e-9
-                or angle > snap.config.camera_fov_deg / 2 + 1e-9
+            if not in_camera_view(
+                pose, point, pose.direction, snap.config.camera_range_cm, snap.config.camera_fov_deg
             ):
                 continue
-            if any(
-                e.entity_id != entity.entity_id
-                and e.opaque
-                and e.location == pose.location
-                and rectangle_entry(pose, point, e.footprint) is not None
+            occluders = [
+                e.footprint
                 for e in snap.entities
-            ):
+                if e.entity_id != entity.entity_id and e.opaque and e.location == pose.location
+            ]
+            if is_line_of_sight_blocked(pose, point, occluders):
                 continue
             objects.append(
                 CameraDetection(
