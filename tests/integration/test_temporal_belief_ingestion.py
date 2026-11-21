@@ -937,3 +937,48 @@ def test_zone_order_does_not_define_observer_context() -> None:
             assessment = service.assess_entity_location(run, "parcel_01", 0)
             assert assessment.verification_status == "verified"
             assert assessment.current_location == "station_b"
+
+
+@pytest.mark.parametrize("mixed_frames", [False, True])
+def test_camera_scan_with_foreign_detection_frame_cannot_affect_assessment(
+    mixed_frames: bool,
+) -> None:
+    run = uuid4()
+    pose = _assessment_pose()
+    with MemoryRepository() as repo:
+        service = TemporalBeliefIngestionService(
+            repo, repo, observer_robot_id=pose.robot_id, observer_frame=pose.frame_of_reference
+        )
+        first = _make_test_sample(
+            run_id=run, sim_time_ms=0, observer_pose=pose, detections=[_assessment_detection()]
+        )
+        service.ingest_sample(first)
+
+        other = _assessment_detection().model_copy(update={"object_id": "parcel_02"})
+        detections = [_assessment_detection(150, 390), other] if mixed_frames else [other]
+        later = _make_test_sample(
+            run_id=run,
+            sim_time_ms=500,
+            sample_sequence=2,
+            observer_pose=pose,
+            detections=detections,
+        )
+        assert isinstance(later.result, SensorObservation)
+        measurements = CameraScan(objects=detections).model_dump(mode="json")
+        measurements["objects"][-1]["frame_of_reference"] = "foreign_map"
+        # A caller can bypass initial validation with model_copy; SQLite must still reject it.
+        malformed = later.model_copy(
+            update={
+                "result": later.result.model_copy(update={"measurements": measurements}),
+            }
+        )
+
+        assert service.ingest_sample(malformed).status == "rejected"
+        assert repo.get_observation_sample(later.sample_id) is None
+        summary = service.get_entity_belief_summary(run, "parcel_01", 500)
+        assert summary.verification_status == "verified"
+        assert summary.current_location == "packing_station"
+        assert summary.last_positive_sighting is not None
+        assert summary.last_positive_sighting.sample_id == first.sample_id
+        assert summary.latest_sensor_attempt is not None
+        assert summary.latest_sensor_attempt.sample_id == first.sample_id
