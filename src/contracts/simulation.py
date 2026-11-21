@@ -605,7 +605,14 @@ class ObservationLedgerReader(Protocol):
         ...
 
     def get_latest_camera_attempt(
-        self, run_id: UUID, entity_id: str, observer_pose: Pose, at_sim_time_ms: int
+        self,
+        run_id: UUID,
+        entity_id: str,
+        observer_pose: Pose | None = None,
+        at_sim_time_ms: int | None = None,
+        robot_id: str | None = None,
+        location: str | None = None,
+        frame_of_reference: str | None = None,
     ) -> StoredObservationSample | None:
         """Latest broad or matching targeted camera attempt in this observer context."""
         ...
@@ -618,6 +625,10 @@ class ObservationLedgerReader(Protocol):
         sensor_id: str | None = None,
         start_ms: int | None = None,
         at_sim_time_ms: int | None = None,
+        observer_pose: Pose | None = None,
+        robot_id: str | None = None,
+        location: str | None = None,
+        frame_of_reference: str | None = None,
     ) -> StoredObservationSample | None:
         """Return the latest positive sighting for an entity at or before simulation time."""
         ...
@@ -631,6 +642,10 @@ class ObservationLedgerReader(Protocol):
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 100,
+        observer_pose: Pose | None = None,
+        robot_id: str | None = None,
+        location: str | None = None,
+        frame_of_reference: str | None = None,
     ) -> list[StoredObservationSample]:
         """Return chronological positive sightings for an entity within time bounds."""
         ...

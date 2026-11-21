@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from time import monotonic
 from uuid import UUID, uuid4
@@ -85,12 +86,47 @@ def scenario_station_map(scenario: ScenarioDefinition) -> StationZoneMap:
 
 
 def scenario_shelf_footprints(scenario: ScenarioDefinition) -> list[Rectangle]:
-    """Extract static shelf footprints from scenario geometry."""
+    """Extract applicable opaque static shelf footprints matching the observer's location."""
+    observer_location = scenario.robot_pose.location
     return [
         entity.footprint
         for entity in scenario.entities
-        if entity.kind == "shelf" or (entity.opaque and entity.kind not in ("station", "parcel"))
+        if entity.opaque
+        and entity.location == observer_location
+        and (entity.kind == "shelf" or entity.kind not in ("station", "parcel"))
     ]
+
+
+@dataclass(frozen=True)
+class ScenarioObservationContext:
+    """Run-scoped observation and assessment configuration derived from scenario definition."""
+
+    scenario_id: str
+    zone_map: StationZoneMap
+    route_map: StaticRouteMap
+    camera_range_cm: float
+    camera_fov_deg: float
+    freshness_ms: int
+    observer_robot_id: str
+    observer_location: str
+    observer_frame: str
+    shelves: list[Rectangle]
+
+
+def scenario_observation_context(scenario: ScenarioDefinition) -> ScenarioObservationContext:
+    """Build the unified observation and assessment context from scenario definition."""
+    return ScenarioObservationContext(
+        scenario_id=scenario.scenario_id,
+        zone_map=scenario_station_map(scenario),
+        route_map=scenario_route_map(scenario),
+        camera_range_cm=scenario.config.camera_range_cm,
+        camera_fov_deg=scenario.config.camera_fov_deg,
+        freshness_ms=scenario.config.freshness_ms,
+        observer_robot_id=scenario.robot_pose.robot_id,
+        observer_location=scenario.robot_pose.location,
+        observer_frame=scenario.robot_pose.frame_of_reference,
+        shelves=scenario_shelf_footprints(scenario),
+    )
 
 
 class SimulationRuntime:

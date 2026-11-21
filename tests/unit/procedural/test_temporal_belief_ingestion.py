@@ -35,6 +35,7 @@ from src.contracts import (
     Point,
     Pose,
     Rectangle,
+    SceneEntity,
     SensorObservation,
     SpatialContext,
     StoredFact,
@@ -214,20 +215,33 @@ class FakeObservationLedger:
         candidates.sort(key=lambda s: (s.sim_time_ms, s.sample_sequence), reverse=True)
         return candidates[0]
 
-    def get_latest_camera_attempt(self, run_id, entity_id, observer_pose, at_sim_time_ms):
+    def get_latest_camera_attempt(
+        self,
+        run_id,
+        entity_id,
+        observer_pose=None,
+        at_sim_time_ms=None,
+        robot_id=None,
+        location=None,
+        frame_of_reference=None,
+    ):
+        if observer_pose is not None:
+            robot_id = observer_pose.robot_id
+            location = observer_pose.location
+            frame_of_reference = observer_pose.frame_of_reference
         candidates = [
             s
             for s in self.samples.values()
             if s.run_id == run_id
             and s.request.capability == "camera_detect"
             and s.request.target in (None, entity_id)
-            and s.sim_time_ms <= at_sim_time_ms
+            and (at_sim_time_ms is None or s.sim_time_ms <= at_sim_time_ms)
+            and (robot_id is None or s.observer_pose.robot_id == robot_id)
+            and (location is None or s.observer_pose.location == location)
             and (
-                s.observer_pose.robot_id,
-                s.observer_pose.location,
-                s.observer_pose.frame_of_reference,
+                frame_of_reference is None
+                or s.observer_pose.frame_of_reference == frame_of_reference
             )
-            == (observer_pose.robot_id, observer_pose.location, observer_pose.frame_of_reference)
         ]
         return max(candidates, key=lambda s: (s.sim_time_ms, s.sample_sequence), default=None)
 
@@ -239,18 +253,47 @@ class FakeObservationLedger:
         sensor_id: str | None = None,
         start_ms: int | None = None,
         at_sim_time_ms: int | None = None,
+        observer_pose=None,
+        robot_id=None,
+        location=None,
+        frame_of_reference=None,
     ) -> StoredObservationSample | None:
+        if observer_pose is not None:
+            robot_id = observer_pose.robot_id
+            location = observer_pose.location
+            frame_of_reference = observer_pose.frame_of_reference
         candidates = []
         for s in self.samples.values():
             if s.run_id != run_id:
                 continue
             if capability is not None and s.request.capability != capability:
                 continue
+            if sensor_id is not None and s.sensor_id != sensor_id:
+                continue
+            if start_ms is not None and s.sim_time_ms < start_ms:
+                continue
             if at_sim_time_ms is not None and s.sim_time_ms > at_sim_time_ms:
+                continue
+            if robot_id is not None and s.observer_pose.robot_id != robot_id:
+                continue
+            if location is not None and s.observer_pose.location != location:
+                continue
+            if (
+                frame_of_reference is not None
+                and s.observer_pose.frame_of_reference != frame_of_reference
+            ):
                 continue
             if isinstance(s.result, SensorObservation) and s.request.capability == "camera_detect":
                 scan = CameraScan.model_validate(s.result.measurements)
-                if any(obj.object_id == entity_id for obj in scan.objects):
+                if any(
+                    obj.object_id == entity_id
+                    and (
+                        frame_of_reference is None
+                        or obj.frame_of_reference is None
+                        or obj.frame_of_reference == frame_of_reference
+                    )
+                    for obj in scan.objects
+                ):
                     candidates.append(s)
         if not candidates:
             return None
@@ -266,7 +309,15 @@ class FakeObservationLedger:
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 100,
+        observer_pose=None,
+        robot_id=None,
+        location=None,
+        frame_of_reference=None,
     ) -> list[StoredObservationSample]:
+        if observer_pose is not None:
+            robot_id = observer_pose.robot_id
+            location = observer_pose.location
+            frame_of_reference = observer_pose.frame_of_reference
         history = []
         for s in self.samples.values():
             if s.run_id != run_id:
@@ -275,9 +326,30 @@ class FakeObservationLedger:
                 continue
             if end_ms is not None and s.sim_time_ms > end_ms:
                 continue
+            if capability is not None and s.request.capability != capability:
+                continue
+            if sensor_id is not None and s.sensor_id != sensor_id:
+                continue
+            if robot_id is not None and s.observer_pose.robot_id != robot_id:
+                continue
+            if location is not None and s.observer_pose.location != location:
+                continue
+            if (
+                frame_of_reference is not None
+                and s.observer_pose.frame_of_reference != frame_of_reference
+            ):
+                continue
             if isinstance(s.result, SensorObservation) and s.request.capability == "camera_detect":
                 scan = CameraScan.model_validate(s.result.measurements)
-                if any(obj.object_id == entity_id for obj in scan.objects):
+                if any(
+                    obj.object_id == entity_id
+                    and (
+                        frame_of_reference is None
+                        or obj.frame_of_reference is None
+                        or obj.frame_of_reference == frame_of_reference
+                    )
+                    for obj in scan.objects
+                ):
                     history.append(s)
         history.sort(key=lambda s: (s.sim_time_ms, s.sample_sequence))
         return history[:limit]
@@ -1545,3 +1617,61 @@ def test_known_shelf_occlusion_and_outside_view_explanations() -> None:
     assert sum2.verification_status == "last_seen"
     assert sum2.lost_verification_reason is not None
     assert "outside camera field of view" in sum2.lost_verification_reason
+
+
+def test_transparent_shelf_and_other_room_shelf_do_not_occlude() -> None:
+    """Verify transparent shelves and other-room shelves are not cited as occluders."""
+    repo = FakeMemoryRepository()
+    ledger = FakeObservationLedger()
+    run_id = uuid4()
+
+    # Transparent shelf right in front of parcel
+    transparent_shelf = SceneEntity(
+        entity_id="shelf_trans",
+        kind="shelf",
+        location="warehouse",
+        footprint=Rectangle(x_cm=100.0, y_cm=150.0, width_cm=40.0, height_cm=40.0),
+        intrinsic_color="clear",
+        solid=True,
+        opaque=False,
+    )
+    # Other room shelf
+    other_room_shelf = SceneEntity(
+        entity_id="shelf_room_b",
+        kind="shelf",
+        location="room_b",
+        footprint=Rectangle(x_cm=100.0, y_cm=150.0, width_cm=40.0, height_cm=40.0),
+        intrinsic_color="gray",
+        solid=True,
+        opaque=True,
+    )
+
+    service = TemporalBeliefIngestionService(
+        repo,
+        ledger,
+        camera_range_cm=200.0,
+        camera_fov_deg=90.0,
+        shelves=[transparent_shelf, other_room_shelf],
+        observer_location="warehouse",
+    )
+
+    det1 = CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=100.0, y_cm=200.0),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
+    )
+    s1 = make_camera_sample(sim_time_ms=0, objects=[det1], run_id=run_id, sequence=0)
+    service.ingest_sample(s1)
+
+    # Robot at (100, 100) facing north takes empty broad scan at 500 ms
+    empty_scan = make_camera_sample(sim_time_ms=500, objects=[], run_id=run_id, sequence=1)
+    service.ingest_sample(empty_scan)
+
+    summary = service.get_entity_belief_summary(run_id, "parcel_01", 500)
+    assert summary.verification_status == "last_seen"
+    assert summary.lost_verification_reason is not None
+    # Transparent or foreign-room shelf must not be cited as line-of-sight occluder
+    assert "occluded by shelf" not in summary.lost_verification_reason
+    assert "not detected in broad scan" in summary.lost_verification_reason

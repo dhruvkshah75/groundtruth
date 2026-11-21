@@ -461,7 +461,18 @@ def explain_lost_visibility(
             f"Last known position of {entity_id} was outside camera field of view at {sim_time} ms."
         )
 
-    if shelves and is_line_of_sight_blocked(pose, last_position, shelves):
+    applicable_shelves: list[Rectangle] = []
+    if shelves:
+        for s in shelves:
+            if hasattr(s, "opaque") and not s.opaque:
+                continue
+            if hasattr(s, "location") and s.location != pose.location:
+                continue
+            footprint = s.footprint if hasattr(s, "footprint") else s
+            if isinstance(footprint, Rectangle):
+                applicable_shelves.append(footprint)
+
+    if applicable_shelves and is_line_of_sight_blocked(pose, last_position, applicable_shelves):
         return (
             f"Line of sight to {entity_id} at last known position was occluded by shelf at "
             f"{sim_time} ms."
@@ -524,6 +535,36 @@ def assess_location(
 
     # 2. No positive sighting in this run
     if last_sighting_sample is None or sighting is None:
+        if latest_attempt_sample is not None and isinstance(
+            latest_attempt_sample.result, ObservationUnavailable
+        ):
+            if latest_attempt_sample.result.reason != "target_not_visible":
+                reason = (
+                    f"Sensor {latest_attempt_sample.sensor_id} unavailable at "
+                    f"{latest_attempt_sample.sim_time_ms} ms "
+                    f"(sample {latest_attempt_sample.sample_id}): "
+                    f"{latest_attempt_sample.result.reason}."
+                )
+                return LocationAssessment(
+                    entity_id=entity_id,
+                    run_id=run_id,
+                    as_of_sim_time_ms=as_of_sim_time_ms,
+                    verification_status="unavailable",
+                    current_location=None,
+                    current_sighting=None,
+                    last_sighting=None,
+                    lost_verification_reason=reason,
+                    lost_verification_sample=latest_attempt_sample,
+                    earlier_station=active_fact_station,
+                    visibility="unknown",
+                    freshness="unverified",
+                    age_ms=None,
+                    last_observed_position=None,
+                    last_observed_frame=None,
+                    uncertainty=True,
+                    uncertainty_reason=reason,
+                )
+
         if active_fact_station is not None:
             reason = (
                 f"Entity {entity_id} has historical belief but no positive sighting in this run."
@@ -619,7 +660,12 @@ def assess_location(
         ):
             verification_status = "unavailable"
             visibility = "unknown"
-            lost_reason = f"Camera unavailable at {latest_attempt_sample.sim_time_ms} ms."
+            lost_reason = (
+                f"Sensor {latest_attempt_sample.sensor_id} unavailable at "
+                f"{latest_attempt_sample.sim_time_ms} ms "
+                f"(sample {latest_attempt_sample.sample_id}): "
+                f"{latest_attempt_sample.result.reason}."
+            )
             lost_sample = latest_attempt_sample
         elif (
             isinstance(latest_attempt_sample.result, ObservationUnavailable)
@@ -717,6 +763,32 @@ def assess_location(
 # ---------------------------------------------------------------------------
 
 
+def is_sample_compatible(
+    sample: StoredObservationSample | ObservationSample,
+    *,
+    robot_id: str | None = None,
+    location: str | None = None,
+    frame_of_reference: str | None = None,
+) -> bool:
+    """Check whether an observation sample matches configured observer context and frame."""
+    pose = sample.observer_pose
+    if robot_id is not None and pose.robot_id != robot_id:
+        return False
+    if location is not None and pose.location != location:
+        return False
+    if frame_of_reference is not None and pose.frame_of_reference != frame_of_reference:
+        return False
+    if frame_of_reference is not None and isinstance(sample.result, SensorObservation):
+        try:
+            scan = CameraScan.model_validate(sample.result.measurements)
+            for det in scan.objects:
+                if det.frame_of_reference and det.frame_of_reference != frame_of_reference:
+                    return False
+        except Exception:
+            pass
+    return True
+
+
 class TemporalBeliefIngestionService:
     """Tier 2 temporal observation ingestion and evaluation service.
 
@@ -734,6 +806,10 @@ class TemporalBeliefIngestionService:
         camera_range_cm: float | None = None,
         camera_fov_deg: float | None = None,
         shelves: Sequence[Rectangle] | None = None,
+        observer_robot_id: str | None = None,
+        observer_location: str | None = None,
+        observer_frame: str | None = None,
+        observation_context: Any | None = None,
     ) -> None:
         self._repo = fact_repository
         # If observation_ledger is not provided separately, fact_repository might implement it
@@ -743,6 +819,26 @@ class TemporalBeliefIngestionService:
             self._ledger = fact_repository
         else:
             self._ledger = fact_repository  # type: ignore[assignment]
+
+        if observation_context is not None:
+            if zone_map is None and hasattr(observation_context, "zone_map"):
+                zone_map = observation_context.zone_map
+            if route_map is None and hasattr(observation_context, "route_map"):
+                route_map = observation_context.route_map
+            if camera_range_cm is None and hasattr(observation_context, "camera_range_cm"):
+                camera_range_cm = observation_context.camera_range_cm
+            if camera_fov_deg is None and hasattr(observation_context, "camera_fov_deg"):
+                camera_fov_deg = observation_context.camera_fov_deg
+            if shelves is None and hasattr(observation_context, "shelves"):
+                shelves = observation_context.shelves
+            if observer_robot_id is None and hasattr(observation_context, "observer_robot_id"):
+                observer_robot_id = observation_context.observer_robot_id
+            if observer_location is None and hasattr(observation_context, "observer_location"):
+                observer_location = observation_context.observer_location
+            if observer_frame is None and hasattr(observation_context, "observer_frame"):
+                observer_frame = observation_context.observer_frame
+            if config is None and hasattr(observation_context, "freshness_ms"):
+                config = IngestionConfig(freshness_ms=observation_context.freshness_ms)
 
         self._zone_map = zone_map or StationZoneMap.default_warehouse_zones()
         self._route_map = route_map or StaticRouteMap.default_warehouse_routes()
@@ -754,6 +850,13 @@ class TemporalBeliefIngestionService:
             camera_fov_deg if camera_fov_deg is not None else self._config.camera_fov_deg
         )
         self._shelves = list(shelves) if shelves is not None else []
+        self._observer_robot_id = observer_robot_id
+        self._observer_location = observer_location
+        self._observer_frame = observer_frame
+        if self._observer_location is None and self._zone_map.zones:
+            self._observer_location = self._zone_map.zones[0].location
+        if self._observer_frame is None and self._zone_map.zones:
+            self._observer_frame = self._zone_map.zones[0].frame_of_reference
         self._lock = fact_repository.observation_ingestion_lock()
         self._latest_entity_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
         self._latest_route_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
@@ -1497,12 +1600,13 @@ class TemporalBeliefIngestionService:
         with self._lock:
             return self._locked_assess_entity_location(run_id, entity_id, current_sim_time_ms)
 
-    def _locked_assess_entity_location(
+    def _locked_resolve_sighting_and_attempt(
         self,
         run_id: UUID,
         entity_id: str,
         current_sim_time_ms: int,
-    ) -> LocationAssessment:
+    ) -> tuple[StoredObservationSample | None, StoredObservationSample | None, Any]:
+        """Resolve compatible positive sighting and applicable sensor attempt for entity."""
         active_facts = self._repo.query_facts(
             FactQuery(
                 subject=entity_id,
@@ -1524,39 +1628,133 @@ class TemporalBeliefIngestionService:
         last_sighting: StoredObservationSample | None = None
         latest_attempt: StoredObservationSample | None = None
 
-        if hasattr(self._ledger, "get_last_sighting") and hasattr(
-            self._ledger, "get_latest_sample"
-        ):
-            last_sighting = self._ledger.get_last_sighting(
-                run_id=run_id,
-                entity_id=entity_id,
-                capability="camera_detect",
-                at_sim_time_ms=current_sim_time_ms,
-            )
-            if last_sighting is None:
-                future_sighting = self._ledger.get_last_sighting(
+        if hasattr(self._ledger, "get_last_sighting"):
+            try:
+                last_sighting = self._ledger.get_last_sighting(
                     run_id=run_id,
                     entity_id=entity_id,
                     capability="camera_detect",
-                    at_sim_time_ms=None,
+                    at_sim_time_ms=current_sim_time_ms,
+                    robot_id=self._observer_robot_id,
+                    location=self._observer_location,
+                    frame_of_reference=self._observer_frame,
                 )
+            except TypeError:
+                last_sighting = self._ledger.get_last_sighting(
+                    run_id=run_id,
+                    entity_id=entity_id,
+                    capability="camera_detect",
+                    at_sim_time_ms=current_sim_time_ms,
+                )
+
+            # Ensure compatible sighting
+            if last_sighting is not None and not is_sample_compatible(
+                last_sighting,
+                robot_id=self._observer_robot_id,
+                location=self._observer_location,
+                frame_of_reference=self._observer_frame,
+            ):
+                last_sighting = None
+                if hasattr(self._ledger, "get_entity_sighting_history"):
+                    try:
+                        history = self._ledger.get_entity_sighting_history(
+                            run_id=run_id,
+                            entity_id=entity_id,
+                            capability="camera_detect",
+                            end_ms=current_sim_time_ms,
+                            robot_id=self._observer_robot_id,
+                            location=self._observer_location,
+                            frame_of_reference=self._observer_frame,
+                        )
+                    except TypeError:
+                        history = self._ledger.get_entity_sighting_history(
+                            run_id=run_id,
+                            entity_id=entity_id,
+                            capability="camera_detect",
+                            end_ms=current_sim_time_ms,
+                        )
+                    for cand in reversed(history):
+                        if is_sample_compatible(
+                            cand,
+                            robot_id=self._observer_robot_id,
+                            location=self._observer_location,
+                            frame_of_reference=self._observer_frame,
+                        ):
+                            last_sighting = cand
+                            break
+
+            if last_sighting is None:
+                try:
+                    future_sighting = self._ledger.get_last_sighting(
+                        run_id=run_id,
+                        entity_id=entity_id,
+                        capability="camera_detect",
+                        at_sim_time_ms=None,
+                        robot_id=self._observer_robot_id,
+                        location=self._observer_location,
+                        frame_of_reference=self._observer_frame,
+                    )
+                except TypeError:
+                    future_sighting = self._ledger.get_last_sighting(
+                        run_id=run_id,
+                        entity_id=entity_id,
+                        capability="camera_detect",
+                        at_sim_time_ms=None,
+                    )
                 if (
                     future_sighting is not None
                     and future_sighting.sim_time_ms > current_sim_time_ms
+                    and is_sample_compatible(
+                        future_sighting,
+                        robot_id=self._observer_robot_id,
+                        location=self._observer_location,
+                        frame_of_reference=self._observer_frame,
+                    )
                 ):
                     last_sighting = future_sighting
 
-        if last_sighting is not None and hasattr(self._ledger, "get_latest_camera_attempt"):
-            latest_attempt = self._ledger.get_latest_camera_attempt(
-                run_id, entity_id, last_sighting.observer_pose, current_sim_time_ms
-            )
-        elif hasattr(self._ledger, "get_latest_sample"):
-            latest_attempt = self._ledger.get_latest_sample(
+        obs_pose = last_sighting.observer_pose if last_sighting is not None else None
+        if hasattr(self._ledger, "get_latest_camera_attempt"):
+            try:
+                latest_attempt = self._ledger.get_latest_camera_attempt(
+                    run_id=run_id,
+                    entity_id=entity_id,
+                    observer_pose=obs_pose,
+                    at_sim_time_ms=current_sim_time_ms,
+                    robot_id=self._observer_robot_id,
+                    location=self._observer_location,
+                    frame_of_reference=self._observer_frame,
+                )
+            except TypeError:
+                if obs_pose is not None:
+                    latest_attempt = self._ledger.get_latest_camera_attempt(
+                        run_id, entity_id, obs_pose, current_sim_time_ms
+                    )
+        if latest_attempt is None and hasattr(self._ledger, "get_latest_sample"):
+            cand = self._ledger.get_latest_sample(
                 run_id=run_id,
                 capability="camera_detect",
                 at_sim_time_ms=current_sim_time_ms,
             )
+            if cand is not None and is_sample_compatible(
+                cand,
+                robot_id=self._observer_robot_id,
+                location=self._observer_location,
+                frame_of_reference=self._observer_frame,
+            ):
+                latest_attempt = cand
 
+        return last_sighting, latest_attempt, active_fact
+
+    def _locked_assess_entity_location(
+        self,
+        run_id: UUID,
+        entity_id: str,
+        current_sim_time_ms: int,
+    ) -> LocationAssessment:
+        last_sighting, latest_attempt, active_fact = self._locked_resolve_sighting_and_attempt(
+            run_id, entity_id, current_sim_time_ms
+        )
         return assess_location(
             entity_id=entity_id,
             run_id=run_id,
@@ -1577,60 +1775,22 @@ class TemporalBeliefIngestionService:
         entity_id: str,
         current_sim_time_ms: int,
     ) -> EntityBeliefSummary:
-        assessment = self._locked_assess_entity_location(run_id, entity_id, current_sim_time_ms)
-
-        active_facts = self._repo.query_facts(
-            FactQuery(
-                subject=entity_id,
-                predicate="located_at",
-                active_only=True,
-                context=SpatialContext(extra_context={"run_id": str(run_id)}),
-            )
+        last_sighting, latest_attempt, active_fact = self._locked_resolve_sighting_and_attempt(
+            run_id, entity_id, current_sim_time_ms
         )
-        active_facts = [
-            f
-            for f in active_facts
-            if (
-                f.context.extra_context.get("run_id") == str(run_id)
-                or f.evidence.get("run_id") == str(run_id)
-            )
-        ]
-        active_fact = active_facts[0] if active_facts else None
-
-        last_sighting: StoredObservationSample | None = None
-        latest_attempt: StoredObservationSample | None = None
-        if hasattr(self._ledger, "get_last_sighting") and hasattr(
-            self._ledger, "get_latest_sample"
-        ):
-            last_sighting = self._ledger.get_last_sighting(
-                run_id=run_id,
-                entity_id=entity_id,
-                capability="camera_detect",
-                at_sim_time_ms=current_sim_time_ms,
-            )
-            if last_sighting is None:
-                future_sighting = self._ledger.get_last_sighting(
-                    run_id=run_id,
-                    entity_id=entity_id,
-                    capability="camera_detect",
-                    at_sim_time_ms=None,
-                )
-                if (
-                    future_sighting is not None
-                    and future_sighting.sim_time_ms > current_sim_time_ms
-                ):
-                    last_sighting = future_sighting
-
-        if last_sighting is not None and hasattr(self._ledger, "get_latest_camera_attempt"):
-            latest_attempt = self._ledger.get_latest_camera_attempt(
-                run_id, entity_id, last_sighting.observer_pose, current_sim_time_ms
-            )
-        elif hasattr(self._ledger, "get_latest_sample"):
-            latest_attempt = self._ledger.get_latest_sample(
-                run_id=run_id,
-                capability="camera_detect",
-                at_sim_time_ms=current_sim_time_ms,
-            )
+        assessment = assess_location(
+            entity_id=entity_id,
+            run_id=run_id,
+            as_of_sim_time_ms=current_sim_time_ms,
+            last_sighting_sample=last_sighting,
+            latest_attempt_sample=latest_attempt,
+            zone_map=self._zone_map,
+            freshness_ms=self._config.freshness_ms,
+            active_fact_station=active_fact.object if active_fact else None,
+            camera_range_cm=self._camera_range_cm,
+            camera_fov_deg=self._camera_fov_deg,
+            shelves=self._shelves,
+        )
 
         supported_location: str | None = None
         if assessment.verification_status == "verified":

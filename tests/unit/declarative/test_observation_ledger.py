@@ -970,3 +970,89 @@ def test_sighting_modes_with_source_and_capability_filters() -> None:
     )
     assert len(dispatch_hist) == 1
     assert dispatch_hist[0].sample_id == s_rear.sample_id
+
+
+def test_positive_sighting_observer_context_compatibility_filtering() -> None:
+    """Verify get_last_sighting and get_entity_sighting_history filter by observer context."""
+    repo = MemoryRepository()
+    run_id = uuid4()
+    det_map1 = make_detection("box_target", x_cm=100.0, y_cm=100.0)
+    det_map2 = CameraDetection(
+        object_id="box_target",
+        apparent_color="cardboard_brown",
+        position=Point(x_cm=500.0, y_cm=500.0),
+        frame_of_reference="another_map",
+        bounding_box=BoundingBox(width_cm=40.0, height_cm=30.0),
+    )
+
+    pose1 = make_pose(robot_id="robot_1", location="warehouse")
+    pose2 = Pose(
+        robot_id="robot_2",
+        location="room_b",
+        frame_of_reference="another_map",
+        direction="north",
+        x_cm=500.0,
+        y_cm=500.0,
+    )
+
+    # Sample 1 at t=1000 from robot_1 in warehouse_map
+    s1 = make_sample(
+        run_id=run_id,
+        sim_time_ms=1000,
+        sample_sequence=1,
+        observer_pose=pose1,
+        detections=[det_map1],
+    )
+    # Sample 2 at t=2000 from robot_2 in another_map (foreign observer, room, frame)
+    s2 = make_sample(
+        run_id=run_id,
+        sim_time_ms=2000,
+        sample_sequence=2,
+        observer_pose=pose2,
+        detections=[det_map2],
+    )
+    repo.record_observation_sample(s1)
+    repo.record_observation_sample(s2)
+
+    # Scoped to robot_1 / warehouse / warehouse_map selects s1 despite s2 being newer
+    last_compatible = repo.get_last_sighting(
+        run_id=run_id,
+        entity_id="box_target",
+        robot_id="robot_1",
+        location="warehouse",
+        frame_of_reference="warehouse_map",
+    )
+    assert last_compatible is not None
+    assert last_compatible.sample_id == s1.sample_id
+    assert last_compatible.sim_time_ms == 1000
+
+    # Scoped via observer_pose object
+    last_pose = repo.get_last_sighting(
+        run_id=run_id,
+        entity_id="box_target",
+        observer_pose=pose1,
+    )
+    assert last_pose is not None
+    assert last_pose.sample_id == s1.sample_id
+
+    # Scoped to robot_2 / another_map selects s2
+    last_foreign = repo.get_last_sighting(
+        run_id=run_id,
+        entity_id="box_target",
+        robot_id="robot_2",
+        location="room_b",
+        frame_of_reference="another_map",
+    )
+    assert last_foreign is not None
+    assert last_foreign.sample_id == s2.sample_id
+
+    # History scoped to robot_1 contains only s1
+    history_compat = repo.get_entity_sighting_history(
+        run_id=run_id,
+        entity_id="box_target",
+        robot_id="robot_1",
+        location="warehouse",
+        frame_of_reference="warehouse_map",
+    )
+    assert len(history_compat) == 1
+    assert history_compat[0].sample_id == s1.sample_id
