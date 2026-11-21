@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "recording_id": "rec_robotics_warehouse_001",
+  "robot_id": "robot_01",
+  "epoch_utc": "2026-01-01T00:00:00Z",
+  "records": [
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0001",
+      "sequence": 0,
+      "robot_id": "robot_01",
+      "sensor_id": "camera_front_rgb",
+      "capability": "camera_detect",
+      "captured_time_rel_ms": 0,
+      "source_frame": "robot_frame",
+      "robot_pose": {
+        "x_cm": 80.0,
+        "y_cm": 200.0,
+        "robot_id": "robot_01",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 1,
+      "detections": [
+        {
+          "object_id": "parcel_01",
+          "apparent_color": "red",
+          "position_x_cm": 0.0,
+          "position_y_cm": 150.0,
+          "bounding_box_width_cm": 40.0,
+          "bounding_box_height_cm": 40.0,
+          "confidence": 0.98
+        }
+      ],
+      "confidence": 0.98,
+      "is_unavailable": false
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0002",
+      "sequence": 1,
+      "robot_id": "robot_01",
+      "sensor_id": "lidar_front_2d",
+      "capability": "lidar_scan",
+      "captured_time_rel_ms": 5000,
+      "source_frame": "robot_frame",
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 250.0,
+        "robot_id": "robot_01",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 1,
+      "lidar_measurement": {
+        "detected": false,
+        "nearest_distance_cm": null,
+        "direction": "front",
+        "status": "clear"
+      },
+      "confidence": 1.0,
+      "is_unavailable": false
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0003",
+      "sequence": 2,
+      "robot_id": "robot_01",
+      "sensor_id": "camera_front_rgb",
+      "capability": "camera_detect",
+      "captured_time_rel_ms": 7000,
+      "source_frame": "robot_frame",
+      "robot_pose": {
+        "x_cm": 150.0,
+        "y_cm": 300.0,
+        "robot_id": "robot_01",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 2,
+      "detections": [
+        {
+          "object_id": "parcel_01",
+          "apparent_color": "red",
+          "position_x_cm": 0.0,
+          "position_y_cm": 90.0,
+          "bounding_box_width_cm": 40.0,
+          "bounding_box_height_cm": 40.0,
+          "confidence": 0.99
+        }
+      ],
+      "confidence": 0.99,
+      "is_unavailable": false
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0004",
+      "sequence": 3,
+      "robot_id": "robot_01",
+      "sensor_id": "lidar_front_2d",
+      "capability": "lidar_scan",
+      "captured_time_rel_ms": 10000,
+      "source_frame": "robot_frame",
+      "robot_pose": {
+        "x_cm": 120.0,
+        "y_cm": 450.0,
+        "robot_id": "robot_01",
+        "direction": "east",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 3,
+      "lidar_measurement": {
+        "detected": true,
+        "nearest_distance_cm": 75.0,
+        "direction": "front",
+        "status": "blocked"
+      },
+      "confidence": 1.0,
+      "is_unavailable": false
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0005",
+      "sequence": 4,
+      "robot_id": "robot_01",
+      "sensor_id": "ambient_lux_sensor",
+      "capability": "ambient_light",
+      "captured_time_rel_ms": 14000,
+      "source_frame": "warehouse_map",
+      "robot_pose": {
+        "x_cm": 120.0,
+        "y_cm": 450.0,
+        "robot_id": "robot_01",
+        "direction": "east",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 4,
+      "light_measurement": {
+        "intensity": 1.0,
+        "color_cast": "yellow"
+      },
+      "confidence": 1.0,
+      "is_unavailable": false
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0006",
+      "sequence": 5,
+      "robot_id": "robot_01",
+      "sensor_id": "robot_wheel_odometry",
+      "capability": "robot_pose",
+      "captured_time_rel_ms": 16000,
+      "source_frame": "warehouse_map",
+      "robot_pose": {
+        "x_cm": 150.0,
+        "y_cm": 450.0,
+        "robot_id": "robot_01",
+        "direction": "east",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 4,
+      "confidence": 1.0,
+      "is_unavailable": false
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0007",
+      "sequence": 6,
+      "robot_id": "robot_01",
+      "sensor_id": "camera_front_rgb",
+      "capability": "camera_detect",
+      "captured_time_rel_ms": 20000,
+      "source_frame": "warehouse_map",
+      "robot_pose": {
+        "x_cm": 150.0,
+        "y_cm": 450.0,
+        "robot_id": "robot_01",
+        "direction": "east",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 5,
+      "detections": [],
+      "confidence": 1.0,
+      "is_unavailable": false
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0008",
+      "sequence": 7,
+      "robot_id": "robot_01",
+      "sensor_id": "lidar_front_2d",
+      "capability": "lidar_scan",
+      "captured_time_rel_ms": 22000,
+      "source_frame": "robot_frame",
+      "robot_pose": {
+        "x_cm": 150.0,
+        "y_cm": 450.0,
+        "robot_id": "robot_01",
+        "direction": "east",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 5,
+      "confidence": 0.0,
+      "is_unavailable": true,
+      "unavailable_reason": "sensor_unavailable"
+    },
+    {
+      "schema_version": 1,
+      "recording_id": "rec_robotics_warehouse_001",
+      "message_id": "msg_0009",
+      "sequence": 8,
+      "robot_id": "robot_01",
+      "sensor_id": "lidar_front_2d",
+      "capability": "lidar_scan",
+      "captured_time_rel_ms": 25000,
+      "source_frame": "robot_frame",
+      "robot_pose": {
+        "x_cm": 150.0,
+        "y_cm": 450.0,
+        "robot_id": "robot_01",
+        "direction": "east",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "world_version": 6,
+      "lidar_measurement": {
+        "detected": false,
+        "nearest_distance_cm": null,
+        "direction": "front",
+        "status": "clear"
+      },
+      "confidence": 1.0,
+      "is_unavailable": false
+    }
+  ],
+  "invalid_records": [
+    {
+      "description": "unknown source frame",
+      "record": {
+        "schema_version": 1,
+        "recording_id": "rec_robotics_warehouse_001",
+        "message_id": "msg_inv_001",
+        "sequence": 99,
+        "robot_id": "robot_01",
+        "sensor_id": "camera_front_rgb",
+        "capability": "camera_detect",
+        "captured_time_rel_ms": 1000,
+        "source_frame": "uncalibrated_sensor_frame_xyz",
+        "robot_pose": {
+          "x_cm": 80.0,
+          "y_cm": 200.0,
+          "robot_id": "robot_01",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "detections": [
+          {
+            "object_id": "parcel_01",
+            "apparent_color": "red",
+            "position_x_cm": 10.0,
+            "position_y_cm": 20.0
+          }
+        ]
+      }
+    },
+    {
+      "description": "negative relative time",
+      "record": {
+        "schema_version": 1,
+        "recording_id": "rec_robotics_warehouse_001",
+        "message_id": "msg_inv_002",
+        "sequence": 100,
+        "robot_id": "robot_01",
+        "sensor_id": "lidar_front_2d",
+        "capability": "lidar_scan",
+        "captured_time_rel_ms": -500,
+        "source_frame": "warehouse_map"
+      }
+    },
+    {
+      "description": "capture timestamp prior to epoch",
+      "record": {
+        "schema_version": 1,
+        "recording_id": "rec_robotics_warehouse_001",
+        "message_id": "msg_inv_003",
+        "sequence": 101,
+        "robot_id": "robot_01",
+        "sensor_id": "ambient_lux_sensor",
+        "capability": "ambient_light",
+        "captured_timestamp_utc": "2025-12-31T23:59:59Z",
+        "source_frame": "warehouse_map"
+      }
+    }
+  ]
+}
