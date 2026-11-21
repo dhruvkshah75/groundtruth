@@ -795,3 +795,145 @@ def test_first_acquisition_outage_yields_unavailable_status_with_sample_id_and_t
         )
         assert summary_empty.verification_status == "unverified"
         assert summary_empty.lost_verification_sample is None
+
+
+def _assessment_pose() -> Pose:
+    return Pose(
+        robot_id="robot_1",
+        location="warehouse",
+        frame_of_reference="warehouse_map",
+        direction="north",
+        x_cm=100,
+        y_cm=100,
+    )
+
+
+def _assessment_detection(x_cm: float = 80, y_cm: float = 350) -> CameraDetection:
+    return CameraDetection(
+        object_id="parcel_01",
+        apparent_color="red",
+        position=Point(x_cm=x_cm, y_cm=y_cm),
+        frame_of_reference="warehouse_map",
+        bounding_box=BoundingBox(width_cm=12, height_cm=12),
+    )
+
+
+def test_foreign_observer_cannot_revise_or_hold_back_station_facts() -> None:
+    run = uuid4()
+    pose = _assessment_pose()
+    with MemoryRepository() as repo:
+        service = TemporalBeliefIngestionService(repo, repo, observer_robot_id=pose.robot_id)
+        first = _make_test_sample(
+            run_id=run, sim_time_ms=0, observer_pose=pose, detections=[_assessment_detection()]
+        )
+        foreign = _make_test_sample(
+            run_id=run,
+            sim_time_ms=1000,
+            sample_sequence=3,
+            observer_pose=pose.model_copy(update={"robot_id": "robot_2"}),
+            detections=[_assessment_detection(150, 390)],
+        )
+        assert service.ingest_sample(first).status == "applied"
+        assert not service.ingest_sample(foreign).revisions_created
+        assert repo.get_observation_sample(foreign.sample_id) is not None
+        summary = service.get_entity_belief_summary(run, "parcel_01", 1000)
+        assert summary.current_location == "packing_station"
+        assert summary.earlier_station is None
+        assert repo.query_facts(FactQuery(subject="parcel_01"))[0].object == "packing_station"
+
+        compatible = _make_test_sample(
+            run_id=run,
+            sim_time_ms=500,
+            sample_sequence=2,
+            observer_pose=pose,
+            detections=[_assessment_detection(150, 390)],
+        )
+        result = service.ingest_sample(compatible)
+        assert len(result.revisions_created) == 1
+        assert result.facts_created[0].evidence["sample_id"] == str(compatible.sample_id)
+
+
+def test_first_outage_is_scoped_to_requested_parcel() -> None:
+    run = uuid4()
+    pose = _assessment_pose()
+    with MemoryRepository() as repo:
+        service = TemporalBeliefIngestionService(repo, repo, observer_robot_id=pose.robot_id)
+        outage = _make_test_sample(
+            run_id=run,
+            sim_time_ms=500,
+            observer_pose=pose,
+            unavailable_reason="sensor_unavailable",
+            target="parcel_02",
+        )
+        service.ingest_sample(outage)
+        unrelated = service.get_entity_belief_summary(run, "parcel_01", 500)
+        assert unrelated.verification_status == "unverified"
+        assert unrelated.latest_sensor_attempt is None
+        targeted = service.assess_entity_location(run, "parcel_02", 500)
+        assert targeted.verification_status == "unavailable"
+        assert targeted.lost_verification_sample is not None
+        assert targeted.lost_verification_sample.sample_id == outage.sample_id
+
+
+def test_as_of_assessment_retains_outage_before_first_sighting() -> None:
+    run = uuid4()
+    pose = _assessment_pose()
+    with MemoryRepository() as repo:
+        service = TemporalBeliefIngestionService(repo, repo, observer_robot_id=pose.robot_id)
+        outage = _make_test_sample(
+            run_id=run,
+            sim_time_ms=500,
+            observer_pose=pose,
+            unavailable_reason="sensor_unavailable",
+        )
+        sighting = _make_test_sample(
+            run_id=run,
+            sim_time_ms=1000,
+            sample_sequence=2,
+            observer_pose=pose,
+            detections=[_assessment_detection()],
+        )
+        service.ingest_sample(outage)
+        service.ingest_sample(sighting)
+        earlier = service.assess_entity_location(run, "parcel_01", 500)
+        assert earlier.verification_status == "unavailable"
+        assert earlier.last_sighting is None
+        assert earlier.earlier_station is None
+        assert earlier.lost_verification_sample is not None
+        assert earlier.lost_verification_sample.sample_id == outage.sample_id
+        summary = service.get_entity_belief_summary(run, "parcel_01", 500)
+        assert summary.last_positive_sighting is None
+        assert summary.last_observed_position is None
+        assert summary.active_fact_id is None
+        current = service.assess_entity_location(run, "parcel_01", 1000)
+        assert current.verification_status == "verified"
+        assert current.current_sighting is not None
+        assert current.current_sighting.sample_id == sighting.sample_id
+
+
+def test_zone_order_does_not_define_observer_context() -> None:
+    from src.procedural.temporal_belief_ingestion import StationZone, StationZoneMap
+
+    run = uuid4()
+    pose = _assessment_pose()
+    zones = [
+        StationZone.from_center("station_a", "other_room", "other_map", 80, 350, 40, 40),
+        StationZone.from_center(
+            "station_b", pose.location, pose.frame_of_reference, 80, 350, 40, 40
+        ),
+    ]
+    with MemoryRepository() as repo:
+        sighting = _make_test_sample(
+            run_id=run,
+            sim_time_ms=0,
+            observer_pose=pose,
+            detections=[_assessment_detection()],
+        )
+        repo.record_observation_sample(sighting)
+        for order in (zones, zones[::-1]):
+            service = TemporalBeliefIngestionService(
+                repo, repo, zone_map=StationZoneMap(zones=order)
+            )
+            assessment = service.assess_entity_location(run, "parcel_01", 0)
+            assert assessment.verification_status == "verified"
+            assert assessment.current_location == "station_b"

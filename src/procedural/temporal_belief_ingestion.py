@@ -500,6 +500,11 @@ def assess_location(
     shelves: Sequence[Rectangle] | None = None,
 ) -> LocationAssessment:
     """Deterministic location assessment from sensor evidence and configured geometry."""
+    if last_sighting_sample is not None and last_sighting_sample.sim_time_ms > as_of_sim_time_ms:
+        last_sighting_sample = None
+    if latest_attempt_sample is not None and latest_attempt_sample.sim_time_ms > as_of_sim_time_ms:
+        latest_attempt_sample = None
+
     # 1. Parse sighting if available
     sighting: LocationSighting | None = None
     pos: Point | None = None
@@ -609,32 +614,8 @@ def assess_location(
             uncertainty_reason=reason,
         )
 
-    # 3. Check future-dated simulation time
-    diff_ms = as_of_sim_time_ms - last_sighting_sample.sim_time_ms
-    if diff_ms < 0:
-        reason = "Query simulation time is earlier than the sighting capture time."
-        return LocationAssessment(
-            entity_id=entity_id,
-            run_id=run_id,
-            as_of_sim_time_ms=as_of_sim_time_ms,
-            verification_status="unverified",
-            current_location=None,
-            current_sighting=None,
-            last_sighting=sighting,
-            lost_verification_reason=reason,
-            lost_verification_sample=None,
-            earlier_station=active_fact_station,
-            visibility="unknown",
-            freshness="future_dated",
-            age_ms=0,
-            last_observed_position=pos,
-            last_observed_frame=frame,
-            uncertainty=True,
-            uncertainty_reason=reason,
-        )
-
-    # 4. Epistemic Freshness and Age
-    age_ms = diff_ms
+    # 3. Epistemic freshness and age
+    age_ms = as_of_sim_time_ms - last_sighting_sample.sim_time_ms
     is_fresh = age_ms <= freshness_ms
     freshness: Literal["fresh", "stale", "future_dated", "incompatible", "unverified"] = (
         "fresh" if is_fresh else "stale"
@@ -704,7 +685,7 @@ def assess_location(
             visibility = "not_currently_visible"
             lost_reason = f"Sighting is stale (age: {age_ms} ms > {freshness_ms} ms)."
 
-    # 5. Station / location resolution
+    # 4. Station / location resolution
     current_location: str | None = None
     current_sighting: LocationSighting | None = None
     earlier_station: str | None = None
@@ -850,13 +831,11 @@ class TemporalBeliefIngestionService:
             camera_fov_deg if camera_fov_deg is not None else self._config.camera_fov_deg
         )
         self._shelves = list(shelves) if shelves is not None else []
-        self._observer_robot_id = observer_robot_id
-        self._observer_location = observer_location
-        self._observer_frame = observer_frame
-        if self._observer_location is None and self._zone_map.zones:
-            self._observer_location = self._zone_map.zones[0].location
-        if self._observer_frame is None and self._zone_map.zones:
-            self._observer_frame = self._zone_map.zones[0].frame_of_reference
+        self._observer_context = {
+            "robot_id": observer_robot_id,
+            "location": observer_location,
+            "frame_of_reference": observer_frame,
+        }
         self._lock = fact_repository.observation_ingestion_lock()
         self._latest_entity_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
         self._latest_route_sighting: dict[tuple[UUID, str], tuple[int, int]] = {}
@@ -908,6 +887,20 @@ class TemporalBeliefIngestionService:
                 status="rejected",
                 uncertainty=True,
                 uncertainty_reason=f"Failed to persist observation sample: {exc}",
+            )
+
+        if sample.request.capability == "camera_detect" and not is_sample_compatible(
+            sample, **self._observer_context
+        ):
+            return IngestionResult(
+                sample_id=sample.sample_id,
+                run_id=sample.run_id,
+                sim_time_ms=sample.sim_time_ms,
+                capability=sample.request.capability,
+                status="retained_as_historical",
+                stored_sample=stored_sample,
+                uncertainty=True,
+                uncertainty_reason="Camera sample is outside the configured observer context.",
             )
 
         # 2. Handle Sensor Failure
@@ -1060,6 +1053,7 @@ class TemporalBeliefIngestionService:
                     active_only=True,
                     context=SpatialContext(
                         location=pose.location,
+                        observer=self._observer_context["robot_id"],
                         frame_of_reference=det.frame_of_reference,
                         extra_context={"run_id": str(sample.run_id)},
                     ),
@@ -1084,6 +1078,7 @@ class TemporalBeliefIngestionService:
                     run_id=sample.run_id,
                     entity_id=det.object_id,
                     capability="camera_detect",
+                    **self._observer_context,
                 )
                 if ledger_sighting is not None and ledger_sighting.sample_id != sample.sample_id:
                     ledger_tuple = (
@@ -1605,146 +1600,44 @@ class TemporalBeliefIngestionService:
         run_id: UUID,
         entity_id: str,
         current_sim_time_ms: int,
-    ) -> tuple[StoredObservationSample | None, StoredObservationSample | None, Any]:
-        """Resolve compatible positive sighting and applicable sensor attempt for entity."""
-        active_facts = self._repo.query_facts(
+    ) -> tuple[StoredObservationSample | None, StoredObservationSample | None, StoredFact | None]:
+        """Resolve applicable camera evidence and station history through the query time."""
+        facts = self._repo.query_facts(
             FactQuery(
                 subject=entity_id,
                 predicate="located_at",
-                active_only=True,
-                context=SpatialContext(extra_context={"run_id": str(run_id)}),
+                active_only=False,
+                context=SpatialContext(
+                    observer=self._observer_context["robot_id"],
+                    location=self._observer_context["location"],
+                    frame_of_reference=self._observer_context["frame_of_reference"],
+                    extra_context={"run_id": str(run_id)},
+                ),
             )
         )
-        active_facts = [
-            f
-            for f in active_facts
-            if (
-                f.context.extra_context.get("run_id") == str(run_id)
-                or f.evidence.get("run_id") == str(run_id)
-            )
-        ]
-        active_fact = active_facts[0] if active_facts else None
-
-        last_sighting: StoredObservationSample | None = None
-        latest_attempt: StoredObservationSample | None = None
-
-        if hasattr(self._ledger, "get_last_sighting"):
-            try:
-                last_sighting = self._ledger.get_last_sighting(
-                    run_id=run_id,
-                    entity_id=entity_id,
-                    capability="camera_detect",
-                    at_sim_time_ms=current_sim_time_ms,
-                    robot_id=self._observer_robot_id,
-                    location=self._observer_location,
-                    frame_of_reference=self._observer_frame,
-                )
-            except TypeError:
-                last_sighting = self._ledger.get_last_sighting(
-                    run_id=run_id,
-                    entity_id=entity_id,
-                    capability="camera_detect",
-                    at_sim_time_ms=current_sim_time_ms,
-                )
-
-            # Ensure compatible sighting
-            if last_sighting is not None and not is_sample_compatible(
-                last_sighting,
-                robot_id=self._observer_robot_id,
-                location=self._observer_location,
-                frame_of_reference=self._observer_frame,
-            ):
-                last_sighting = None
-                if hasattr(self._ledger, "get_entity_sighting_history"):
-                    try:
-                        history = self._ledger.get_entity_sighting_history(
-                            run_id=run_id,
-                            entity_id=entity_id,
-                            capability="camera_detect",
-                            end_ms=current_sim_time_ms,
-                            robot_id=self._observer_robot_id,
-                            location=self._observer_location,
-                            frame_of_reference=self._observer_frame,
-                        )
-                    except TypeError:
-                        history = self._ledger.get_entity_sighting_history(
-                            run_id=run_id,
-                            entity_id=entity_id,
-                            capability="camera_detect",
-                            end_ms=current_sim_time_ms,
-                        )
-                    for cand in reversed(history):
-                        if is_sample_compatible(
-                            cand,
-                            robot_id=self._observer_robot_id,
-                            location=self._observer_location,
-                            frame_of_reference=self._observer_frame,
-                        ):
-                            last_sighting = cand
-                            break
-
-            if last_sighting is None:
-                try:
-                    future_sighting = self._ledger.get_last_sighting(
-                        run_id=run_id,
-                        entity_id=entity_id,
-                        capability="camera_detect",
-                        at_sim_time_ms=None,
-                        robot_id=self._observer_robot_id,
-                        location=self._observer_location,
-                        frame_of_reference=self._observer_frame,
-                    )
-                except TypeError:
-                    future_sighting = self._ledger.get_last_sighting(
-                        run_id=run_id,
-                        entity_id=entity_id,
-                        capability="camera_detect",
-                        at_sim_time_ms=None,
-                    )
-                if (
-                    future_sighting is not None
-                    and future_sighting.sim_time_ms > current_sim_time_ms
-                    and is_sample_compatible(
-                        future_sighting,
-                        robot_id=self._observer_robot_id,
-                        location=self._observer_location,
-                        frame_of_reference=self._observer_frame,
-                    )
-                ):
-                    last_sighting = future_sighting
-
-        obs_pose = last_sighting.observer_pose if last_sighting is not None else None
-        if hasattr(self._ledger, "get_latest_camera_attempt"):
-            try:
-                latest_attempt = self._ledger.get_latest_camera_attempt(
-                    run_id=run_id,
-                    entity_id=entity_id,
-                    observer_pose=obs_pose,
-                    at_sim_time_ms=current_sim_time_ms,
-                    robot_id=self._observer_robot_id,
-                    location=self._observer_location,
-                    frame_of_reference=self._observer_frame,
-                )
-            except TypeError:
-                if obs_pose is not None:
-                    latest_attempt = self._ledger.get_latest_camera_attempt(
-                        run_id, entity_id, obs_pose, current_sim_time_ms
-                    )
-        if latest_attempt is None and hasattr(self._ledger, "get_latest_sample"):
-            cand = self._ledger.get_latest_sample(
-                run_id=run_id,
-                capability="camera_detect",
-                at_sim_time_ms=current_sim_time_ms,
-            )
-            if cand is not None and is_sample_compatible(
-                cand,
-                robot_id=self._observer_robot_id,
-                location=self._observer_location,
-                frame_of_reference=self._observer_frame,
-            ):
-                latest_attempt = cand
-
-        return last_sighting, latest_attempt, active_fact
+        station_fact = max(
+            (fact for fact in facts if fact.evidence.get("sim_time_ms", 0) <= current_sim_time_ms),
+            key=lambda fact: (
+                fact.evidence.get("sim_time_ms", 0),
+                fact.evidence.get("sample_sequence", 0),
+            ),
+            default=None,
+        )
+        last_sighting = self._ledger.get_last_sighting(
+            run_id=run_id,
+            entity_id=entity_id,
+            capability="camera_detect",
+            at_sim_time_ms=current_sim_time_ms,
+            **self._observer_context,
+        )
+        latest_attempt = self._ledger.get_latest_camera_attempt(
+            run_id=run_id,
+            entity_id=entity_id,
+            observer_pose=last_sighting.observer_pose if last_sighting else None,
+            at_sim_time_ms=current_sim_time_ms,
+            **self._observer_context,
+        )
+        return last_sighting, latest_attempt, station_fact
 
     def _locked_assess_entity_location(
         self,

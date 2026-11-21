@@ -825,7 +825,7 @@ def test_freshness_boundaries() -> None:
     assert s_1001.verification_status == "last_seen"
 
 
-def test_future_dated_simulation_time_is_rejected_without_negative_age() -> None:
+def test_future_sighting_is_excluded_from_earlier_assessment() -> None:
     repo = FakeMemoryRepository()
     ledger = FakeObservationLedger()
     service = TemporalBeliefIngestionService(repo, ledger)
@@ -850,8 +850,10 @@ def test_future_dated_simulation_time_is_rejected_without_negative_age() -> None
 
     # Querying at 3000 ms (before sighting time)
     summary = service.get_entity_belief_summary(run_id, "parcel_01", current_sim_time_ms=3000)
-    assert summary.freshness == "future_dated"
-    assert summary.age_ms == 0  # Spec: Never assign negative age
+    assert summary.verification_status == "unverified"
+    assert summary.last_positive_sighting is None
+    assert summary.last_observed_position is None
+    assert summary.age_ms is None
     assert summary.uncertainty is True
 
 
