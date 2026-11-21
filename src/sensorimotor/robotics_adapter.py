@@ -37,6 +37,7 @@ from src.sensorimotor.robotics_adapter_models import (
     CorruptedRecordError,
     ExternalRoboticsRecord,
     TransformCalibration,
+    UnknownFrameError,
     derive_deterministic_ids,
 )
 
@@ -46,6 +47,8 @@ class RecordedRoboticsSensorAdapter(SensorSource):
 
     Conforms to the ``SensorSource`` protocol (``observe()``) and provides
     timestamped, validated ``ObservationSample`` envelopes via ``sample()``.
+    Playback operates strictly on the current recorded step and does not skip
+    intervening messages or search ahead for requested capabilities.
     """
 
     def __init__(
@@ -70,14 +73,7 @@ class RecordedRoboticsSensorAdapter(SensorSource):
         else:
             self._run_id = uuid5(NAMESPACE_DNS, "groundtruth:run:default")
 
-        self._default_pose = default_robot_pose or Pose(
-            x_cm=0.0,
-            y_cm=0.0,
-            robot_id="robot_01",
-            direction="north",
-            location="warehouse",
-            frame_of_reference="warehouse_map",
-        )
+        self._default_pose = default_robot_pose
 
     # -------------------------------------------------------------------------
     # Factories
@@ -209,18 +205,15 @@ class RecordedRoboticsSensorAdapter(SensorSource):
         # 2. Derive deterministic IDs for idempotence
         sample_id, obs_id = derive_deterministic_ids(record.recording_id, record.message_id)
 
-        # 3. Determine and validate observer pose
-        observer_pose = record.robot_pose or self._default_pose
-        if observer_pose.frame_of_reference != self._tf_cal.canonical_frame:
-            # Re-pose into canonical frame if specified differently
-            observer_pose = Pose(
-                x_cm=observer_pose.x_cm,
-                y_cm=observer_pose.y_cm,
-                robot_id=observer_pose.robot_id,
-                direction=observer_pose.direction,
-                location=observer_pose.location,
-                frame_of_reference=self._tf_cal.canonical_frame,
+        # 3. Determine and validate observer pose: require a real pose and transform it
+        raw_pose = record.robot_pose or self._default_pose
+        if raw_pose is None:
+            raise CorruptedRecordError(
+                f"External robotics record '{record.message_id}' is missing required 'robot_pose'"
             )
+
+        # Transform pose (both coordinates and heading orientation) into canonical frame
+        observer_pose = self._tf_cal.transform_pose(raw_pose)
 
         # 4. Canonicalize or validate ObservationRequest
         cap = record.capability
@@ -257,16 +250,32 @@ class RecordedRoboticsSensorAdapter(SensorSource):
                 result=unavailable_result,
             )
 
-        # 6. Extract capability-specific measurements
+        # 6. Validate explicit source_frame and confidence for available observations
+        if record.source_frame is None or not record.source_frame.strip():
+            raise UnknownFrameError(
+                f"Record '{record.message_id}' has unspecified source_frame; "
+                "cannot assume map frame"
+            )
+        if record.confidence is None:
+            raise CorruptedRecordError(
+                f"Record '{record.message_id}' has missing confidence; cannot fabricate certainty"
+            )
+
+        # 7. Extract capability-specific measurements
         lighting_cast = "neutral"
         measurements: dict[str, Any]
 
         if cap == "camera_detect":
+            if record.detections is None and record.measurements is None:
+                raise CorruptedRecordError(
+                    f"Camera record '{record.message_id}' is missing detection data; "
+                    "distinguish missing payload from explicit empty scan []"
+                )
+
             raw_detections = record.detections or []
             transformed_detections: list[CameraDetection] = []
 
             for det in raw_detections:
-                # Transform point from source_frame into canonical warehouse_map
                 source_pt = Point(x_cm=det.position_x_cm, y_cm=det.position_y_cm)
                 map_pt = self._tf_cal.transform_point(
                     source_pt, record.source_frame, robot_pose=observer_pose
@@ -291,7 +300,6 @@ class RecordedRoboticsSensorAdapter(SensorSource):
             if request.target is not None:
                 targeted = [d for d in sorted_detections if d.object_id == request.target]
                 if not targeted:
-                    # Target was not detected in this camera record
                     unavailable_result = ObservationUnavailable(
                         capability=cap,
                         reason="target_not_visible",
@@ -333,14 +341,10 @@ class RecordedRoboticsSensorAdapter(SensorSource):
                 lidar_obj = LidarMeasurement.model_validate(record.measurements)
                 measurements = lidar_obj.model_dump(mode="json")
             else:
-                # Default clear scan
-                lidar_obj = LidarMeasurement(
-                    detected=False,
-                    nearest_distance_cm=None,
-                    direction="front",
-                    status="clear",
+                raise CorruptedRecordError(
+                    f"LiDAR record '{record.message_id}' missing measurement payload; "
+                    "cannot assume clear scan on missing data"
                 )
-                measurements = lidar_obj.model_dump(mode="json")
 
         elif cap == "robot_pose":
             pose_obj = PoseMeasurement(
@@ -359,15 +363,17 @@ class RecordedRoboticsSensorAdapter(SensorSource):
                 intensity = float(record.measurements.get("intensity", 1.0))
                 lighting_cast = str(record.measurements.get("color_cast", "neutral"))
             else:
-                intensity = 1.0
-                lighting_cast = "neutral"
+                raise CorruptedRecordError(
+                    f"Ambient light record '{record.message_id}' missing light_measurement; "
+                    "cannot fabricate default light readings"
+                )
             light_obj = LightMeasurement(intensity=intensity, color_cast=lighting_cast)
             measurements = light_obj.model_dump(mode="json")
 
         else:
             raise ValueError(f"Unsupported capability: {cap}")
 
-        # 7. Construct SpatialContext (strictly adheres to P2-01 constraints)
+        # 8. Construct SpatialContext (strictly adheres to P2-01 constraints)
         context = SpatialContext(
             location=observer_pose.location,
             frame_of_reference=observer_pose.frame_of_reference,
@@ -386,7 +392,7 @@ class RecordedRoboticsSensorAdapter(SensorSource):
             context=context,
         )
 
-        # 8. Assemble full ObservationSample
+        # 9. Assemble full ObservationSample
         return ObservationSample(
             sample_id=sample_id,
             run_id=active_run_id,
@@ -406,55 +412,69 @@ class RecordedRoboticsSensorAdapter(SensorSource):
     # -------------------------------------------------------------------------
 
     def observe(self, request: ObservationRequest) -> SensorObservation | ObservationUnavailable:
-        """Conform to SensorSource protocol by returning observation evidence."""
-        sample = self.sample(request)
+        """Conform to SensorSource without advancing simulation time or skipping records."""
+        if not self.has_next():
+            raise IndexError("Recorded robotics stream exhausted; no records available")
+
+        record = self._records[self._cursor]
+        if record.capability != request.capability:
+            sim_time_ms, captured_at = self._clock_cal.calculate_sim_time(
+                record.captured_timestamp_utc, record.captured_time_rel_ms
+            )
+            return ObservationUnavailable(
+                capability=request.capability,
+                reason="sensor_unavailable",
+                message="Observation unavailable.",
+                reported_at=captured_at,
+            )
+
+        sample = self.translate_record(record, request=request)
         return sample.result
 
     def sample(self, request: ObservationRequest | None = None) -> ObservationSample:
-        """Acquire the next observation sample matching request (or next in stream)."""
+        """Acquire the observation sample at the current controlled step.
+
+        Does NOT search forward for requested capabilities; reports unavailable
+        on capability mismatch at the current step. Advances cursor if auto_advance is True.
+        """
         if not self.has_next():
             raise IndexError("Recorded robotics stream exhausted; no further records available")
 
-        # Find matching record or take current
-        match_idx = self._cursor
-        if request is not None:
-            found = False
-            for idx in range(self._cursor, len(self._records)):
-                if self._records[idx].capability == request.capability:
-                    match_idx = idx
-                    found = True
-                    break
-            if not found:
-                # Return sensor_unavailable if capability is not in upcoming stream
-                rec = self._records[self._cursor]
-                sim_time_ms, captured_at = self._clock_cal.calculate_sim_time(
-                    rec.captured_timestamp_utc, rec.captured_time_rel_ms
-                )
-                sample_id, _ = derive_deterministic_ids(
-                    rec.recording_id, f"req_fail_{self._cursor}"
-                )
-                return ObservationSample(
-                    sample_id=sample_id,
-                    run_id=self._run_id,
-                    sample_sequence=rec.sequence,
-                    epoch_utc=self._clock_cal.epoch_utc,
-                    sim_time_ms=sim_time_ms,
-                    captured_at=captured_at,
-                    sensor_id=request.capability,
-                    observer_pose=rec.robot_pose or self._default_pose,
-                    world_version=rec.world_version,
-                    request=request,
-                    result=ObservationUnavailable(
-                        capability=request.capability,
-                        reason="sensor_unavailable",
-                        message="Observation unavailable.",
-                        reported_at=captured_at,
-                    ),
-                )
-
-        record = self._records[match_idx]
+        record = self._records[self._cursor]
         if self._auto_advance:
-            self._cursor = match_idx + 1
+            self._cursor += 1
+
+        if request is not None and record.capability != request.capability:
+            sim_time_ms, captured_at = self._clock_cal.calculate_sim_time(
+                record.captured_timestamp_utc, record.captured_time_rel_ms
+            )
+            sample_id, _ = derive_deterministic_ids(
+                record.recording_id, f"mismatch_{record.sequence}_{request.capability}"
+            )
+            raw_pose = record.robot_pose or self._default_pose
+            if raw_pose is None:
+                raise CorruptedRecordError(
+                    f"Record at step {record.sequence} is missing required 'robot_pose'"
+                )
+            observer_pose = self._tf_cal.transform_pose(raw_pose)
+            return ObservationSample(
+                sample_id=sample_id,
+                run_id=self._run_id,
+                sample_sequence=record.sequence,
+                epoch_utc=self._clock_cal.epoch_utc,
+                sim_time_ms=sim_time_ms,
+                captured_at=captured_at,
+                sensor_id=request.capability,
+                observer_pose=observer_pose,
+                world_version=record.world_version,
+                request=request,
+                result=ObservationUnavailable(
+                    capability=request.capability,
+                    reason="sensor_unavailable",
+                    message="Observation unavailable.",
+                    reported_at=captured_at,
+                ),
+            )
 
         return self.translate_record(record, request=request)
 

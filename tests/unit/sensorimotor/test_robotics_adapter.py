@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -21,11 +22,11 @@ from src.contracts.simulation import (
     Point,
     Pose,
     PoseMeasurement,
-    SensorSource,
 )
 from src.sensorimotor.robotics_adapter import RecordedRoboticsSensorAdapter
 from src.sensorimotor.robotics_adapter_models import (
     ClockCalibration,
+    CorruptedRecordError,
     ExternalDetection,
     ExternalLidarMeasurement,
     ExternalLightMeasurement,
@@ -112,7 +113,6 @@ def test_transform_canonical_frame() -> None:
 
 def test_transform_robot_frame_all_directions() -> None:
     cal = TransformCalibration()
-    # Object is 30 cm to the right (+x) and 50 cm forward (+y) in robot frame
     obj_in_robot = Point(x_cm=30.0, y_cm=50.0)
 
     # North: +y forward (+y in map), +x right (+x in map)
@@ -170,8 +170,6 @@ def test_transform_robot_frame_all_directions() -> None:
 
 def test_transform_base_link_ros_rep103() -> None:
     cal = TransformCalibration()
-    # In ROS REP 103 base_link: +x is forward, +y is left
-    # Object 40cm forward (+x), 10cm left (+y)
     obj_ros = Point(x_cm=40.0, y_cm=10.0)
     pose_north = Pose(
         x_cm=100.0,
@@ -182,8 +180,6 @@ def test_transform_base_link_ros_rep103() -> None:
         frame_of_reference="warehouse_map",
     )
     pt = cal.transform_point(obj_ros, "base_link", robot_pose=pose_north)
-    # Forward (+x) -> +y in map (+40) -> 240
-    # Left (+y) -> -x in map (-10) -> 90
     assert pt.x_cm == 90.0
     assert pt.y_cm == 240.0
 
@@ -200,7 +196,6 @@ def test_transform_custom_calibrated_frame() -> None:
             )
         }
     )
-    # 90 deg CCW rotation of (10, 0): (0, 10). Offset: (500, 310)
     pt = cal.transform_point(Point(x_cm=10.0, y_cm=0.0), "overhead_camera")
     assert pt.x_cm == 500.0
     assert pt.y_cm == 310.0
@@ -210,6 +205,49 @@ def test_transform_unknown_frame_raises() -> None:
     cal = TransformCalibration()
     with pytest.raises(UnknownFrameError, match="Unknown or unconfigured"):
         cal.transform_point(Point(x_cm=1.0, y_cm=1.0), "unknown_arm_wrist_3")
+
+
+def test_transform_pose_with_orientation() -> None:
+    cal = TransformCalibration(
+        transforms={
+            "facility_grid": FrameTransform(
+                source_frame="facility_grid",
+                target_frame="warehouse_map",
+                offset_x_cm=200.0,
+                offset_y_cm=100.0,
+                rotation_deg=90.0,
+            )
+        }
+    )
+    # Pose in facility_grid at (10, 20) facing north
+    pose = Pose(
+        x_cm=10.0,
+        y_cm=20.0,
+        robot_id="r1",
+        direction="north",
+        location="warehouse",
+        frame_of_reference="facility_grid",
+    )
+    transformed = cal.transform_pose(pose)
+    assert transformed.frame_of_reference == "warehouse_map"
+    assert transformed.x_cm == 180.0
+    assert transformed.y_cm == 110.0
+    # North (90 deg) + 90 deg CCW rotation = 180 deg (West)
+    assert transformed.direction == "west"
+
+
+def test_transform_pose_unconfigured_frame_raises() -> None:
+    cal = TransformCalibration()
+    pose = Pose(
+        x_cm=10.0,
+        y_cm=20.0,
+        robot_id="r1",
+        direction="north",
+        location="warehouse",
+        frame_of_reference="uncalibrated_subframe",
+    )
+    with pytest.raises(UnknownFrameError, match="unconfigured frame"):
+        cal.transform_pose(pose)
 
 
 # =============================================================================
@@ -248,6 +286,7 @@ def test_translate_camera_detect_broad_and_targeted(
         capability="camera_detect",
         captured_time_rel_ms=1000,
         source_frame="robot_frame",
+        confidence=0.95,
         robot_pose=default_robot_pose,
         detections=[
             ExternalDetection(
@@ -255,12 +294,14 @@ def test_translate_camera_detect_broad_and_targeted(
                 apparent_color="blue",
                 position_x_cm=10.0,
                 position_y_cm=20.0,
+                confidence=0.90,
             ),
             ExternalDetection(
                 object_id="parcel_01",
                 apparent_color="red",
                 position_x_cm=-10.0,
                 position_y_cm=30.0,
+                confidence=0.95,
             ),
         ],
     )
@@ -274,9 +315,6 @@ def test_translate_camera_detect_broad_and_targeted(
     scan = CameraScan.model_validate(broad_sample.result.measurements)
     assert len(scan.objects) == 2
     assert [obj.object_id for obj in scan.objects] == ["parcel_01", "parcel_02"]
-
-    # Check coordinate transform (pose is north at (100, 200))
-    # parcel_01 was (-10, 30) -> map (90, 230)
     assert scan.objects[0].position.x_cm == 90.0
     assert scan.objects[0].position.y_cm == 230.0
 
@@ -307,6 +345,8 @@ def test_translate_lidar_scan(clock_cal: ClockCalibration, default_robot_pose: P
         sensor_id="lidar_front",
         capability="lidar_scan",
         captured_time_rel_ms=2000,
+        source_frame="warehouse_map",
+        confidence=1.0,
         robot_pose=default_robot_pose,
         lidar_measurement=ExternalLidarMeasurement(
             detected=True, nearest_distance_cm=88.5, direction="front", status="blocked"
@@ -333,6 +373,8 @@ def test_translate_robot_pose_and_light(
         sensor_id="wheel_odom",
         capability="robot_pose",
         captured_time_rel_ms=3000,
+        source_frame="warehouse_map",
+        confidence=1.0,
         robot_pose=default_robot_pose,
     )
     light_rec = ExternalRoboticsRecord(
@@ -344,6 +386,8 @@ def test_translate_robot_pose_and_light(
         sensor_id="lux",
         capability="ambient_light",
         captured_time_rel_ms=4000,
+        source_frame="warehouse_map",
+        confidence=1.0,
         robot_pose=default_robot_pose,
         light_measurement=ExternalLightMeasurement(intensity=0.85, color_cast="yellow"),
     )
@@ -377,6 +421,7 @@ def test_translate_unavailable_sensor(
         capability="lidar_scan",
         captured_time_rel_ms=5000,
         robot_pose=default_robot_pose,
+        confidence=0.0,
         is_unavailable=True,
         unavailable_reason="sensor_unavailable",
     )
@@ -389,25 +434,215 @@ def test_translate_unavailable_sensor(
 
 
 # =============================================================================
-# SensorSource Conformance & Playback Stream Tests
+# Playback Step Bounds and Regression Tests
 # =============================================================================
 
 
-def test_sensorsource_protocol_conformance(clock_cal: ClockCalibration) -> None:
-    adapter = RecordedRoboticsSensorAdapter.from_file(FIXTURE_PATH)
-    assert isinstance(adapter, SensorSource)
+def test_step_bound_playback_does_not_search_future(
+    clock_cal: ClockCalibration, default_robot_pose: Pose
+) -> None:
+    """Verifies requesting camera while current record is LiDAR does NOT skip LiDAR."""
+    rec_lidar = ExternalRoboticsRecord(
+        schema_version=1,
+        recording_id="rec_step_test",
+        message_id="msg_001",
+        sequence=0,
+        robot_id="r1",
+        sensor_id="lidar",
+        capability="lidar_scan",
+        captured_time_rel_ms=0,
+        source_frame="warehouse_map",
+        confidence=1.0,
+        robot_pose=default_robot_pose,
+        lidar_measurement=ExternalLidarMeasurement(
+            detected=True, nearest_distance_cm=50.0, direction="front", status="blocked"
+        ),
+    )
+    rec_cam = ExternalRoboticsRecord(
+        schema_version=1,
+        recording_id="rec_step_test",
+        message_id="msg_002",
+        sequence=1,
+        robot_id="r1",
+        sensor_id="cam",
+        capability="camera_detect",
+        captured_time_rel_ms=1000,
+        source_frame="warehouse_map",
+        confidence=0.99,
+        robot_pose=default_robot_pose,
+        detections=[
+            ExternalDetection(
+                object_id="parcel_01",
+                apparent_color="red",
+                position_x_cm=10.0,
+                position_y_cm=20.0,
+                confidence=0.99,
+            )
+        ],
+    )
 
-    # Observe camera request
-    obs_cam = adapter.observe(ObservationRequest(capability="camera_detect"))
-    assert isinstance(obs_cam, SensorObservation)
-    assert obs_cam.capability == "camera_detect"
+    adapter = RecordedRoboticsSensorAdapter(
+        records=[rec_lidar, rec_cam], clock_calibration=clock_cal, auto_advance=True
+    )
 
-    # Observe LiDAR request
-    obs_lidar = adapter.observe(
+    # At step 0 (LiDAR), request camera
+    req_cam = ObservationRequest(capability="camera_detect")
+    sample0 = adapter.sample(req_cam)
+
+    # Must report unavailable for camera at step 0 without skipping to step 1
+    assert isinstance(sample0.result, ObservationUnavailable)
+    assert sample0.result.capability == "camera_detect"
+    assert sample0.result.reason == "sensor_unavailable"
+    assert sample0.sample_sequence == 0
+    assert sample0.sim_time_ms == 0
+
+    # Step 1 is now reached; camera is available here
+    sample1 = adapter.sample(req_cam)
+    assert isinstance(sample1.result, SensorObservation)
+    assert sample1.sample_sequence == 1
+    assert sample1.sim_time_ms == 1000
+
+
+def test_observe_does_not_advance_cursor(
+    clock_cal: ClockCalibration, default_robot_pose: Pose
+) -> None:
+    """Verifies SensorSource.observe returns evidence without advancing the cursor."""
+    rec = ExternalRoboticsRecord(
+        schema_version=1,
+        recording_id="rec_obs_test",
+        message_id="msg_001",
+        sequence=0,
+        robot_id="r1",
+        sensor_id="lidar",
+        capability="lidar_scan",
+        captured_time_rel_ms=0,
+        source_frame="warehouse_map",
+        confidence=1.0,
+        robot_pose=default_robot_pose,
+        lidar_measurement=ExternalLidarMeasurement(
+            detected=False, nearest_distance_cm=None, direction="front", status="clear"
+        ),
+    )
+    adapter = RecordedRoboticsSensorAdapter(records=[rec], clock_calibration=clock_cal)
+
+    assert adapter.current_index == 0
+    obs = adapter.observe(
         ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
     )
-    assert isinstance(obs_lidar, SensorObservation)
-    assert obs_lidar.capability == "lidar_scan"
+    assert isinstance(obs, SensorObservation)
+    # Cursor MUST remain at 0
+    assert adapter.current_index == 0
+
+
+def test_missing_data_rejected_not_defaulted(
+    clock_cal: ClockCalibration, default_robot_pose: Pose
+) -> None:
+    """Verifies missing LiDAR/camera/light/confidence data is rejected rather than fabricated."""
+    # 1. Missing confidence on available record raises validation error
+    with pytest.raises(ValueError, match="confidence must be explicitly provided"):
+        ExternalRoboticsRecord(
+            schema_version=1,
+            recording_id="rec_err",
+            message_id="msg_e1",
+            sequence=0,
+            robot_id="r1",
+            sensor_id="lidar",
+            capability="lidar_scan",
+            captured_time_rel_ms=0,
+            source_frame="warehouse_map",
+            robot_pose=default_robot_pose,
+            lidar_measurement=ExternalLidarMeasurement(
+                detected=False, nearest_distance_cm=None, direction="front", status="clear"
+            ),
+        )
+
+    # 2. Missing source_frame on available record raises validation error
+    with pytest.raises(ValueError, match="source_frame must be explicitly specified"):
+        ExternalRoboticsRecord(
+            schema_version=1,
+            recording_id="rec_err",
+            message_id="msg_e2",
+            sequence=0,
+            robot_id="r1",
+            sensor_id="lidar",
+            capability="lidar_scan",
+            captured_time_rel_ms=0,
+            confidence=1.0,
+            robot_pose=default_robot_pose,
+            lidar_measurement=ExternalLidarMeasurement(
+                detected=False, nearest_distance_cm=None, direction="front", status="clear"
+            ),
+        )
+
+    # 3. Missing LiDAR payload on available record raises validation error
+    with pytest.raises(ValueError, match="lidar_scan record requires 'lidar_measurement'"):
+        ExternalRoboticsRecord(
+            schema_version=1,
+            recording_id="rec_err",
+            message_id="msg_e3",
+            sequence=0,
+            robot_id="r1",
+            sensor_id="lidar",
+            capability="lidar_scan",
+            captured_time_rel_ms=0,
+            source_frame="warehouse_map",
+            confidence=1.0,
+            robot_pose=default_robot_pose,
+        )
+
+    # 4. Explicitly empty camera scan [] succeeds
+    cam_empty = ExternalRoboticsRecord(
+        schema_version=1,
+        recording_id="rec_err",
+        message_id="msg_e4",
+        sequence=0,
+        robot_id="r1",
+        sensor_id="cam",
+        capability="camera_detect",
+        captured_time_rel_ms=0,
+        source_frame="warehouse_map",
+        confidence=1.0,
+        robot_pose=default_robot_pose,
+        detections=[],
+    )
+    adapter = RecordedRoboticsSensorAdapter(records=[cam_empty], clock_calibration=clock_cal)
+    sample = adapter.translate_record(cam_empty)
+    scan = CameraScan.model_validate(sample.result.measurements)
+    assert len(scan.objects) == 0
+
+    # 5. Missing camera detections (None) raises validation error
+    with pytest.raises(ValueError, match="camera_detect record requires 'detections' list"):
+        ExternalRoboticsRecord(
+            schema_version=1,
+            recording_id="rec_err",
+            message_id="msg_e5",
+            sequence=0,
+            robot_id="r1",
+            sensor_id="cam",
+            capability="camera_detect",
+            captured_time_rel_ms=0,
+            source_frame="warehouse_map",
+            confidence=1.0,
+            robot_pose=default_robot_pose,
+            detections=None,
+        )
+
+
+def test_invalid_records_from_fixture_file() -> None:
+    """Verifies all invalid records in fixture file are properly rejected."""
+    with FIXTURE_PATH.open(encoding="utf-8") as f:
+        data = json.load(f)
+
+    for case in data.get("invalid_records", []):
+        raw = case["record"]
+        with pytest.raises(
+            (ValueError, CorruptedRecordError, UnknownFrameError, UnmappableTimeError)
+        ):
+            # Either parsing into ExternalRoboticsRecord fails or translating fails
+            rec = ExternalRoboticsRecord.model_validate(raw)
+            clock = ClockCalibration(epoch_utc=datetime(2026, 1, 1, tzinfo=UTC))
+            adapter = RecordedRoboticsSensorAdapter(records=[rec], clock_calibration=clock)
+            adapter.translate_record(rec)
 
 
 def test_playback_cursor_and_play_all() -> None:
@@ -418,16 +653,13 @@ def test_playback_cursor_and_play_all() -> None:
     all_samples = adapter.play_all()
     assert len(all_samples) == total
 
-    # Stream iteration
     adapter.reset()
     streamed = list(adapter)
     assert len(streamed) == total
 
-    # Exhaustion error
     with pytest.raises(IndexError, match="exhausted"):
         adapter.play_next()
 
-    # Seek
     adapter.seek(2)
     assert adapter.current_index == 2
     s2 = adapter.play_next()

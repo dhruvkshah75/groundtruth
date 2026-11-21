@@ -44,7 +44,7 @@ class ExternalDetection(BaseModel):
     position_y_cm: float
     bounding_box_width_cm: float = Field(default=40.0, gt=0)
     bounding_box_height_cm: float = Field(default=40.0, gt=0)
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class ExternalLidarMeasurement(BaseModel):
@@ -73,7 +73,7 @@ class ExternalLightMeasurement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intensity: float = Field(ge=0.0)
-    color_cast: str = Field(default="neutral", min_length=1)
+    color_cast: str = Field(min_length=1)
 
 
 class FrameTransform(BaseModel):
@@ -121,7 +121,6 @@ class TransformCalibration(BaseModel):
                 raise UnknownFrameError(
                     f"Transform from '{source_frame}' requires robot_pose but none was provided"
                 )
-            # egocentric convention: +y is forward along heading, +x is lateral right
             dx, dy = point.x_cm, point.y_cm
             fwd_x, fwd_y, lat_x, lat_y = self._direction_vectors(robot_pose.direction)
             map_x = robot_pose.x_cm + (dx * lat_x) + (dy * fwd_x)
@@ -133,10 +132,8 @@ class TransformCalibration(BaseModel):
                 raise UnknownFrameError(
                     f"Transform from '{source_frame}' requires robot_pose but none was provided"
                 )
-            # ROS REP 103 convention: +x is forward along heading, +y is lateral left
             fwd_comp, left_comp = point.x_cm, point.y_cm
             fwd_x, fwd_y, lat_x, lat_y = self._direction_vectors(robot_pose.direction)
-            # lateral right = -lat, so left = -lat_vector
             map_x = robot_pose.x_cm + (fwd_comp * fwd_x) - (left_comp * lat_x)
             map_y = robot_pose.y_cm + (fwd_comp * fwd_y) - (left_comp * lat_y)
             return Point(x_cm=round(map_x, 3), y_cm=round(map_y, 3))
@@ -152,7 +149,6 @@ class TransformCalibration(BaseModel):
             ty = ry + tf.offset_y_cm
             if tf.target_frame == self.canonical_frame:
                 return Point(x_cm=round(tx, 3), y_cm=round(ty, 3))
-            # Chain transform to target frame if needed
             return self.transform_point(
                 Point(x_cm=tx, y_cm=ty), tf.target_frame, robot_pose=robot_pose
             )
@@ -163,8 +159,73 @@ class TransformCalibration(BaseModel):
             "robot_base",
             "base_link",
         ]
-        raise UnknownFrameError(
+        msg = (
             f"Unknown or unconfigured source frame '{source_frame}'. Configured frames: {supported}"
+        )
+        raise UnknownFrameError(msg)
+
+    def transform_pose(self, pose: Pose) -> Pose:
+        """Transform a robot pose into canonical_frame, including position and heading."""
+        if pose.frame_of_reference == self.canonical_frame:
+            return pose
+
+        if pose.frame_of_reference in self.transforms:
+            tf = self.transforms[pose.frame_of_reference]
+            rad = math.radians(tf.rotation_deg)
+            cos_r = math.cos(rad)
+            sin_r = math.sin(rad)
+
+            # Transform translation
+            rx = pose.x_cm * cos_r - pose.y_cm * sin_r
+            ry = pose.x_cm * sin_r + pose.y_cm * cos_r
+            tx = round(rx + tf.offset_x_cm, 3)
+            ty = round(ry + tf.offset_y_cm, 3)
+
+            # Transform orientation (cardinal heading)
+            heading_angles: dict[Direction, float] = {
+                "east": 0.0,
+                "north": 90.0,
+                "west": 180.0,
+                "south": 270.0,
+            }
+            current_deg = heading_angles[pose.direction]
+            new_deg = (current_deg + tf.rotation_deg) % 360.0
+
+            new_direction: Direction | None = None
+            for card, deg in heading_angles.items():
+                if abs(new_deg - deg) < 1e-3 or abs(new_deg - (deg + 360.0)) < 1e-3:
+                    new_direction = card
+                    break
+
+            if new_direction is None:
+                raise UnknownFrameError(
+                    f"Transformed pose heading {new_deg}° is not a valid cardinal direction"
+                )
+
+            if tf.target_frame == self.canonical_frame:
+                return Pose(
+                    x_cm=tx,
+                    y_cm=ty,
+                    robot_id=pose.robot_id,
+                    direction=new_direction,
+                    location=pose.location,
+                    frame_of_reference=self.canonical_frame,
+                )
+
+            intermediate = Pose(
+                x_cm=tx,
+                y_cm=ty,
+                robot_id=pose.robot_id,
+                direction=new_direction,
+                location=pose.location,
+                frame_of_reference=tf.target_frame,
+            )
+            return self.transform_pose(intermediate)
+
+        supported = list(self.transforms.keys()) + [self.canonical_frame]
+        raise UnknownFrameError(
+            f"Cannot transform pose: unconfigured frame '{pose.frame_of_reference}'. "
+            f"Configured frames: {supported}"
         )
 
     @staticmethod
@@ -254,7 +315,7 @@ class ExternalRoboticsRecord(BaseModel):
     captured_timestamp_utc: datetime | None = None
     captured_time_rel_ms: int | None = None
 
-    source_frame: str = Field(default="warehouse_map", min_length=1)
+    source_frame: str | None = None
     robot_pose: Pose | None = None
     world_version: int = Field(default=1, ge=0)
 
@@ -264,7 +325,7 @@ class ExternalRoboticsRecord(BaseModel):
     light_measurement: ExternalLightMeasurement | None = None
     measurements: dict[str, Any] | None = None
 
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     is_unavailable: bool = False
     unavailable_reason: (
         Literal[
@@ -289,6 +350,39 @@ class ExternalRoboticsRecord(BaseModel):
         if self.is_unavailable:
             if self.unavailable_reason is None:
                 self.unavailable_reason = "sensor_unavailable"
+            return self
+
+        # Available records must explicitly specify frame and confidence
+        if self.source_frame is None or not self.source_frame.strip():
+            raise ValueError(
+                "source_frame must be explicitly specified "
+                "(e.g. 'warehouse_map', 'robot_frame', 'base_link')"
+            )
+        if self.confidence is None:
+            raise ValueError(
+                "confidence must be explicitly provided between 0.0 and 1.0; cannot be defaulted"
+            )
+        if self.robot_pose is None:
+            raise ValueError("robot_pose must be explicitly provided for available observations")
+
+        # Validate capability payloads are not missing
+        if self.capability == "camera_detect":
+            if self.detections is None and self.measurements is None:
+                raise ValueError(
+                    "camera_detect record requires 'detections' list (pass [] for empty scan)"
+                )
+        elif self.capability == "lidar_scan":
+            if self.lidar_measurement is None and self.measurements is None:
+                raise ValueError("lidar_scan record requires 'lidar_measurement' or 'measurements'")
+        elif self.capability == "ambient_light":
+            if self.light_measurement is None and self.measurements is None:
+                raise ValueError(
+                    "ambient_light record requires 'light_measurement' or 'measurements'"
+                )
+        elif self.capability == "robot_pose":
+            if self.robot_pose is None and self.measurements is None:
+                raise ValueError("robot_pose record requires 'robot_pose'")
+
         return self
 
 
