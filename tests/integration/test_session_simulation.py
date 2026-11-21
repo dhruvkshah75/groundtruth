@@ -2,6 +2,7 @@
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
@@ -10,9 +11,17 @@ from uuid import uuid4
 import pytest
 
 from src.contracts.simulation import ScenarioDefinition, SimulationControl
+from src.contracts.simulation_api import (
+    SetCart,
+    SetSensorAvailability,
+    SimulationDisruptRequest,
+    SimulationEvidenceRequest,
+    SimulationRunIdentity,
+)
 from src.providers import ProviderConfig
 from src.web.service import AgentService, StaleRequestError
 from src.web.session_store import SessionStore
+from src.web.simulation_runtime import SimulationRuntime
 
 
 @pytest.fixture
@@ -681,3 +690,220 @@ def test_blocked_ingestion_does_not_stall_another_live_session(clock, warehouse,
     finally:
         release.set()
         service.shutdown()
+
+
+def test_patrol_decision_checkpoint_roundtrip_older_compatibility_and_reset(clock, warehouse):
+    """Verify WD-03 decision exposure, sample ledger lookup, checkpointing, and reset."""
+    service = service_for(clock)
+    key = str(uuid4())
+    load(service, key, warehouse)
+    session = service.get_session(key)
+
+    # 1. Initial state before motion: decisions are None
+    initial_state = session.live_simulation_state()
+    assert initial_state.patrol is not None
+    assert initial_state.patrol.current_decision is None
+    assert initial_state.patrol.latest_stop_decision is None
+
+    # 2. Block robot with a cart disruption at t=100ms
+    disrupt_req = SimulationDisruptRequest(
+        expected=SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        ),
+        request_id=uuid4(),
+        disruption=SetCart(kind="cart_block"),
+        at_ms=100,
+    )
+    service.disrupt_simulation(key, disrupt_req)
+
+    # Advance clock until robot stops for the cart
+    for _ in range(25):
+        clock[0] += 1.0
+        service.pump()
+        state = session.live_simulation_state()
+        if state.patrol is not None and state.patrol.state == "blocked":
+            break
+
+    state = session.live_simulation_state()
+    assert state.patrol is not None
+    assert state.patrol.state == "blocked"
+    assert state.patrol.current_decision is not None
+    assert state.patrol.current_decision.state == "blocked"
+    assert state.patrol.latest_stop_decision is not None
+    assert state.patrol.latest_stop_decision.state == "blocked"
+
+    stop_dec = state.patrol.latest_stop_decision
+    assert stop_dec.sample_id is not None
+    assert stop_dec.measured_distance_cm is not None
+    assert stop_dec.computed_clearance_cm is not None
+    assert stop_dec.run_id == session.runtime.run_id
+
+    # 3. Read exact cited sample from observation ledger by sample_id
+    stored_sample = service.read_observation_sample(key, stop_dec.sample_id)
+    assert stored_sample is not None
+    assert stored_sample.sample_id == stop_dec.sample_id
+    assert stored_sample.run_id == session.runtime.run_id
+    assert stored_sample.request.capability == "lidar_scan"
+
+    # Also verify via read_simulation_evidence endpoint
+    ev_res = service.read_simulation_evidence(
+        key,
+        SimulationEvidenceRequest(
+            expected=SimulationRunIdentity(
+                run_id=session.runtime.run_id, generation=session._generation
+            ),
+            sample_id=stop_dec.sample_id,
+        ),
+    )
+    assert ev_res["sample"]["sample_id"] == str(stop_dec.sample_id)
+    assert ev_res["run_id"] == str(session.runtime.run_id)
+
+    # 4. Advance time to trigger later periodic scans; verify initial cause is preserved
+    initial_sample_id = stop_dec.sample_id
+    initial_decision_time = stop_dec.decision_sim_time_ms
+    clock[0] += 1.0
+    service.pump()
+
+    state_later = session.live_simulation_state()
+    assert state_later.patrol is not None
+    assert state_later.patrol.state == "blocked"
+    # Current decision may update with tick, but latest_stop_decision retains original cause
+    assert state_later.patrol.latest_stop_decision.sample_id == initial_sample_id
+    assert state_later.patrol.latest_stop_decision.decision_sim_time_ms == initial_decision_time
+
+    # 5. Checkpoint round-trip
+    chk = session.runtime.checkpoint()
+    assert "current_decision" in chk
+    assert "latest_stop_decision" in chk
+    assert chk["latest_stop_decision"]["sensor_sample_id"] == str(initial_sample_id)
+
+    restored = SimulationRuntime.restore(
+        chk,
+        ingest=session.runtime._ingest,
+        now=lambda: clock[0],
+        memory=session.agent.memory,
+    )
+    assert restored.latest_stop_decision_summary is not None
+    assert restored.latest_stop_decision_summary.sample_id == initial_sample_id
+
+    # 6. Backward-compatibility with older checkpoint lacking decision fields
+    old_chk = deepcopy(chk)
+    del old_chk["current_decision"]
+    del old_chk["latest_stop_decision"]
+    del old_chk["in_stop_episode"]
+
+    restored_old = SimulationRuntime.restore(
+        old_chk,
+        ingest=session.runtime._ingest,
+        now=lambda: clock[0],
+        memory=session.agent.memory,
+    )
+    assert restored_old.current_decision_summary is None
+    assert restored_old.latest_stop_decision_summary is None
+
+    # 7. Checkpoint rejection on foreign run_id or future sim_time_ms
+    corrupted = deepcopy(chk)
+    corrupted["latest_stop_decision"]["run_id"] = str(uuid4())
+    with pytest.raises(ValueError, match="does not belong to the active run"):
+        SimulationRuntime.restore(
+            corrupted,
+            ingest=session.runtime._ingest,
+            now=lambda: clock[0],
+            memory=session.agent.memory,
+        )
+
+    # 8. Reset clears both decisions
+    service.control_simulation(key, SimulationControl(action="reset"))
+    state_reset = session.live_simulation_state()
+    assert state_reset.patrol is not None
+    assert state_reset.patrol.current_decision is None
+    assert state_reset.patrol.latest_stop_decision is None
+    service.shutdown()
+
+
+def test_patrol_lidar_outage_waiting_for_sensor_and_clearance_recovery(clock, warehouse):
+    """Verify LiDAR outage triggers waiting_for_sensor and resumes only upon clearance reading."""
+    service = service_for(clock)
+    key = str(uuid4())
+    load(service, key, warehouse)
+    session = service.get_session(key)
+
+    # Advance slightly while moving
+    clock[0] += 0.2
+    service.pump()
+    state = session.live_simulation_state()
+    assert state.patrol is not None
+    assert state.patrol.state == "moving"
+
+    # Inject LiDAR outage
+    outage_req = SimulationDisruptRequest(
+        expected=SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        ),
+        request_id=uuid4(),
+        disruption=SetSensorAvailability(
+            kind="sensor_availability", capability="lidar_scan", available=False
+        ),
+        at_ms=None,
+    )
+    service.disrupt_simulation(key, outage_req)
+
+    # Advance clock until robot hits outage
+    for _ in range(20):
+        clock[0] += 0.1
+        service.pump()
+        state = session.live_simulation_state()
+        if state.patrol is not None and state.patrol.state == "waiting_for_sensor":
+            break
+
+    state = session.live_simulation_state()
+    assert state.patrol is not None
+    assert state.patrol.state == "waiting_for_sensor"
+    assert state.patrol.current_decision is not None
+    assert state.patrol.current_decision.state == "waiting_for_sensor"
+    assert "unavailable" in state.patrol.current_decision.policy_reason.lower()
+
+    # While LiDAR is unavailable, clear cart - robot must NOT resume moving!
+    clear_req = SimulationDisruptRequest(
+        expected=SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        ),
+        request_id=uuid4(),
+        disruption=SetCart(kind="cart_clear"),
+        at_ms=None,
+    )
+    service.disrupt_simulation(key, clear_req)
+    clock[0] += 0.3
+    service.pump()
+
+    state_unrecovered = session.live_simulation_state()
+    assert state_unrecovered.patrol is not None
+    assert state_unrecovered.patrol.state == "waiting_for_sensor"
+
+    # Restore LiDAR sensor availability
+    restore_req = SimulationDisruptRequest(
+        expected=SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        ),
+        request_id=uuid4(),
+        disruption=SetSensorAvailability(
+            kind="sensor_availability", capability="lidar_scan", available=True
+        ),
+        at_ms=None,
+    )
+    service.disrupt_simulation(key, restore_req)
+
+    # Advance clock: controller acquires new clearance reading and resumes moving
+    for _ in range(20):
+        clock[0] += 0.1
+        service.pump()
+        state = session.live_simulation_state()
+        if state.patrol is not None and state.patrol.state == "moving":
+            break
+
+    state_resumed = session.live_simulation_state()
+    assert state_resumed.patrol is not None
+    assert state_resumed.patrol.state == "moving"
+    assert state_resumed.patrol.current_decision is not None
+    assert state_resumed.patrol.current_decision.state == "moving"
+    service.shutdown()

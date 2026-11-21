@@ -10,9 +10,12 @@ import pytest
 
 from src.contracts.models import ObservationRequest
 from src.contracts.simulation import ScenarioDefinition
+from src.declarative.memory_repository import MemoryRepository
+from src.procedural.temporal_belief_ingestion import TemporalBeliefIngestionService
 from src.sensorimotor.patrol_controller import PatrolController
 from src.sensorimotor.simulation_engine import SimulationEngine
 from src.sensorimotor.warehouse_sensors import WarehouseSensors
+from src.web.simulation_runtime import SimulationRuntime
 
 FIXTURE_PATH = Path(__file__).parents[2] / "tests/fixtures/phase_two/contracts.json"
 DATA = json.loads(FIXTURE_PATH.read_text())
@@ -301,3 +304,96 @@ def test_documented_patrol_example_executes():
     path = Path(__file__).parents[2] / "docs/phase-two/Patrol_Controller.md"
     blocks = re.findall(r"```python\n(.*?)```", path.read_text(), re.S)
     exec(compile(blocks[-1], str(path), "exec"), {})
+
+
+def test_patrol_stop_decision_captured_and_preserved_across_later_scans_and_resumption():
+    """Verify WD-03 stop decision capture, preservation across scans, and independent readout."""
+    scene_data = deepcopy(DATA["valid"]["scenario"])
+    # Put a cart at y=170 in the forward path of robot starting at (100, 100)
+    cart_entity = {
+        "entity_id": "cart_blocker",
+        "kind": "cart",
+        "location": "warehouse",
+        "footprint": {
+            "x_cm": 100.0,
+            "y_cm": 170.0,
+            "width_cm": 30.0,
+            "height_cm": 30.0,
+        },
+        "intrinsic_color": "white",
+        "solid": True,
+        "opaque": True,
+        "visible": True,
+    }
+    scene_data["entities"].append(cart_entity)
+    scene = ScenarioDefinition.model_validate(scene_data)
+
+    memory = MemoryRepository(":memory:")
+    ingestion = TemporalBeliefIngestionService(memory)
+    clock = [0.0]
+    runtime = SimulationRuntime(
+        scene,
+        epoch_utc=datetime(2026, 1, 1, tzinfo=UTC),
+        ingest=ingestion.ingest_sample,
+        now=lambda: clock[0],
+    )
+    # Initially before any tick, decisions are None
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is None
+    assert stop is None
+
+    # Step until robot stops for the obstacle
+    for _ in range(50):
+        runtime.step()
+        cur, stop = runtime.patrol_decision_summaries()
+        assert cur is not None
+        if cur.state == "blocked":
+            break
+
+    cur_stop, initial_stop = runtime.patrol_decision_summaries()
+    assert cur_stop is not None and cur_stop.state == "blocked"
+    assert initial_stop is not None and initial_stop.state == "blocked"
+    assert initial_stop.sample_id is not None
+    assert initial_stop.measured_distance_cm is not None
+    assert initial_stop.computed_clearance_cm is not None
+    # Triggering LiDAR sample exists in the same run's ledger
+    lidar_sample = memory.get_observation_sample(initial_stop.sample_id)
+    assert lidar_sample is not None
+    assert lidar_sample.run_id == runtime.run_id
+    assert lidar_sample.request.capability == "lidar_scan"
+
+    initial_sample_id = initial_stop.sample_id
+    initial_decision_time = initial_stop.sim_time_ms
+    initial_sensor_time = initial_stop.sensor_sim_time_ms
+
+    # Step forward while remaining blocked to simulate later scans arriving
+    for _ in range(15):
+        runtime.step()
+        cur_later, stop_later = runtime.patrol_decision_summaries()
+        assert cur_later is not None and cur_later.state == "blocked"
+        assert stop_later is not None and stop_later.state == "blocked"
+        # Later scans do NOT overwrite the original triggering cause of the stop!
+        assert stop_later.sample_id == initial_sample_id
+        assert stop_later.sim_time_ms == initial_decision_time
+        assert stop_later.sensor_sim_time_ms == initial_sensor_time
+
+    # Now remove/clear the cart from the path
+    cart = next(e for e in runtime.engine._snap.entities if e.entity_id == "cart_blocker")
+    cart.footprint.x_cm = 500.0  # moved far away
+
+    # Step forward: controller acquires clear reading and resumes motion!
+    for _ in range(10):
+        runtime.step()
+        cur_resumed, stop_after_resumption = runtime.patrol_decision_summaries()
+        assert cur_resumed is not None
+        if cur_resumed.state == "moving":
+            break
+
+    cur_resumed, stop_after_resumption = runtime.patrol_decision_summaries()
+    assert cur_resumed is not None and cur_resumed.state == "moving"
+    # Historical stop decision remains readable independently after resumption!
+    assert stop_after_resumption is not None and stop_after_resumption.state == "blocked"
+    assert stop_after_resumption.sample_id == initial_sample_id
+    assert stop_after_resumption.sim_time_ms == initial_decision_time
+    assert stop_after_resumption.sensor_sim_time_ms == initial_sensor_time
+    memory.close()

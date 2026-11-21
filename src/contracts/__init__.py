@@ -56,12 +56,14 @@ from .simulation import (
     rectangle_entry,
 )
 from .simulation_api import (
+    PatrolDecisionSummary,
     SimulationApiError,
     SimulationControlRequest,
     SimulationDisruptRequest,
     SimulationDisruptResponse,
     SimulationExportBundle,
     SimulationLoadRequest,
+    SimulationPatrolState,
     SimulationRunIdentity,
     SimulationStateResponse,
 )
@@ -128,12 +130,14 @@ __all__ += [
 ]
 
 __all__ += [
+    "PatrolDecisionSummary",
     "SimulationApiError",
     "SimulationControlRequest",
     "SimulationDisruptRequest",
     "SimulationDisruptResponse",
     "SimulationExportBundle",
     "SimulationLoadRequest",
+    "SimulationPatrolState",
     "SimulationRunIdentity",
     "SimulationStateResponse",
 ]

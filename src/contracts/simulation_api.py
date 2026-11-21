@@ -1,7 +1,7 @@
 """Public presenter and polling contracts for the session simulation."""
 
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
@@ -38,7 +38,14 @@ class SimulationEvidenceRequest(Contract):
     """Read bounded evidence for a catalog entity in one simulation incarnation."""
 
     expected: SimulationRunIdentity
-    entity_id: Identifier
+    entity_id: Identifier | None = None
+    sample_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def target_specified(self) -> Self:
+        if self.entity_id is None and self.sample_id is None:
+            raise ValueError("Either entity_id or sample_id must be provided")
+        return self
 
 
 class SimulationLoadRequest(Contract):
@@ -116,10 +123,42 @@ class SimulationBeliefState(Contract):
     ]
 
 
+class PatrolDecisionSummary(Contract):
+    run_id: UUID
+    sim_time_ms: NonNegativeInt
+    state: Literal["moving", "turning", "blocked", "waiting_for_sensor", "complete", "stalled"]
+    policy_reason: str
+    decision_sim_time_ms: NonNegativeInt | None = None
+    waypoint_index: NonNegativeInt | None = None
+    target_waypoint: Point | None = None
+    sample_id: UUID | None = None
+    sensor_sample_id: UUID | None = None
+    sensor_sim_time_ms: NonNegativeInt | None = None
+    measured_distance_cm: float | None = None
+    computed_clearance_cm: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = dict(data)
+            if "decision_sim_time_ms" not in data or data["decision_sim_time_ms"] is None:
+                data["decision_sim_time_ms"] = data.get("sim_time_ms")
+            if "sim_time_ms" not in data or data["sim_time_ms"] is None:
+                data["sim_time_ms"] = data.get("decision_sim_time_ms")
+            if "sample_id" not in data or data["sample_id"] is None:
+                data["sample_id"] = data.get("sensor_sample_id")
+            if "sensor_sample_id" not in data or data["sensor_sample_id"] is None:
+                data["sensor_sample_id"] = data.get("sample_id")
+        return data
+
+
 class SimulationPatrolState(Contract):
     state: Literal["moving", "turning", "blocked", "waiting_for_sensor", "complete", "stalled"]
     waypoint_index: NonNegativeInt
     target_waypoint: Point | None
+    current_decision: PatrolDecisionSummary | None = None
+    latest_stop_decision: PatrolDecisionSummary | None = None
 
 
 class SimulationStateResponse(SimulationRunIdentity):
@@ -169,6 +208,21 @@ class SimulationStateResponse(SimulationRunIdentity):
             or self.patrol is None
         ):
             raise ValueError("State metadata must match the audience snapshot boundary.")
+        if self.patrol is not None:
+            if self.patrol.current_decision is not None and (
+                self.patrol.current_decision.run_id != status.run_id
+                or self.patrol.current_decision.sim_time_ms > status.sim_time_ms
+            ):
+                raise ValueError(
+                    "Current patrol decision does not belong to this snapshot boundary."
+                )
+            if self.patrol.latest_stop_decision is not None and (
+                self.patrol.latest_stop_decision.run_id != status.run_id
+                or self.patrol.latest_stop_decision.sim_time_ms > status.sim_time_ms
+            ):
+                raise ValueError(
+                    "Latest stop patrol decision does not belong to this snapshot boundary."
+                )
         for capability, sample in self.observation.latest.items():
             if (
                 sample.run_id != status.run_id
