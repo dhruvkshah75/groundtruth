@@ -289,6 +289,34 @@ def control(send, state, action, **kwargs):
     return send(BASE + "/control", {"expected": identity(state), "action": action, **kwargs})
 
 
+def test_http_belief_demo_reload_and_reset_keep_unique_run_evidence(api):
+    send, _, _, _ = api
+    preset = "warehouse_belief_demo_v1"
+    legacy = load(send)
+    code, first, _ = send(BASE + "/load", {**load_body(legacy), "preset": preset})
+    assert code == 200, first
+    code, second, _ = send(BASE + "/load", {**load_body(first), "preset": preset})
+    assert code == 200, second
+    code, reset, _ = control(send, second, "reset")
+    assert code == 200, reset
+
+    runs = (first, second, reset)
+    assert len({state["run_id"] for state in runs}) == len(runs)
+    assert len(
+        {state["observation"]["latest"]["camera_detect"]["sample_id"] for state in runs}
+    ) == len(runs)
+    for state in runs:
+        assert state["audience"]["snapshot"]["scenario_id"] == preset
+        assert state["sim_time_ms"] == 0
+
+    initial_sample = first["observation"]["latest"]["camera_detect"]["sample_id"]
+    assert_error(
+        send(BASE + "/evidence", {"expected": identity(reset), "sample_id": initial_sample}),
+        400,
+        "invalid_request",
+    )
+
+
 def test_shared_http_examples():
     path = Path(__file__).parents[1] / "fixtures/phase_two/contracts.json"
     fixtures = json.loads(path.read_text())["valid"]

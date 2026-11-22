@@ -283,7 +283,7 @@ export type SimulationExportBundle = {
 };
 
 export type SimulationLoadRequest = {
-  "preset": "warehouse_inspection_v1";
+  "preset": "warehouse_inspection_v1" | "warehouse_belief_demo_v1";
   "expected": SimulationRunIdentity;
   "request_id": string;
 };

@@ -1,0 +1,50 @@
+{
+  "scenario_id": "warehouse_belief_demo_v1",
+  "config": {"duration_ms": 42000, "robot_speed_cm_s": 10},
+  "bounds": {"width_cm": 750, "height_cm": 450},
+  "initial_light": {"intensity": 1, "color_cast": "neutral"},
+  "sensor_availability": {},
+  "robot_pose": {
+    "x_cm": 120, "y_cm": 200, "direction": "east", "robot_id": "robot_1",
+    "location": "warehouse", "frame_of_reference": "warehouse_map"
+  },
+  "robot_radius_cm": 15,
+  "entities": [
+    {
+      "entity_id": "parcel_01", "kind": "parcel", "location": "warehouse",
+      "footprint": {"x_cm": 240, "y_cm": 240, "width_cm": 12, "height_cm": 12},
+      "intrinsic_color": "red", "solid": false, "opaque": false
+    },
+    {
+      "entity_id": "station_A", "kind": "station", "location": "warehouse",
+      "footprint": {"x_cm": 240, "y_cm": 240, "width_cm": 50, "height_cm": 40},
+      "intrinsic_color": "gray", "solid": false, "opaque": false
+    },
+    {
+      "entity_id": "station_B", "kind": "station", "location": "warehouse",
+      "footprint": {"x_cm": 500, "y_cm": 240, "width_cm": 50, "height_cm": 40},
+      "intrinsic_color": "gray", "solid": false, "opaque": false
+    },
+    {
+      "entity_id": "shelf_01", "kind": "shelf", "location": "warehouse",
+      "footprint": {"x_cm": 292, "y_cm": 282, "width_cm": 74, "height_cm": 20},
+      "intrinsic_color": "gray", "solid": true, "opaque": true
+    },
+    {
+      "entity_id": "cart_01", "kind": "cart", "location": "warehouse",
+      "footprint": {"x_cm": 465, "y_cm": 310, "width_cm": 30, "height_cm": 30},
+      "intrinsic_color": "orange", "solid": true, "opaque": true
+    }
+  ],
+  "routes": [
+    {"route_id": "route_A", "location": "warehouse", "start": {"x_cm": 120, "y_cm": 200}, "end": {"x_cm": 720, "y_cm": 200}}
+  ],
+  "patrol": [{"x_cm": 120, "y_cm": 200}, {"x_cm": 720, "y_cm": 200}],
+  "events": [
+    {"kind": "move", "at_ms": 6000, "sequence": 0, "entity_id": "parcel_01", "to": {"x_cm": 365, "y_cm": 355}, "duration_ms": 100},
+    {"kind": "move", "at_ms": 12000, "sequence": 0, "entity_id": "parcel_01", "to": {"x_cm": 390, "y_cm": 240}, "duration_ms": 100},
+    {"kind": "move", "at_ms": 19000, "sequence": 0, "entity_id": "parcel_01", "to": {"x_cm": 500, "y_cm": 240}, "duration_ms": 100},
+    {"kind": "move", "at_ms": 25000, "sequence": 0, "entity_id": "cart_01", "to": {"x_cm": 465, "y_cm": 200}, "duration_ms": 500},
+    {"kind": "move", "at_ms": 32000, "sequence": 0, "entity_id": "cart_01", "to": {"x_cm": 465, "y_cm": 310}, "duration_ms": 500}
+  ]
+}

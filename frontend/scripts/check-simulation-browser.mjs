@@ -475,14 +475,14 @@ try {
   await page.getByRole("heading", { name: "Warehouse inspection" }).waitFor();
   await page.getByText("Session · Second chat", { exact: true }).waitFor();
   const second = await post("Load preset", "load");
-  const expected = { run_id: second.run_id, generation: second.generation };
+  const runIdentity = (state) => ({ run_id: state.run_id, generation: state.generation });
   const secondApi = (path, data) => context.request.post(`${base}/api/simulation/${path}`, {
     headers: { "X-Session-ID": secondSession }, data,
   });
   let reading = second;
   async function stepTo(ms) {
     while (reading.sim_time_ms < ms) {
-      const response = await secondApi("control", { action: "step", expected });
+      const response = await secondApi("control", { action: "step", expected: runIdentity(reading) });
       assert.equal(response.status(), 200, await response.text());
       reading = await response.json();
     }
@@ -490,7 +490,7 @@ try {
   }
   async function locationAt(ms, status) {
     await stepTo(ms);
-    const response = await secondApi("evidence", { expected, entity_id: "parcel_01" });
+    const response = await secondApi("evidence", { expected: runIdentity(reading), entity_id: "parcel_01" });
     assert.equal(response.status(), 200, await response.text());
     const { location_assessment } = await response.json();
     assert.equal(location_assessment.verification_status, status);
@@ -659,28 +659,70 @@ try {
   await questions.getByRole("button", { name: "Where is parcel 01 now?" }).waitFor();
   assert.equal(await questions.locator(".conversation-turn").count(), 0);
 
-  const preset = page.getByLabel("Warehouse preset");
-  await preset.selectOption("warehouse_belief_demo_v1");
-  const [demoResponse] = await Promise.all([
-    page.waitForResponse((response) => response.url().endsWith("/api/simulation/load") && response.request().method() === "POST"),
-    button("Load preset").click(),
-  ]);
-  assert.equal(demoResponse.request().postDataJSON().preset, "warehouse_belief_demo_v1");
-  if (demoResponse.ok()) {
-    const demo = await demoResponse.json();
-    assert.equal(demo.audience.snapshot.scenario_id, "warehouse_belief_demo_v1");
-    await page.getByRole("heading", { name: "Warehouse belief demo" }).waitFor();
-    const reloaded = await post("Reload preset", "load");
-    assert.notEqual(reloaded.run_id, demo.run_id);
-    const restarted = await post("Reset run", "control");
-    assert.notEqual(restarted.run_id, reloaded.run_id);
-    assert.equal(restarted.audience.snapshot.scenario_id, "warehouse_belief_demo_v1");
-  } else {
-    assert.equal(demoResponse.status(), 400, await demoResponse.text());
-    await page.getByText("The warehouse belief demo is unavailable on this backend.", { exact: true }).first().waitFor();
-    assert.equal(await page.getByRole("heading", { name: "Warehouse inspection" }).count(), 1);
-    console.log("The demo selector sent the WD-06 ID. This backend serves only the inspection preset.");
+  await page.getByLabel("Warehouse preset").selectOption("warehouse_belief_demo_v1");
+  const demo = await post("Load preset", "load");
+  await page.getByRole("heading", { name: "Warehouse belief demo" }).waitFor();
+
+  async function rehearseDemo(run) {
+    assert.equal(run.audience.snapshot.scenario_id, "warehouse_belief_demo_v1");
+    assert.equal(run.sim_time_ms, 0);
+    reading = run;
+    await finalEvidence.getByText("Verified · Station A", { exact: true }).waitFor();
+    await locationDetails.click();
+    const atA = await locationAt(0, "verified");
+    await assertSighting(atA.current_sighting, "Verified · Station A");
+
+    const notVisible = await locationAt(6_500, "last_seen");
+    assert.equal(notVisible.last_sighting.station_id, "station_A");
+    assert.equal(notVisible.last_sighting.sim_time_ms, 6_000);
+    assert.notEqual(notVisible.last_sighting.sample_id, atA.current_sighting.sample_id);
+    await assertSighting(notVisible.last_sighting, "Current location unknown");
+    await liveRegion.locator("[data-entity=parcel_01][transform='translate(365,95)']").waitFor();
+    await finalEvidence.getByText(/Last seen · Station A/).waitFor();
+
+    const inAisle = await locationAt(12_500, "verified");
+    assert.equal(inAisle.current_location, null);
+    assert.notEqual(inAisle.current_sighting.sample_id, notVisible.last_sighting.sample_id);
+    await assertSighting(inAisle.current_sighting, "Verified · (390, 240) cm");
+    const atB = await locationAt(19_500, "verified");
+    assert.notEqual(atB.current_sighting.sample_id, inAisle.current_sighting.sample_id);
+    await assertSighting(atB.current_sighting, "Verified · Station B");
+
+    await stepTo(28_500);
+    assert.equal(reading.patrol.state, "blocked");
+    const stop = reading.patrol.latest_stop_decision;
+    assert.ok(stop?.sensor_sample_id);
+    await patrol.getByRole("heading", { name: "Blocked", exact: true }).waitFor();
+    await stepTo(33_000);
+    assert.equal(reading.patrol.state, "moving");
+    await patrol.getByRole("button", { name: "Open prior stop LiDAR sample" }).press("Enter");
+    await patrol.getByText(stop.sensor_sample_id, { exact: true }).waitFor();
+    const current = await locationAt(33_000, "verified");
+    await assertSighting(current.current_sighting, "Verified · Station B");
+
+    await questionInput.fill("Where is parcel_01 now?");
+    const [answerResponse] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith("/api/ask") && response.request().method() === "POST"),
+      questions.getByRole("button", { name: "Ask", exact: true }).click(),
+    ]);
+    assert.equal(answerResponse.status(), 200, await answerResponse.text());
+    const { answer } = await answerResponse.json();
+    assert.equal(answer.simulation_evidence.location_assessment.current_sighting.sample_id, current.current_sighting.sample_id);
+    return stop.sensor_sample_id;
   }
+
+  const firstStop = await rehearseDemo(demo);
+  const reloaded = await post("Reload preset", "load");
+  assert.notEqual(reloaded.run_id, demo.run_id);
+  await patrol.getByText(firstStop, { exact: true }).waitFor({ state: "detached" });
+  assert.notEqual(await rehearseDemo(reloaded), firstStop);
+  const restarted = await post("Reset run", "control");
+  assert.notEqual(restarted.run_id, reloaded.run_id);
+  assert.equal(restarted.audience.snapshot.scenario_id, "warehouse_belief_demo_v1");
+  assert.equal(restarted.sim_time_ms, 0);
+  await finalEvidence.getByText("Verified · Station A", { exact: true }).waitFor();
+  const previousSample = await secondApi("evidence", { expected: runIdentity(restarted), sample_id: firstStop });
+  assert.equal(previousSample.status(), 400);
 
   console.log("Simulation browser checks passed on the real backend at 1440, 1024, 768 and 390px.");
 } finally {

@@ -524,16 +524,10 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
 
   function load() {
     const request_id = crypto.randomUUID();
-    void run("Loading warehouse…", async (expected, options) => {
-      try {
-        return { state: await api.loadSimulation({ preset, expected, request_id }, options), message: "Warehouse loaded." };
-      } catch (error) {
-        if (preset === "warehouse_belief_demo_v1" && error instanceof ApiRequestError && error.code === "invalid_request") {
-          throw new Error("The warehouse belief demo is unavailable on this backend.");
-        }
-        throw error;
-      }
-    });
+    void run("Loading warehouse…", async (expected, options) => ({
+      state: await api.loadSimulation({ preset, expected, request_id }, options),
+      message: "Warehouse loaded.",
+    }));
   }
 
   function disrupt(disruption: PresenterDisruption) {

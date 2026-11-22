@@ -66,7 +66,7 @@ from src.sensorimotor.world_models import (
 )
 from src.web.session_store import SessionStore
 from src.web.simulation_export import SimulationExporter, SimulationExportTarget
-from src.web.simulation_presets import warehouse_preset
+from src.web.simulation_presets import warehouse_belief_demo_preset, warehouse_preset
 from src.web.simulation_runtime import (
     MAX_PRESENTER_INPUTS,
     SimulationRuntime,
@@ -1437,7 +1437,6 @@ class AgentService:
         self, session_id: str, request: SimulationLoadRequest
     ) -> SimulationStateResponse:
         key = _canonical_session_id(session_id)
-        scenario = warehouse_preset()
         session = self.get_session(key)
         with session.lock:
             session.require_active()
@@ -1451,7 +1450,12 @@ class AgentService:
             else:
                 session.require_simulation_identity(request.expected)
                 try:
-                    session.load_simulation(scenario, self._epoch_now())
+                    preset = (
+                        warehouse_belief_demo_preset
+                        if request.preset == "warehouse_belief_demo_v1"
+                        else warehouse_preset
+                    )
+                    session.load_simulation(preset(), self._epoch_now())
                 except Exception as exc:
                     raise SimulationUnavailable("Could not initialize the simulation.") from exc
                 session._load_request = request
