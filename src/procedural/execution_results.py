@@ -12,8 +12,6 @@ from src.contracts import (
     StoredFact,
     StoredObservationSample,
 )
-
-
 from src.contracts.simulation_api import PatrolDecisionSummary
 from src.procedural.temporal_belief_ingestion import LocationAssessment
 

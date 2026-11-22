@@ -73,7 +73,7 @@ class PlanBuilder:
                     intent=intent,
                     read_patrol_stop=True,
                     current_state_verifiable=False,
-                    plan_reason="Explain a recorded patrol stop from its original decision and evidence.",
+                    plan_reason="Read the original patrol stop decision and evidence.",
                 )
             )
         if intent.intent == "current_route_status":
@@ -407,7 +407,7 @@ class PlanBuilder:
                         run_id=run_id, entity_id=entity, as_of_sim_time_ms=warehouse_time_ms
                     ),
                     current_state_verifiable=True,
-                    plan_reason="Read the run-scoped parcel assessment from the observation ledger.",
+                    plan_reason="Assess the parcel location from the run observation ledger.",
                 )
             )
 
@@ -487,7 +487,7 @@ class PlanBuilder:
                             mode="latest",
                             capability="camera_detect",
                         ),
-                        purpose="Query latest camera sensor status to verify simulation time horizon.",
+                        purpose="Query latest camera status for the simulation time horizon.",
                     )
                 )
         elif mode == "history" or (mode == "changes" and not warehouse_run):

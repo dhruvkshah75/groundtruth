@@ -23,7 +23,6 @@ from src.procedural.execution_results import (
     PlanExecutionResult,
     TemporalObservationExecutionResult,
 )
-
 from src.procedural.temporal_belief_ingestion import LocationAssessment
 
 LocationReader = Callable[[UUID, str, int], LocationAssessment]

@@ -31,8 +31,8 @@ from src.procedural.intent_planner import IntentPlanner, IntentPlannerOutcome
 from src.procedural.intent_provider import IntentProvider, IntentProviderUnavailableError
 from src.procedural.plan_builder import PlanBuilder
 from src.procedural.plan_executor import EnvironmentInterface, LocationReader
-from src.procedural.temporal_belief_ingestion import LocationAssessment
 from src.procedural.rule_based_provider import RuleBasedIntentProvider
+from src.procedural.temporal_belief_ingestion import LocationAssessment
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import RobotState, WorldState
 
@@ -433,7 +433,15 @@ class GroundedAgent:
         )
         evaluation = deepcopy(eval_outcome)
         payload = deepcopy(tool_result)
-        return lambda: _explain(response, provider, evaluation, payload)
+        request = getattr(plan_result, "intent", None)
+        preserve_citations = request is not None and (
+            request.intent == "explain_patrol_stop"
+            or assessment is not None
+            or (location_reader is not None and request.mode in ("at_time", "changes"))
+        )
+        return lambda: _explain(
+            response, provider, evaluation, payload, preserve_citations=preserve_citations
+        )
 
 
 def _explain(
@@ -441,6 +449,8 @@ def _explain(
     provider: IntentProvider | None,
     eval_outcome: EpistemicEvaluation,
     tool_result: dict[str, Any],
+    *,
+    preserve_citations: bool = False,
 ) -> AgentResponse:
     """Run synthesis and review with request-owned evidence only."""
     trace = response.react_trace
@@ -480,9 +490,14 @@ def _explain(
                     tool_call_id=tool_call_id,
                     tool_result=tool_result,
                 )
-            exact = validate_grounded_response(grounded_text, eval_outcome)
+            exact = (
+                (grounded_text or "").strip() == eval_outcome.explanation
+                if preserve_citations
+                else validate_grounded_response(grounded_text, eval_outcome)
+            )
             reviewed = (
-                bool(grounded_text and grounded_text.strip())
+                not preserve_citations
+                and bool(grounded_text and grounded_text.strip())
                 and not exact
                 and hasattr(provider, "verify_grounded_explanation")
                 and provider.verify_grounded_explanation(question, tool_result, grounded_text)
@@ -502,7 +517,9 @@ def _explain(
                 final_answer = eval_outcome.explanation
                 explanation_source = "deterministic_fallback"
         except IntentProviderUnavailableError:
-            raise
+            if not preserve_citations:
+                raise
+            explanation_source = "deterministic_fallback"
         except Exception as exc:
             if history_query:
                 raise IntentProviderUnavailableError(

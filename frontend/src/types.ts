@@ -1,4 +1,9 @@
-import type { PatrolDecisionSummary, SimulationStateResponse, StoredObservationSample } from "./simulationTypes";
+import type {
+  BoundingBox,
+  PatrolDecisionSummary,
+  SimulationStateResponse,
+  StoredObservationSample,
+} from "./simulationTypes";
 
 export type SpatialContext = {
   location: string | null;
@@ -29,7 +34,7 @@ export type LocationSighting = {
   frame_of_reference: string;
   position: { x_cm: number; y_cm: number };
   station_id: string | null;
-  bounding_box: Record<string, number> | null;
+  bounding_box: BoundingBox | Record<string, number> | null;
   apparent_color: string | null;
 };
 

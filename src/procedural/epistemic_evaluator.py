@@ -656,7 +656,10 @@ class EpistemicEvaluator:
         if not changes:
             return EpistemicEvaluation(
                 status="no_data",
-                explanation=f"No camera-backed location belief revision was recorded for {entity} by {result.as_of_sim_time_ms} ms.",
+                explanation=(
+                    f"No camera-backed location belief revision was recorded for {entity} "
+                    f"by {result.as_of_sim_time_ms} ms."
+                ),
             )
 
         changes.sort(key=lambda change: (change[3].sim_time_ms, change[3].sample_sequence))
@@ -669,7 +672,8 @@ class EpistemicEvaluator:
                 f"Revision {event.event_id} ({event.policy_rule}): {event.reason.rstrip('.')}."
             )
         explanation.append(
-            "The sightings do not establish the route, exact time of the move, or cause of relocation."
+            "The sightings do not establish the route, exact time of the move, "
+            "or cause of relocation."
         )
         return EpistemicEvaluation(
             status="verified",
@@ -735,25 +739,28 @@ class EpistemicEvaluator:
             place = f"{sighting.station_id} ({coordinates})" if sighting.station_id else coordinates
             capture = f"{sighting.sim_time_ms} ms (camera sample ID: {sighting.sample_id})"
 
-        if assessment.current_sighting is not None and sighting is not None:
-            if plan_result.intent.mode == "last_seen":
-                answer = f"{as_of}, the last confirmed sighting of {entity} was at {place}, captured at {capture}."
-            else:
-                answer = f"{as_of}, {entity} was observed at {coordinates}, captured at {capture}."
-                if sighting.station_id:
-                    answer += f" The camera verifies station {sighting.station_id}."
-            if assessment.uncertainty_reason:
-                answer += f" {assessment.uncertainty_reason}"
+        if plan_result.intent.mode == "last_seen" and sighting is not None:
+            answer = (
+                f"{as_of}, the last confirmed sighting of {entity} was at {place}, "
+                f"captured at {capture}."
+            )
+            if assessment.current_sighting is None:
+                answer += " The current location cannot be verified."
+            status = "verified"
+        elif assessment.current_sighting is not None and sighting is not None:
+            answer = f"{as_of}, {entity} was observed at {coordinates}, captured at {capture}."
+            if sighting.station_id:
+                answer += f" The camera verifies station {sighting.station_id}."
             status = "verified"
         else:
             answer = f"{as_of}, the current location of {entity} cannot be verified."
             if sighting is not None:
                 answer += f" Last confirmed sighting: {place}, captured at {capture}."
-            if assessment.lost_verification_reason:
-                answer += f" {assessment.lost_verification_reason}"
             status = (
                 "uncertain" if sighting is not None or assessment.earlier_station else "no_data"
             )
+        if assessment.uncertainty_reason:
+            answer += f" {assessment.uncertainty_reason}"
 
         if assessment.earlier_station and (
             sighting is None or sighting.station_id != assessment.earlier_station
