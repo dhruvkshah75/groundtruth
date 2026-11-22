@@ -31,6 +31,7 @@
 - [Session simulation runtime (P2-07)](phase-two/Session_Runtime.md) - independent warehouse scheduling, evidence capture, checkpoint recovery, and service integration.
 - [Simulation HTTP API (P2-09)](phase-two/Simulation_API.md) - presenter controls, live polling, and the replay exporter interface.
 - [Simulation workspace (P2-10)](phase-two/Simulation_Workspace.md) - live warehouse map, presenter controls, and evidence panels.
+- [Warehouse belief demo recording runbook (WD-06)](phase-two/Warehouse_Belief_Demo_Script.md) - three-minute shot list, exact simulation checkpoints, and evidence-backed questions.
 - [Belief timeline and questions (P2-11)](phase-two/Belief_Timeline_UI.md) - run-scoped evidence, stored belief graph, audit timeline and temporal questions.
 - [Run export, replay and epistemic evaluation (P2-12 / WD-05)](phase-two/Replay_and_Evaluation.md) - versioned export/replay, ten epistemic scenarios, dual execution modes, and simulation export integration.
 - [Recorded robotics sensor adapter (P2-13)](phase-two/Robotics_Sensor_Adapter.md) - recorded robotics telemetry adapter, coordinate transforms, clock calibration, idempotence, and temporal ingestion.

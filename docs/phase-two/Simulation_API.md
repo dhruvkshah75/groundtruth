@@ -26,7 +26,7 @@ session. An unloaded session has `run_id: null` and starts at generation zero.
 | Method and path | Request | Successful response |
 | --- | --- | --- |
 | `GET /api/simulation/state` | Session header | `SimulationStateResponse`, including `pending` before load. |
-| `POST /api/simulation/load` | `preset: "warehouse_inspection_v1"`, `expected`, UUID `request_id` | Fresh run paused at zero with initial pose, camera, LiDAR and light acquisitions. |
+| `POST /api/simulation/load` | `preset` (`warehouse_inspection_v1` or `warehouse_belief_demo_v1`), `expected`, UUID `request_id` | Fresh run paused at zero with initial pose, camera, LiDAR and light acquisitions. |
 | `POST /api/simulation/control` | `expected`, `action`, and `playback_rate` for `set_rate` | State captured after applying the command. |
 | `POST /api/simulation/disrupt` | `expected`, UUID `request_id`, `disruption`, optional `at_ms` | `{ event, state }` with the accepted engine event and coherent state. |
 | `GET /api/simulation/export` | Session header | Version 1 JSON attachment when an exporter is wired. |
@@ -42,7 +42,7 @@ and its script, and retains the selected playback rate. A new load starts at
 | `disruption.kind` | Fields and behavior |
 | --- | --- |
 | `relocate_parcel` | `entity_id` of a preset parcel, `to: { x_cm, y_cm }`, and tick-aligned `duration_ms`. Uses linear motion to a footprint-contained destination. |
-| `cart_block` / `cart_clear` | No additional fields. Moves `cart_01` over 1,000 simulation ms to (100, 470) / (180, 470) in warehouse-map centimeters. |
+| `cart_block` / `cart_clear` | No additional fields. Moves `cart_01` to the loaded preset's blocking or clearing position. Warehouse inspection uses (100, 470) / (180, 470) cm over 1,000 ms. Warehouse belief demo uses (465, 200) / (465, 310) cm over 500 ms. |
 | `lighting` | `color_cast` of `neutral` or `yellow`, and numeric `intensity` from 0 to 1 inclusive. |
 | `sensor_availability` | `capability` of `camera_detect` or `lidar_scan`, and boolean `available`. |
 
