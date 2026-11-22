@@ -367,7 +367,7 @@ class ExternalRoboticsRecord(BaseModel):
 
         # Validate capability payloads are not missing
         if self.capability == "camera_detect":
-            if self.detections is None and self.measurements is None:
+            if self.detections is None:
                 raise ValueError(
                     "camera_detect record requires 'detections' list (pass [] for empty scan)"
                 )

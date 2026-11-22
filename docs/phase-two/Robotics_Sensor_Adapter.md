@@ -47,7 +47,7 @@ It translates external telemetry messages into typed, validated [P2-01 `Observat
 - **Protocol Conformance:** Conforms to the `SensorSource` protocol:
   - `observe(request)`: Returns observation evidence without advancing simulation time or modifying the cursor.
   - `sample(request)`: Yields timestamped, validated `ObservationSample` envelopes, advancing the cursor per controlled step.
-- **Deterministic and Idempotent:** Sample and observation IDs are derived deterministically using `uuid5(NAMESPACE_DNS, ...)` from the recording ID and message ID. Re-ingesting the same recorded dataset produces identical IDs and facts, preventing duplicate entries.
+- **Deterministic and Idempotent:** Sample and observation IDs derive from the recording ID and message ID; targeted camera views additionally include the target. Replaying the same request produces identical IDs, while different views can be stored separately.
 
 ---
 
@@ -74,6 +74,7 @@ Defined in `src/sensorimotor/robotics_adapter_models.py`, `ExternalRoboticsRecor
 | `detections` | `list[ExternalDetection] \| None` | Bounding boxes and positions for visual objects. Pass `[]` for an explicit empty scan; `None` represents missing data. |
 | `lidar_measurement` | `ExternalLidarMeasurement \| None` | Front obstacle scan data (`lidar_scan`). Cannot be omitted on available scans (missing data is not treated as clear). |
 | `light_measurement` | `ExternalLightMeasurement \| None` | Ambient light intensity and color cast (`ambient_light`). |
+| `measurements` | `dict \| None` | Alternative LiDAR or light payload; all required measurement fields must be present. Camera records use `detections`. |
 | `confidence` | `float \| None` | Detection confidence between `0.0` and `1.0`. **Must be explicitly provided on available records; cannot default to 1.0.** |
 | `is_unavailable` | `bool` | Set to `true` when the sensor hardware failed or was blinded. |
 | `unavailable_reason` | `str \| None` | `"sensor_unavailable"`, `"target_not_visible"`, or `"unsupported_capability"`. |
@@ -167,6 +168,13 @@ with MemoryRepository(":memory:") as repo:
 ```
 
 ---
+
+## Verification
+
+After merging main into the adapter branch, `python -m pytest -q` passed 725 tests,
+and `ruff check .` and `ruff format --check .` passed using the existing project
+environment. The adapter unit and ingestion tests cover playback, malformed
+payloads, frame validation and replay of targeted camera views.
 
 ## 7. External Robotics Team Handoff Checklist
 

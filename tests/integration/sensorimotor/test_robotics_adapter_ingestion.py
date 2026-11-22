@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.contracts.models import FactQuery
+from src.contracts.models import FactQuery, ObservationRequest
 from src.contracts.simulation import (
     TemporalObservationQuery,
 )
@@ -141,3 +141,19 @@ def test_idempotent_reingestion() -> None:
 
         final_facts = repo.query_facts(FactQuery(active_only=True))
         assert len(initial_facts) == len(final_facts)
+
+
+def test_distinct_camera_views_are_stored_and_replay_idempotently() -> None:
+    adapter = RecordedRoboticsSensorAdapter.from_file(FIXTURE_PATH, auto_advance=False)
+    broad = adapter.sample()
+    request = ObservationRequest(capability="camera_detect", target="parcel_01")
+    targeted = adapter.sample(request)
+    assert broad.sample_id != targeted.sample_id
+    assert broad.result.observation_id != targeted.result.observation_id
+    assert targeted == adapter.sample(request)
+
+    with MemoryRepository(":memory:") as repo:
+        service = TemporalBeliefIngestionService(GraphSyncedRepository.create(repo), repo)
+        assert service.ingest_sample(broad).status != "rejected"
+        assert service.ingest_sample(targeted).status != "rejected"
+        assert service.ingest_sample(targeted).status == "duplicate_ignored"

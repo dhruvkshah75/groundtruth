@@ -496,6 +496,14 @@ def test_step_bound_playback_does_not_search_future(
     assert sample0.sample_sequence == 0
     assert sample0.sim_time_ms == 0
 
+    # The LiDAR record remains available until it is consumed.
+    assert adapter.current_index == 0
+    lidar = adapter.sample(
+        ObservationRequest(capability="lidar_scan", parameters={"direction": "front"})
+    )
+    assert isinstance(lidar.result, SensorObservation)
+    assert lidar.sample_sequence == 0
+
     # Step 1 is now reached; camera is available here
     sample1 = adapter.sample(req_cam)
     assert isinstance(sample1.result, SensorObservation)
@@ -609,6 +617,43 @@ def test_missing_data_rejected_not_defaulted(
     sample = adapter.translate_record(cam_empty)
     scan = CameraScan.model_validate(sample.result.measurements)
     assert len(scan.objects) == 0
+
+    with pytest.raises(ValueError, match="camera_detect record requires 'detections' list"):
+        ExternalRoboticsRecord.model_validate(
+            {**cam_empty.model_dump(), "detections": None, "measurements": {"objects": []}}
+        )
+
+    light_data = {
+        **cam_empty.model_dump(),
+        "capability": "ambient_light",
+        "detections": None,
+        "measurements": {},
+    }
+    light_record = ExternalRoboticsRecord.model_validate(light_data)
+    with pytest.raises(ValueError):
+        adapter.translate_record(light_record)
+    light_data["measurements"] = {"intensity": 0.5}
+    with pytest.raises(ValueError):
+        adapter.translate_record(ExternalRoboticsRecord.model_validate(light_data))
+    light_data["measurements"] = {"intensity": 0.5, "color_cast": "yellow"}
+    light_record = ExternalRoboticsRecord.model_validate(light_data)
+    assert adapter.translate_record(light_record).result.measurements == light_data["measurements"]
+
+    lidar_record = ExternalRoboticsRecord.model_validate(
+        {
+            **cam_empty.model_dump(),
+            "capability": "lidar_scan",
+            "detections": None,
+            "lidar_measurement": {"detected": False},
+        }
+    )
+    pose_record = ExternalRoboticsRecord.model_validate(
+        {**cam_empty.model_dump(), "capability": "robot_pose", "detections": None}
+    )
+    for record in (cam_empty, light_record, lidar_record, pose_record):
+        unknown_frame = record.model_copy(update={"source_frame": "unknown"})
+        with pytest.raises(UnknownFrameError):
+            adapter.translate_record(unknown_frame)
 
     # 5. Missing camera detections (None) raises validation error
     with pytest.raises(ValueError, match="camera_detect record requires 'detections' list"):

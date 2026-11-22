@@ -35,6 +35,7 @@ from src.contracts.simulation import (
 from src.sensorimotor.robotics_adapter_models import (
     ClockCalibration,
     CorruptedRecordError,
+    ExternalLightMeasurement,
     ExternalRoboticsRecord,
     TransformCalibration,
     UnknownFrameError,
@@ -227,6 +228,10 @@ class RecordedRoboticsSensorAdapter(SensorSource):
                     f"record capability '{cap}'"
                 )
 
+        if request.target is not None:
+            sample_id = uuid5(sample_id, request.target)
+            obs_id = uuid5(obs_id, request.target)
+
         # 5. Handle Unavailable / Sensor Failure State
         if record.is_unavailable:
             reason = record.unavailable_reason or "sensor_unavailable"
@@ -261,12 +266,14 @@ class RecordedRoboticsSensorAdapter(SensorSource):
                 f"Record '{record.message_id}' has missing confidence; cannot fabricate certainty"
             )
 
+        self._tf_cal.transform_point(Point(x_cm=0, y_cm=0), record.source_frame, observer_pose)
+
         # 7. Extract capability-specific measurements
         lighting_cast = "neutral"
         measurements: dict[str, Any]
 
         if cap == "camera_detect":
-            if record.detections is None and record.measurements is None:
+            if record.detections is None:
                 raise CorruptedRecordError(
                     f"Camera record '{record.message_id}' is missing detection data; "
                     "distinguish missing payload from explicit empty scan []"
@@ -360,8 +367,9 @@ class RecordedRoboticsSensorAdapter(SensorSource):
                 intensity = record.light_measurement.intensity
                 lighting_cast = record.light_measurement.color_cast
             elif record.measurements is not None:
-                intensity = float(record.measurements.get("intensity", 1.0))
-                lighting_cast = str(record.measurements.get("color_cast", "neutral"))
+                light = ExternalLightMeasurement.model_validate(record.measurements)
+                intensity = light.intensity
+                lighting_cast = light.color_cast
             else:
                 raise CorruptedRecordError(
                     f"Ambient light record '{record.message_id}' missing light_measurement; "
@@ -441,16 +449,12 @@ class RecordedRoboticsSensorAdapter(SensorSource):
             raise IndexError("Recorded robotics stream exhausted; no further records available")
 
         record = self._records[self._cursor]
-        if self._auto_advance:
-            self._cursor += 1
-
         if request is not None and record.capability != request.capability:
             sim_time_ms, captured_at = self._clock_cal.calculate_sim_time(
                 record.captured_timestamp_utc, record.captured_time_rel_ms
             )
-            sample_id, _ = derive_deterministic_ids(
-                record.recording_id, f"mismatch_{record.sequence}_{request.capability}"
-            )
+            sample_id, _ = derive_deterministic_ids(record.recording_id, record.message_id)
+            sample_id = uuid5(sample_id, request.model_dump_json())
             raw_pose = record.robot_pose or self._default_pose
             if raw_pose is None:
                 raise CorruptedRecordError(
@@ -476,7 +480,10 @@ class RecordedRoboticsSensorAdapter(SensorSource):
                 ),
             )
 
-        return self.translate_record(record, request=request)
+        sample = self.translate_record(record, request=request)
+        if self._auto_advance:
+            self._cursor += 1
+        return sample
 
     # -------------------------------------------------------------------------
     # Stream / Batch Playback
