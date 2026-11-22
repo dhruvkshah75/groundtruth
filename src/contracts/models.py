@@ -344,6 +344,7 @@ class IntentRequest(BaseModel):
 
     intent: Literal[
         "current_route_status",
+        "explain_patrol_stop",
         "current_object_perception",
         "historical_fact_lookup",
         "audit_explanation",
@@ -390,6 +391,10 @@ class IntentRequest(BaseModel):
                 raise ValueError(f"mode is not allowed for {self.intent}")
             if self.at_sim_time_ms is not None:
                 raise ValueError(f"at_sim_time_ms is not allowed for {self.intent}")
+        if self.intent == "explain_patrol_stop" and (
+            self.entity_mentions or self.source_agent_mentions or self.run_id is not None
+        ):
+            raise ValueError("explain_patrol_stop takes no arguments and uses the active run")
         return self
 
 

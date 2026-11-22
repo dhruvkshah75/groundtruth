@@ -14,6 +14,7 @@ from src.contracts import (
     StoredObservationSample,
     TemporalObservationQuery,
 )
+from src.contracts.simulation_api import PatrolDecisionSummary
 from src.procedural.execution_plan import ExecutionPlan
 from src.procedural.execution_results import (
     AuditExecutionResult,
@@ -108,12 +109,43 @@ class PlanExecutor:
             for fact in target_facts:
                 trails[fact.fact_id] = self._memory.get_audit_chain(fact.fact_id)
 
+            cited_samples = {}
+            if audit_op.as_of_sim_time_ms is not None:
+                for trail in trails.values():
+                    output_ids = {
+                        fact_id
+                        for event in trail.events
+                        if event.event_type == "belief_revision"
+                        for fact_id in event.output_fact_ids
+                    }
+                    for fact in trail.facts:
+                        raw_id = fact.evidence.get("sample_id")
+                        if fact.fact_id not in output_ids or not isinstance(raw_id, str):
+                            continue
+                        try:
+                            sample_id = UUID(raw_id)
+                        except ValueError:
+                            continue
+                        if sample_id in cited_samples:
+                            continue
+                        sample = self._memory.get_observation_sample(sample_id)
+                        if (
+                            sample is not None
+                            and sample.run_id == audit_op.run_id
+                            and sample.sim_time_ms <= audit_op.as_of_sim_time_ms
+                            and sample.request.capability == "camera_detect"
+                            and isinstance(sample.result, SensorObservation)
+                        ):
+                            cited_samples[sample_id] = sample
+
             audit_results.append(
                 AuditExecutionResult(
                     operation_index=idx,
                     purpose=audit_op.purpose,
                     run_id=audit_op.run_id,
                     trails=trails,
+                    as_of_sim_time_ms=audit_op.as_of_sim_time_ms,
+                    samples=list(cited_samples.values()),
                 )
             )
 
@@ -140,6 +172,21 @@ class PlanExecutor:
                         location_samples.append(sample)
             approved_operations.append("location_assessment: Read applicable camera evidence.")
 
+        stop: PatrolDecisionSummary | None = None
+        stop_sample = None
+        if plan.read_patrol_stop:
+            stop = getattr(sensors, "latest_stop_decision_summary", None)
+            if stop is not None and stop.sensor_sample_id is not None:
+                sample = self._memory.get_observation_sample(stop.sensor_sample_id)
+                if (
+                    sample is not None
+                    and sample.run_id == stop.run_id
+                    and sample.sim_time_ms == stop.sensor_sim_time_ms
+                    and sample.request.capability == "lidar_scan"
+                ):
+                    stop_sample = sample
+            approved_operations.append("patrol_stop: Read the recorded decision and cited LiDAR.")
+
         # 5. ActionPlaceholder is ignored as per instructions.
         return PlanExecutionResult(
             intent=plan.intent,
@@ -151,6 +198,8 @@ class PlanExecutor:
             observation_results=observation_results,
             temporal_results=temporal_results,
             audit_results=audit_results,
+            patrol_stop=stop,
+            patrol_stop_sample=stop_sample,
             location_assessment=assessment,
             location_samples=location_samples,
             approved_operations=approved_operations,

@@ -81,6 +81,7 @@ class AuditChainOperation(BaseModel):
     fact_ids_from_memory_operation: int = Field(ge=0)
     purpose: str = Field(min_length=1)
     run_id: UUID | None = None
+    as_of_sim_time_ms: int | None = Field(default=None, ge=0)
 
 
 class ActionPlaceholder(BaseModel):
@@ -122,6 +123,7 @@ class ExecutionPlan(BaseModel):
     observation_operations: list[ObservationOperation] = Field(default_factory=list)
     temporal_operations: list[TemporalObservationOperation] = Field(default_factory=list)
     audit_operations: list[AuditChainOperation] = Field(default_factory=list)
+    read_patrol_stop: bool = False
     location_operation: LocationAssessmentOperation | None = None
     action_placeholder: ActionPlaceholder | None = None
     current_state_verifiable: bool

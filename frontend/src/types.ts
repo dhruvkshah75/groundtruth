@@ -1,4 +1,4 @@
-import type { SimulationStateResponse, StoredObservationSample } from "./simulationTypes";
+import type { PatrolDecisionSummary, SimulationStateResponse, StoredObservationSample } from "./simulationTypes";
 
 export type SpatialContext = {
   location: string | null;
@@ -158,6 +158,7 @@ export type AgentResponse = {
     sim_time_ms: number;
     request_id: string;
     location_assessment?: LocationAssessment;
+    patrol_stop?: PatrolDecisionSummary;
   };
 };
 

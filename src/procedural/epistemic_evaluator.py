@@ -18,6 +18,7 @@ from uuid import UUID
 from src.contracts import (
     AuditEvent,
     AuditTrail,
+    CameraScan,
     FactAssertion,
     FactQuery,
     ObservationUnavailable,
@@ -110,8 +111,14 @@ class EpistemicEvaluator:
                 explanation=f"Request could not be planned: {reason}",
             )
 
+        if plan_result.intent and plan_result.intent.intent == "explain_patrol_stop":
+            return self._evaluate_patrol_stop(plan_result)
+
         if plan_result.location_assessment is not None:
             return self._evaluate_location_assessment(plan_result)
+
+        if plan_result.audit_results and plan_result.audit_results[0].as_of_sim_time_ms is not None:
+            return self._evaluate_location_revisions(plan_result)
 
         # 2. Handle temporal object location queries (Issue #32)
         if getattr(plan_result, "temporal_results", None):
@@ -584,6 +591,136 @@ class EpistemicEvaluator:
         return telemetry
 
     @staticmethod
+    def _evaluate_location_revisions(plan_result: PlanExecutionResult) -> EpistemicEvaluation:
+        result = plan_result.audit_results[0]
+        entity = plan_result.resolved_entity_ids[0]
+        samples = {str(sample.sample_id): sample for sample in result.samples}
+        changes: list[tuple[StoredFact, StoredFact, AuditEvent, StoredObservationSample, str]] = []
+        seen_events: set[UUID] = set()
+        scoped_trails: list[AuditTrail] = []
+        for trail in result.trails.values():
+            facts = {
+                fact.fact_id: fact
+                for fact in trail.facts
+                if fact.subject == entity
+                and fact.predicate == "located_at"
+                and fact.context.extra_context.get("run_id") == str(result.run_id)
+            }
+            trail_events = []
+            for event in trail.events:
+                if event.event_type != "belief_revision" or event.event_id in seen_events:
+                    continue
+                if len(event.output_fact_ids) != 1:
+                    continue
+                successor_id = event.output_fact_ids[0]
+                successor = facts.get(successor_id)
+                predecessor = next(
+                    (
+                        facts[fid]
+                        for fid in event.input_fact_ids
+                        if fid in facts and fid != successor_id
+                    ),
+                    None,
+                )
+                if successor is None or predecessor is None:
+                    continue
+                sample = samples.get(str(successor.evidence.get("sample_id")))
+                if sample is None or not isinstance(sample.result, SensorObservation):
+                    continue
+                scan = CameraScan.model_validate(sample.result.measurements)
+                detection = next((obj for obj in scan.objects if obj.object_id == entity), None)
+                if detection is None:
+                    continue
+                point = detection.position
+                coordinates = (
+                    f"x={point.x_cm:g} cm, y={point.y_cm:g} cm in {detection.frame_of_reference}"
+                )
+                changes.append((predecessor, successor, event, sample, coordinates))
+                trail_events.append(event)
+                seen_events.add(event.event_id)
+            if trail_events:
+                related_ids = {
+                    fid
+                    for event in trail_events
+                    for fid in event.input_fact_ids + event.output_fact_ids
+                }
+                scoped_trails.append(
+                    trail.model_copy(
+                        update={
+                            "facts": [fact for fid, fact in facts.items() if fid in related_ids],
+                            "events": trail_events,
+                        }
+                    )
+                )
+
+        if not changes:
+            return EpistemicEvaluation(
+                status="no_data",
+                explanation=f"No camera-backed location belief revision was recorded for {entity} by {result.as_of_sim_time_ms} ms.",
+            )
+
+        changes.sort(key=lambda change: (change[3].sim_time_ms, change[3].sample_sequence))
+        explanation = [f"Observed transition for {entity}:"]
+        for prior, successor, event, sample, coordinates in changes:
+            explanation.append(
+                f"The prior location belief was {prior.object}. "
+                f"A camera sighting at {sample.sim_time_ms} ms placed {entity} at "
+                f"{successor.object} ({coordinates}, sample ID: {sample.sample_id}). "
+                f"Revision {event.event_id} ({event.policy_rule}): {event.reason.rstrip('.')}."
+            )
+        explanation.append(
+            "The sightings do not establish the route, exact time of the move, or cause of relocation."
+        )
+        return EpistemicEvaluation(
+            status="verified",
+            explanation=" ".join(explanation),
+            sensor_telemetry=EpistemicEvaluator._sample_telemetry(
+                [change[3] for change in changes]
+            ),
+            audit_trails=scoped_trails,
+            audit_events=[change[2] for change in changes],
+        )
+
+    @staticmethod
+    def _evaluate_patrol_stop(plan_result: PlanExecutionResult) -> EpistemicEvaluation:
+        decision = plan_result.patrol_stop
+        if decision is None:
+            return EpistemicEvaluation(
+                status="no_data", explanation="No patrol stop was recorded for this run."
+            )
+
+        state = decision.state.replace("_", " ")
+        explanation = (
+            f"The robot withheld patrol motion at {decision.sim_time_ms} ms "
+            f"({state}). The recorded policy reason was {decision.policy_reason}."
+        )
+        sample = plan_result.patrol_stop_sample
+        if sample is not None:
+            explanation += (
+                f" LiDAR sample ID: {sample.sample_id}, captured at {sample.sim_time_ms} ms."
+            )
+            if isinstance(sample.result, ObservationUnavailable):
+                explanation += f" LiDAR was unavailable ({sample.result.reason})."
+        elif decision.sensor_sample_id is not None:
+            explanation += (
+                f" The decision cites LiDAR sample {decision.sensor_sample_id} "
+                f"at {decision.sensor_sim_time_ms} ms, whose ledger record is unavailable."
+            )
+        else:
+            explanation += " This decision has no recorded LiDAR sample."
+        if decision.measured_distance_cm is not None:
+            explanation += f" LiDAR measured {decision.measured_distance_cm:g} cm."
+        if decision.computed_clearance_cm is not None:
+            explanation += (
+                f" The controller computed {decision.computed_clearance_cm:g} cm of clearance."
+            )
+        return EpistemicEvaluation(
+            status="verified",
+            explanation=explanation,
+            sensor_telemetry=EpistemicEvaluator._sample_telemetry([sample] if sample else []),
+        )
+
+    @staticmethod
     def _evaluate_location_assessment(plan_result: PlanExecutionResult) -> EpistemicEvaluation:
         assessment = plan_result.location_assessment
         assert assessment is not None and plan_result.intent is not None
@@ -602,7 +739,9 @@ class EpistemicEvaluator:
             if plan_result.intent.mode == "last_seen":
                 answer = f"{as_of}, the last confirmed sighting of {entity} was at {place}, captured at {capture}."
             else:
-                answer = f"{as_of}, the camera verifies {entity} at {place} from a sighting captured at {capture}."
+                answer = f"{as_of}, {entity} was observed at {coordinates}, captured at {capture}."
+                if sighting.station_id:
+                    answer += f" The camera verifies station {sighting.station_id}."
             if assessment.uncertainty_reason:
                 answer += f" {assessment.uncertainty_reason}"
             status = "verified"

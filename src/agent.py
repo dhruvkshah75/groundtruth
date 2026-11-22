@@ -20,6 +20,7 @@ import networkx as nx
 
 from src.composition import CompositionService
 from src.contracts import AuditEvent, AuditTrail, FactQuery, SensorObservation, StoredFact
+from src.contracts.simulation_api import PatrolDecisionSummary
 from src.declarative.active_graph import ActiveBeliefGraph, GraphSyncedRepository
 from src.declarative.memory_repository import MemoryRepository, RevisionOutcome
 from src.procedural.capability_validator import CapabilityValidator
@@ -89,6 +90,7 @@ class AgentResponse:
     plan_reason: str | None = None
     react_trace: ReActTrace | None = None
     location_assessment: LocationAssessment | None = None
+    patrol_stop: PatrolDecisionSummary | None = None
 
 
 class GroundedAgent:
@@ -271,7 +273,23 @@ class GroundedAgent:
         # Build detailed operations trace with actual returned values and evidence IDs
         operations_trace: list[dict[str, Any]] = []
         assessment = getattr(plan_result, "location_assessment", None)
+        patrol_stop = getattr(plan_result, "patrol_stop", None)
         if isinstance(plan_result, PlanExecutionResult):
+            if plan_result.intent and plan_result.intent.intent == "explain_patrol_stop":
+                stop_sample = plan_result.patrol_stop_sample
+                operations_trace.append(
+                    {
+                        "name": "patrol_stop",
+                        "purpose": "Read the recorded patrol stop and its LiDAR citation.",
+                        "ran": True,
+                        "status": "completed" if patrol_stop else "no_data",
+                        "evidence_ids": [str(stop_sample.sample_id)] if stop_sample else [],
+                        "returned_values": patrol_stop.model_dump(mode="json")
+                        if patrol_stop
+                        else {},
+                        "summary": "Read the latest stop record for the active run.",
+                    }
+                )
             if assessment is not None:
                 operations_trace.append(
                     {
@@ -373,7 +391,8 @@ class GroundedAgent:
                         "purpose": audit_res.purpose,
                         "ran": True,
                         "status": "completed",
-                        "evidence_ids": audit_ids,
+                        "evidence_ids": audit_ids
+                        + [str(sample.sample_id) for sample in audit_res.samples],
                         "returned_values": {
                             str(k): [str(e.event_id) for e in trail.events]
                             for k, trail in audit_res.trails.items()
@@ -409,6 +428,7 @@ class GroundedAgent:
                 plan_reason=_plan_reason(plan_result),
                 react_trace=react_trace,
                 location_assessment=assessment,
+                patrol_stop=patrol_stop,
             )
         )
         evaluation = deepcopy(eval_outcome)

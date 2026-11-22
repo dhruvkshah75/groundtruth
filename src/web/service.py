@@ -875,6 +875,11 @@ class AgentSession:
                         "sim_time_ms": snapshot.status.sim_time_ms,
                         "request_id": request_id,
                         **(
+                            {"patrol_stop": response.patrol_stop.model_dump(mode="json")}
+                            if response.patrol_stop is not None
+                            else {}
+                        ),
+                        **(
                             {
                                 "location_assessment": response.location_assessment.model_dump(
                                     mode="json"

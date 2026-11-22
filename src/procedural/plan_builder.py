@@ -67,6 +67,15 @@ class PlanBuilder:
         Returns:
             An approved plan or a safe fallback with no operations.
         """
+        if intent.intent == "explain_patrol_stop":
+            return PlanningOutcome(
+                plan=ExecutionPlan(
+                    intent=intent,
+                    read_patrol_stop=True,
+                    current_state_verifiable=False,
+                    plan_reason="Explain a recorded patrol stop from its original decision and evidence.",
+                )
+            )
         if intent.intent == "current_route_status":
             return self._build_route_status(intent, sensors=sensors)
         if intent.intent == "current_object_perception":
@@ -481,7 +490,7 @@ class PlanBuilder:
                         purpose="Query latest camera sensor status to verify simulation time horizon.",
                     )
                 )
-        elif mode in ("history", "changes"):
+        elif mode == "history" or (mode == "changes" and not warehouse_run):
             temporal_ops.append(
                 TemporalObservationOperation(
                     query=TemporalObservationQuery(
@@ -511,6 +520,7 @@ class PlanBuilder:
                     fact_ids_from_memory_operation=0,
                     purpose=f"Retrieve revision audit chain for {entity} location changes.",
                     run_id=run_id,
+                    as_of_sim_time_ms=warehouse_time_ms if warehouse_run else None,
                 )
             )
 
