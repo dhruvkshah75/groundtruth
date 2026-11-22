@@ -38,7 +38,13 @@ class RealGroqClient:
     def __init__(self, api_key: str) -> None:
         from groq import Groq
 
-        self._client = Groq(api_key=api_key)
+        # Transport debug logs can contain upstream exceptions or response headers.
+        logging.getLogger("groq._base_client").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        try:
+            self._client = Groq(api_key=api_key)
+        except Exception:
+            raise IntentProviderUnavailableError("Groq client could not be initialized.") from None
 
     def create_chat_completion(
         self,
@@ -86,6 +92,16 @@ class GroqIntentProvider:
     def model_name(self) -> str:
         return self._model
 
+    def _provider_failure(self, operation: str, error: Exception) -> IntentProviderUnavailableError:
+        status = getattr(error, "status_code", None)
+        status = status if type(status) is int and 100 <= status <= 599 else None
+        message = f"Groq {operation} call failed"
+        if status is not None:
+            message += f" (HTTP {status})"
+        self.last_error = message
+        LOGGER.warning("%s", message)
+        return IntentProviderUnavailableError(message, status_code=status)
+
     def propose_intent(self, user_question: str) -> dict[str, Any]:
         """Propose an intent via function calling."""
         messages: list[dict[str, Any]] = [
@@ -101,9 +117,7 @@ class GroqIntentProvider:
                 temperature=0.0,
             )
         except Exception as exc:
-            LOGGER.exception("Groq API error during propose_intent")
-            self.last_error = str(exc)
-            raise IntentProviderUnavailableError(f"Groq API call failed: {exc}") from exc
+            raise self._provider_failure("API", exc) from None
 
         return self._extract_tool_call_payload(response, user_question)
 
@@ -129,9 +143,7 @@ class GroqIntentProvider:
                 temperature=0.0,
             )
         except Exception as exc:
-            LOGGER.exception("Groq API error during repair_intent")
-            self.last_error = str(exc)
-            raise IntentProviderUnavailableError(f"Groq repair call failed: {exc}") from exc
+            raise self._provider_failure("repair", exc) from None
 
         return self._extract_tool_call_payload(response, user_question)
 
@@ -162,11 +174,7 @@ class GroqIntentProvider:
                 temperature=0.0,
             )
         except Exception as exc:
-            LOGGER.exception("Groq API error during reconsider_unsupported")
-            self.last_error = str(exc)
-            raise IntentProviderUnavailableError(
-                f"Groq reconsideration call failed: {exc}"
-            ) from exc
+            raise self._provider_failure("reconsideration", exc) from None
 
         return self._extract_tool_call_payload(response, user_question)
 
@@ -215,11 +223,7 @@ class GroqIntentProvider:
                 return content.strip()
             return ""
         except Exception as exc:
-            LOGGER.warning("Groq API error during grounded explanation generation: %s", exc)
-            self.last_error = str(exc)
-            raise IntentProviderUnavailableError(
-                f"Groq grounded explanation call failed: {exc}"
-            ) from exc
+            raise self._provider_failure("grounded explanation", exc) from None
 
     def verify_grounded_explanation(
         self, user_question: str, tool_result: dict[str, Any], candidate: str
@@ -246,8 +250,8 @@ class GroqIntentProvider:
             content = self._extract_message_content(response)
             verdict = json.loads(content or "")
             return isinstance(verdict, dict) and verdict.get("supported") is True
-        except Exception as exc:
-            LOGGER.warning("Grounded explanation review failed: %s", exc)
+        except Exception:
+            LOGGER.warning("Grounded explanation review failed")
             return False
 
     def _extract_tool_call_payload(self, response: Any, user_question: str) -> dict[str, Any]:
@@ -390,12 +394,9 @@ class GroqIntentProvider:
                     payload["run_id"] = parsed_args.get("run_id")
 
             return payload
-        except Exception as exc:
-            LOGGER.warning("Failed to extract tool call payload: %s", exc)
-            return {
-                "error": "payload_extraction_failure",
-                "raw_output": str(exc),
-            }
+        except Exception:
+            LOGGER.warning("Failed to extract tool call payload")
+            return {"error": "payload_extraction_failure"}
 
     @staticmethod
     def _extract_message_content(response: Any) -> str:
