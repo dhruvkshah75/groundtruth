@@ -6,6 +6,7 @@ import type {
   SimulationExportBundle,
   SimulationLoadRequest,
   SimulationRunIdentity,
+  SimulationSampleEvidenceResponse,
   SimulationStateResponse,
 } from "./simulationTypes";
 
@@ -108,6 +109,8 @@ export const api = {
   simulationState: (options?: SimulationRequestOptions) => request<SimulationStateResponse>("/api/simulation/state", simulationOptions(options)),
   simulationEvidence: (expected: { run_id: string; generation: number }, entity_id: string, options: SimulationRequestOptions) =>
     request<SimulationEvidence>("/api/simulation/evidence", { ...simulationOptions(options), method: "POST", body: JSON.stringify({ expected, entity_id }) }),
+  simulationSampleEvidence: (expected: { run_id: string; generation: number }, sample_id: string, options?: SimulationRequestOptions) =>
+    request<SimulationSampleEvidenceResponse>("/api/simulation/evidence", { ...simulationOptions(options), method: "POST", body: JSON.stringify({ expected, sample_id }) }),
   loadSimulation: (payload: SimulationLoadRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("load", payload, options),
   controlSimulation: (payload: SimulationControlRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("control", payload, options),
   disruptSimulation: (payload: SimulationDisruptRequest, options?: SimulationRequestOptions) => postSimulation<SimulationDisruptResponse>("disrupt", payload, options),

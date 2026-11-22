@@ -81,6 +81,21 @@ export type ObservationUnavailable = {
   "reported_at": string;
 };
 
+export type PatrolDecisionSummary = {
+  "run_id": string;
+  "sim_time_ms": number;
+  "state": "moving" | "turning" | "blocked" | "waiting_for_sensor" | "complete" | "stalled";
+  "policy_reason": string;
+  "decision_sim_time_ms"?: number | null;
+  "waypoint_index"?: number | null;
+  "target_waypoint"?: Point | null;
+  "sample_id"?: string | null;
+  "sensor_sample_id"?: string | null;
+  "sensor_sim_time_ms"?: number | null;
+  "measured_distance_cm"?: number | null;
+  "computed_clearance_cm"?: number | null;
+};
+
 export type Point = {
   "x_cm": number;
   "y_cm": number;
@@ -249,6 +264,12 @@ export type SimulationDisruptResponse = {
   "state": SimulationStateResponse;
 };
 
+export type SimulationEvidenceRequest = {
+  "expected": SimulationRunIdentity;
+  "entity_id"?: string | null;
+  "sample_id"?: string | null;
+};
+
 export type SimulationExportBundle = {
   "schema_version": 1;
   "run_id": string;
@@ -276,11 +297,20 @@ export type SimulationPatrolState = {
   "state": "moving" | "turning" | "blocked" | "waiting_for_sensor" | "complete" | "stalled";
   "waypoint_index": number;
   "target_waypoint": Point | null;
+  "current_decision"?: PatrolDecisionSummary | null;
+  "latest_stop_decision"?: PatrolDecisionSummary | null;
 };
 
 export type SimulationRunIdentity = {
   "run_id": string | null;
   "generation": number;
+};
+
+export type SimulationSampleEvidenceResponse = {
+  "run_id": string | null;
+  "generation": number;
+  "sim_time_ms": number;
+  "sample": ObservationSample;
 };
 
 export type SimulationSnapshot = {

@@ -22,9 +22,11 @@ from src.contracts.simulation import (
     ScenarioDefinition,
     SimulationControl,
     SimulationSnapshot,
+    StoredObservationSample,
     TemporalObservationQuery,
 )
 from src.contracts.simulation_api import (
+    PatrolDecisionSummary,
     SimulationAudience,
     SimulationBeliefState,
     SimulationControlRequest,
@@ -36,6 +38,7 @@ from src.contracts.simulation_api import (
     SimulationObservationState,
     SimulationPatrolState,
     SimulationRunIdentity,
+    SimulationSampleEvidenceResponse,
     SimulationStateResponse,
 )
 from src.declarative.memory_repository import MemoryRepository
@@ -909,6 +912,23 @@ class AgentSession:
             raise SimulationStateConflict("Load a warehouse simulation first.")
         return runtime
 
+    def read_observation_sample(
+        self, sample_id: UUID, expected: SimulationRunIdentity | None = None
+    ) -> StoredObservationSample | None:
+        if expected is not None:
+            self.require_simulation_identity(expected)
+        runtime = self.require_simulation()
+        stored = self.agent.memory.get_observation_sample(sample_id)
+        if stored is not None and stored.run_id == runtime.run_id:
+            return stored
+        return None
+
+    def patrol_decision_summaries(
+        self,
+    ) -> tuple[PatrolDecisionSummary | None, PatrolDecisionSummary | None]:
+        runtime = self.require_simulation()
+        return runtime.patrol_decision_summaries()
+
     def live_simulation_state(self) -> SimulationStateResponse:
         """Capture a detached polling response while the caller holds the session lock."""
         runtime = self.runtime
@@ -939,6 +959,8 @@ class AgentSession:
                 state=runtime.controller.state,
                 waypoint_index=runtime.controller.current_waypoint_index,
                 target_waypoint=runtime.controller.target_waypoint,
+                current_decision=runtime.current_decision_summary,
+                latest_stop_decision=runtime.latest_stop_decision_summary,
             )
             if runtime
             else None,
@@ -1464,6 +1486,26 @@ class AgentService:
             session.touch()
             session.require_simulation_identity(request.expected)
             runtime = session.require_simulation()
+            current = runtime.read().status.sim_time_ms
+
+            if request.sample_id is not None:
+                stored = session.agent.memory.get_observation_sample(request.sample_id)
+                if (
+                    stored is None
+                    or stored.run_id != runtime.run_id
+                    or stored.sim_time_ms > current
+                ):
+                    raise SimulationInputRejected("Unknown or inaccessible observation sample.")
+                return SimulationSampleEvidenceResponse(
+                    run_id=runtime.run_id,
+                    generation=session._generation,
+                    sim_time_ms=current,
+                    sample=stored,
+                ).model_dump(mode="json")
+
+            if request.entity_id is None:
+                raise SimulationInputRejected("Either entity_id or sample_id must be provided.")
+
             scenario = runtime.scenario
             context = scenario_observation_context(scenario)
             routes = context.route_map
@@ -1471,7 +1513,6 @@ class AgentService:
             entity_ids = {entity.entity_id for entity in scenario.entities}
             if request.entity_id not in entity_ids | route_ids:
                 raise SimulationInputRejected("Unknown simulation entity.")
-            current = runtime.read().status.sim_time_ms
             service = TemporalBeliefIngestionService(
                 session.agent.memory,
                 observation_context=context,
@@ -1535,6 +1576,15 @@ class AgentService:
                 "events": list(events.values())[-100:],
                 "truncated": len(samples) > 40 or len(facts) > 100,
             }
+
+    def read_observation_sample(
+        self, session_id: str, sample_id: UUID, expected: SimulationRunIdentity | None = None
+    ) -> StoredObservationSample | None:
+        key = _canonical_session_id(session_id)
+        session = self.get_session(key)
+        with session.lock:
+            session.touch()
+            return session.read_observation_sample(sample_id, expected=expected)
 
     def export_simulation(self, session_id: str) -> SimulationExportBundle:
         key = _canonical_session_id(session_id)
