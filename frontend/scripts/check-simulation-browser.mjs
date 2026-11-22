@@ -85,11 +85,14 @@ try {
   const questionBox = await questions.boundingBox();
   const mapBox = await page.locator(".sim-layout").boundingBox();
   assert.ok(questionBox.x >= mapBox.x + mapBox.width);
-  assert.ok(Math.abs(questionBox.y - mapBox.y) < 2);
+  const evidenceBox = await page.getByRole("region", { name: "Belief and evidence" }).boundingBox();
+  assert.ok(Math.abs(evidenceBox.y - mapBox.y) < 2);
+  assert.ok(questionBox.y > evidenceBox.y + evidenceBox.height);
   assert.ok(Math.abs(questionBox.width - mapBox.width) < 2);
   await questions.getByLabel("Entity").selectOption("parcel_01");
   const evidencePanel = page.getByRole("region", { name: "Belief and evidence" });
   const locationDetails = evidencePanel.getByText("Location evidence", { exact: true });
+  const locationRecords = locationDetails.locator("..");
   const timelineSummary = (panel) => panel.getByText(/^Observation and revision timeline/);
   const cameraAt = (state) => state.observation.latest.camera_detect;
   const shownAt = (ms) => `${(ms / 1000).toFixed(3)} s`;
@@ -104,7 +107,7 @@ try {
   await evidencePanel.getByText("Verified · Packing station", { exact: true }).waitFor();
   await locationDetails.focus();
   await page.keyboard.press("Enter");
-  await evidencePanel.getByText(cameraAt(initial).sample_id, { exact: true }).waitFor();
+  await locationRecords.getByText(cameraAt(initial).sample_id, { exact: true }).waitFor();
   await locationDetails.click();
   await page.locator("[data-entity=parcel_03]").click({ force: true });
   await evidencePanel.getByRole("heading", { name: "Parcel 03" }).waitFor();
@@ -495,38 +498,30 @@ try {
   }
   async function assertSighting(sighting, label) {
     await evidencePanel.getByText(label, { exact: true }).waitFor();
-    await evidencePanel.getByText(sighting.sample_id, { exact: true }).waitFor();
+    await locationRecords.getByText(sighting.sample_id, { exact: true }).waitFor();
   }
   await locationDetails.click();
   const aisle = await locationAt(6_000, "verified");
   assert.equal(aisle.current_location, null);
   assert.notEqual(aisle.current_sighting.sample_id, cameraAt(second).sample_id);
   await assertSighting(aisle.current_sighting, "Verified · (115, 370) cm");
-  const stationB = await locationAt(7_000, "verified");
-  assert.notEqual(stationB.current_sighting.sample_id, aisle.current_sighting.sample_id);
-  await assertSighting(stationB.current_sighting, "Verified · Inspection station");
-  const lost = await locationAt(24_500, "last_seen");
-  await assertSighting(lost.last_sighting, "Current location unknown");
-  const worldParcel = reading.audience.snapshot.entities.find((item) => item.entity_id === "parcel_01").footprint;
-  assert.notDeepEqual([worldParcel.x_cm, worldParcel.y_cm], [lost.last_sighting.position.x_cm, lost.last_sighting.position.y_cm]);
-  await eventually(async () => await page.locator("[data-entity=parcel_01]").getAttribute("transform")
-    === `translate(${worldParcel.x_cm},${reading.audience.bounds.height_cm - worldParcel.y_cm})`);
-  const laterAisle = await locationAt(25_500, "verified");
-  await assertSighting(laterAisle.current_sighting, "Verified · (372.5, 367.5) cm");
-  await locationDetails.click();
-
   // A later robot pose must leave coverage anchored to its original camera sample.
-  await stepTo(25_600);
+  await stepTo(6_100);
   const camera = cameraAt(reading);
   const { x_cm, y_cm, direction } = camera.observer_pose;
+  assert.notEqual(reading.audience.snapshot.robot_pose.y_cm, y_cm);
   await liveRegion.getByText(new RegExp(`Camera coverage · ${direction}.*${shownAt(camera.sim_time_ms)}`, "i")).waitFor();
   assert.ok((await liveRegion.locator(".warehouse-sector").getAttribute("d"))
     .startsWith(`M ${x_cm} ${reading.audience.bounds.height_cm - y_cm} L `));
 
+  const stationB = await locationAt(7_000, "verified");
+  assert.notEqual(stationB.current_sighting.sample_id, aisle.current_sighting.sample_id);
+  await assertSighting(stationB.current_sighting, "Verified · Inspection station");
   // The latest stop remains linked to its original stored sample after resumption.
+  await stepTo(21_600);
   const prior = reading.patrol.latest_stop_decision;
   assert.ok(prior?.sensor_sample_id);
-  assert.notEqual(reading.patrol.current_decision.state, "blocked");
+  assert.equal(reading.patrol.current_decision.state, "moving");
   const patrol = page.getByRole("region", { name: "Patrol evidence" });
   const priorButton = patrol.getByRole("button", { name: "Open prior stop LiDAR sample" });
   await priorButton.focus();
@@ -539,6 +534,16 @@ try {
   assert.equal(raw.sample_id, prior.sensor_sample_id);
   assert.equal(raw.sim_time_ms, prior.sensor_sim_time_ms);
   assert.equal(raw.request.capability, "lidar_scan");
+
+  const lost = await locationAt(24_500, "last_seen");
+  await assertSighting(lost.last_sighting, "Current location unknown");
+  const worldParcel = reading.audience.snapshot.entities.find((item) => item.entity_id === "parcel_01").footprint;
+  assert.notDeepEqual([worldParcel.x_cm, worldParcel.y_cm], [lost.last_sighting.position.x_cm, lost.last_sighting.position.y_cm]);
+  await eventually(async () => await page.locator("[data-entity=parcel_01]").getAttribute("transform")
+    === `translate(${worldParcel.x_cm},${reading.audience.bounds.height_cm - worldParcel.y_cm})`);
+  const laterAisle = await locationAt(25_500, "verified");
+  await assertSighting(laterAisle.current_sighting, "Verified · (372.5, 367.5) cm");
+  await locationDetails.click();
 
   await post("2×", "control");
   await post("Play", "control");

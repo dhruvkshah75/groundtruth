@@ -627,14 +627,17 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
               <p>{live ? "Load the warehouse preset to see the room and robot." : "Waiting for the warehouse backend."}</p>
             </div>}
         </section>
-        <aside id="simulation-evidence" className="sim-evidence" aria-label="Simulation evidence">
-          {loaded && state && <EvidenceTimeline key={`${state.run_id}:${state.generation}:${entity}`} entity={entity} evidence={entityEvidence?.evidence} error={entityEvidence?.error} stale={stale} onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />}
-          <ObservationPanel state={state} camera={camera} stale={stale} />
+        <ObservationPanel state={state} camera={camera} stale={stale} />
+      </div>
+      {loaded && state && <div className="sim-inspection-column">
+        <aside id="simulation-evidence" className="sim-evidence" aria-label="Simulation evidence" tabIndex={-1}>
+          <EvidenceTimeline key={`${state.run_id}:${state.generation}:${entity}`} entity={entity} evidence={entityEvidence?.evidence} error={entityEvidence?.error} stale={stale}
+            onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />
           {state?.run_id && <PatrolPanel key={`${sessionId}:${state.run_id}:${state.generation}`}
             sessionId={sessionId} runId={state.run_id} generation={state.generation} patrol={state.patrol} stale={stale} />}
         </aside>
-      </div>
-      {loaded && state && <SimulationQuestions key={`${sessionId}:${state.generation}:${state.run_id}`} sessionId={sessionId} state={state} renderAnswer={renderAnswer} entity={entity} onSelectEntity={selectEntity} />}
+        <SimulationQuestions key={`${sessionId}:${state.generation}:${state.run_id}`} sessionId={sessionId} state={state} renderAnswer={renderAnswer} entity={entity} onSelectEntity={selectEntity} />
+      </div>}
       </div>
     </div>
   </section>;
