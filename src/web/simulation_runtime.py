@@ -304,6 +304,34 @@ class SimulationRuntime:
         runtime.clock.restore_backlog(state["backlog_ms"])
         runtime._fresh_on_resume = True
 
+        def _validate_decision_citation(dec: PatrolDecisionRecord) -> None:
+            if dec.sensor_sample_id is None:
+                return
+            sample = memory.get_observation_sample(dec.sensor_sample_id)
+            if sample is None:
+                raise ValueError(
+                    f"Decision cites unknown observation sample {dec.sensor_sample_id}"
+                )
+            if sample.run_id != snap.status.run_id:
+                raise ValueError(
+                    f"Decision cites sample {dec.sensor_sample_id} from foreign run {sample.run_id}"
+                )
+            if sample.request.capability != "lidar_scan":
+                raise ValueError(
+                    f"Decision cites non-LiDAR sample {dec.sensor_sample_id} "
+                    f"with capability '{sample.request.capability}'"
+                )
+            if sample.sim_time_ms > dec.sim_time_ms:
+                raise ValueError(
+                    f"Decision cites future sample {dec.sensor_sample_id} "
+                    f"with capture time {sample.sim_time_ms} > decision time {dec.sim_time_ms}"
+                )
+            if dec.sensor_sim_time_ms is not None and sample.sim_time_ms != dec.sensor_sim_time_ms:
+                raise ValueError(
+                    f"Decision sensor timestamp {dec.sensor_sim_time_ms} "
+                    f"does not match sample timestamp {sample.sim_time_ms}"
+                )
+
         if state.get("current_decision") is not None:
             cur_dec = PatrolDecisionRecord.model_validate(state["current_decision"])
             if (
@@ -313,6 +341,7 @@ class SimulationRuntime:
                 raise ValueError(
                     "Restored current patrol decision does not belong to the active run"
                 )
+            _validate_decision_citation(cur_dec)
             runtime._current_decision_record = cur_dec
         else:
             runtime._current_decision_record = None
@@ -324,6 +353,7 @@ class SimulationRuntime:
                 or stop_dec.sim_time_ms > snap.status.sim_time_ms
             ):
                 raise ValueError("Restored stop patrol decision does not belong to the active run")
+            _validate_decision_citation(stop_dec)
             runtime._latest_stop_decision_record = stop_dec
         else:
             runtime._latest_stop_decision_record = None
@@ -446,7 +476,24 @@ class SimulationRuntime:
         after = self.engine.step() if manual else self.engine.advance()
         self._pose = self._sample("robot_pose")
         if commanded:
-            self.controller.reconcile(self._pose)
+            reconciliation = self.controller.reconcile(self._pose)
+            if not reconciliation.executed or reconciliation.status == "stalled":
+                stall_record = PatrolDecisionRecord(
+                    run_id=before.status.run_id,
+                    sim_time_ms=self._pose.sim_time_ms,
+                    waypoint_index=self.controller.current_waypoint_index,
+                    target_waypoint=self.controller.target_waypoint,
+                    patrol_state="stalled",
+                    current_pose=reconciliation.actual_pose,
+                    proposed_command=reconciliation.expected_command,
+                    sensor_sample_id=None,
+                    sensor_sim_time_ms=None,
+                    measured_distance_cm=None,
+                    computed_clearance_cm=None,
+                    policy_reason=reconciliation.discrepancy_reason
+                    or "Movement rejected by simulation engine.",
+                )
+                self._record_patrol_decision(stall_record)
         else:
             self.controller.confirm_idle_tick(self._pose)
         if after.status.sim_time_ms % after.config.sensor_interval_ms == 0:
@@ -505,6 +552,11 @@ class SimulationRuntime:
             if not self._in_stop_episode or self._latest_stop_decision_record is None:
                 self._latest_stop_decision_record = record
                 self._in_stop_episode = True
+            elif (
+                self._latest_stop_decision_record.patrol_state == "waiting_for_sensor"
+                and record.patrol_state in ("blocked", "stalled")
+            ):
+                self._latest_stop_decision_record = record
         else:
             self._in_stop_episode = False
 

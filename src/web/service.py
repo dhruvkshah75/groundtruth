@@ -38,6 +38,7 @@ from src.contracts.simulation_api import (
     SimulationObservationState,
     SimulationPatrolState,
     SimulationRunIdentity,
+    SimulationSampleEvidenceResponse,
     SimulationStateResponse,
 )
 from src.declarative.memory_repository import MemoryRepository
@@ -1495,12 +1496,12 @@ class AgentService:
                     or stored.sim_time_ms > current
                 ):
                     raise SimulationInputRejected("Unknown or inaccessible observation sample.")
-                return {
-                    "run_id": str(runtime.run_id),
-                    "generation": session._generation,
-                    "sim_time_ms": current,
-                    "sample": stored.model_dump(mode="json"),
-                }
+                return SimulationSampleEvidenceResponse(
+                    run_id=runtime.run_id,
+                    generation=session._generation,
+                    sim_time_ms=current,
+                    sample=stored,
+                ).model_dump(mode="json")
 
             if request.entity_id is None:
                 raise SimulationInputRejected("Either entity_id or sample_id must be provided.")

@@ -397,3 +397,122 @@ def test_patrol_stop_decision_captured_and_preserved_across_later_scans_and_resu
     assert stop_after_resumption.sim_time_ms == initial_decision_time
     assert stop_after_resumption.sensor_sim_time_ms == initial_sensor_time
     memory.close()
+
+
+def test_patrol_turn_wait_cart_blocked_resume_preserves_concrete_block():
+    """Verify turn -> wait -> cart blocked -> resume preserves concrete block decision [P1]."""
+    scene_data = deepcopy(DATA["valid"]["scenario"])
+    scene_data["robot_pose"]["direction"] = "east"
+    scene_data["entities"].append(
+        {
+            "entity_id": "cart_blocker",
+            "kind": "cart",
+            "location": "warehouse",
+            "footprint": {"x_cm": 100.0, "y_cm": 140.0, "width_cm": 30.0, "height_cm": 30.0},
+            "intrinsic_color": "white",
+            "solid": True,
+            "opaque": True,
+            "visible": True,
+        }
+    )
+    scene = ScenarioDefinition.model_validate(scene_data)
+    memory = MemoryRepository(":memory:")
+    ingestion = TemporalBeliefIngestionService(memory)
+    clock = [0.0]
+    runtime = SimulationRuntime(
+        scene,
+        epoch_utc=datetime(2026, 1, 1, tzinfo=UTC),
+        ingest=ingestion.ingest_sample,
+        now=lambda: clock[0],
+    )
+
+    # Step 1: turning
+    runtime.step()
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is not None and cur.state == "turning"
+
+    # Step 2: wait for aligned scan
+    runtime.step()
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is not None and cur.state == "waiting_for_sensor"
+    assert stop is not None and stop.state == "waiting_for_sensor"
+
+    # Step 6: concrete block upgrades saved decision from wait to blocked
+    for _ in range(4):
+        runtime.step()
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is not None and cur.state == "blocked"
+    assert stop is not None and stop.state == "blocked"
+    initial_lidar_uuid = stop.sample_id
+    assert initial_lidar_uuid is not None
+
+    # Outage during stop episode does NOT overwrite the concrete block
+    runtime.engine._snap.sensor_availability.lidar_scan = False
+    for _ in range(5):
+        runtime.step()
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is not None and cur.state == "waiting_for_sensor"
+    assert stop is not None and stop.state == "blocked"
+    assert stop.sample_id == initial_lidar_uuid
+
+    # Restore sensor and clear cart
+    runtime.engine._snap.sensor_availability.lidar_scan = True
+    cart = next(e for e in runtime.engine._snap.entities if e.entity_id == "cart_blocker")
+    cart.footprint.x_cm = 500.0
+
+    for _ in range(10):
+        runtime.step()
+        cur, stop = runtime.patrol_decision_summaries()
+        if cur is not None and cur.state == "moving":
+            break
+
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is not None and cur.state == "moving"
+    assert stop is not None and stop.state == "blocked"
+    assert stop.sample_id == initial_lidar_uuid
+    memory.close()
+
+
+def test_patrol_cart_crossing_stall_reason_published_at_post_tick_boundary():
+    """Verify actual stall reason and discrepancy are published at post-tick boundary [P2]."""
+    scene_data = deepcopy(DATA["valid"]["scenario"])
+    scene = ScenarioDefinition.model_validate(scene_data)
+    memory = MemoryRepository(":memory:")
+    ingestion = TemporalBeliefIngestionService(memory)
+    clock = [0.0]
+    runtime = SimulationRuntime(
+        scene,
+        epoch_utc=datetime(2026, 1, 1, tzinfo=UTC),
+        ingest=ingestion.ingest_sample,
+        now=lambda: clock[0],
+    )
+
+    # Step once to establish motion
+    runtime.step()
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is not None and cur.state == "moving"
+
+    # Before next step, script a cart to cross directly in front of the robot at y=103
+    cart = next(e for e in runtime.engine._snap.entities if e.entity_id == "cart_01")
+    cart.footprint.x_cm = 100.0
+    cart.footprint.y_cm = 103.0
+
+    # Step: controller commands motion to y=106, but engine rejects because cart occupies it
+    runtime.step()
+    cur, stop = runtime.patrol_decision_summaries()
+    assert cur is not None and cur.state == "stalled"
+    assert "Movement rejected" in cur.policy_reason
+    assert cur.sample_id is None
+    assert cur.sim_time_ms == runtime._pose.sim_time_ms
+    assert stop is not None and stop.state == "stalled"
+    assert "Movement rejected" in stop.policy_reason
+    assert stop.sample_id is None
+
+    # Subsequent tick: decide runs and requests fresh scan (waiting_for_sensor)
+    runtime.step()
+    cur_next, stop_next = runtime.patrol_decision_summaries()
+    assert cur_next is not None and cur_next.state == "waiting_for_sensor"
+    # The stall discrepancy reason is NOT lost!
+    assert stop_next is not None and stop_next.state == "stalled"
+    assert "Movement rejected" in stop_next.policy_reason
+    memory.close()

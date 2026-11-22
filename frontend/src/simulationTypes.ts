@@ -264,6 +264,12 @@ export type SimulationDisruptResponse = {
   "state": SimulationStateResponse;
 };
 
+export type SimulationEvidenceRequest = {
+  "expected": SimulationRunIdentity;
+  "entity_id"?: string | null;
+  "sample_id"?: string | null;
+};
+
 export type SimulationExportBundle = {
   "schema_version": 1;
   "run_id": string;
@@ -298,6 +304,13 @@ export type SimulationPatrolState = {
 export type SimulationRunIdentity = {
   "run_id": string | null;
   "generation": number;
+};
+
+export type SimulationSampleEvidenceResponse = {
+  "run_id": string | null;
+  "generation": number;
+  "sim_time_ms": number;
+  "sample": ObservationSample;
 };
 
 export type SimulationSnapshot = {

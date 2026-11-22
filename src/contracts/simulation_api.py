@@ -12,6 +12,7 @@ from .simulation import (
     Finite,
     Identifier,
     NonNegativeInt,
+    ObservationSample,
     PlaybackRate,
     Point,
     Positive,
@@ -142,15 +143,34 @@ class PatrolDecisionSummary(Contract):
     def sync_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
             data = dict(data)
-            if "decision_sim_time_ms" not in data or data["decision_sim_time_ms"] is None:
-                data["decision_sim_time_ms"] = data.get("sim_time_ms")
-            if "sim_time_ms" not in data or data["sim_time_ms"] is None:
-                data["sim_time_ms"] = data.get("decision_sim_time_ms")
-            if "sample_id" not in data or data["sample_id"] is None:
-                data["sample_id"] = data.get("sensor_sample_id")
-            if "sensor_sample_id" not in data or data["sensor_sample_id"] is None:
-                data["sensor_sample_id"] = data.get("sample_id")
+            t1 = data.get("sim_time_ms")
+            t2 = data.get("decision_sim_time_ms")
+            if t1 is not None and t2 is not None and t1 != t2:
+                raise ValueError(
+                    "sim_time_ms and decision_sim_time_ms must be equal when both provided"
+                )
+            canonical_time = t1 if t1 is not None else t2
+            data["sim_time_ms"] = canonical_time
+            data["decision_sim_time_ms"] = canonical_time
+
+            s1 = data.get("sample_id")
+            s2 = data.get("sensor_sample_id")
+            if s1 is not None and s2 is not None and str(s1) != str(s2):
+                raise ValueError("sample_id and sensor_sample_id must be equal when both provided")
+            canonical_sample = s1 if s1 is not None else s2
+            data["sample_id"] = canonical_sample
+            data["sensor_sample_id"] = canonical_sample
         return data
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> Self:
+        if self.decision_sim_time_ms is not None and self.decision_sim_time_ms != self.sim_time_ms:
+            raise ValueError("sim_time_ms and decision_sim_time_ms must match")
+        if self.sample_id != self.sensor_sample_id:
+            raise ValueError("sample_id and sensor_sample_id must match")
+        if self.sensor_sim_time_ms is not None and self.sensor_sim_time_ms > self.sim_time_ms:
+            raise ValueError("sensor_sim_time_ms cannot exceed decision sim_time_ms")
+        return self
 
 
 class SimulationPatrolState(Contract):
@@ -159,6 +179,11 @@ class SimulationPatrolState(Contract):
     target_waypoint: Point | None
     current_decision: PatrolDecisionSummary | None = None
     latest_stop_decision: PatrolDecisionSummary | None = None
+
+
+class SimulationSampleEvidenceResponse(SimulationRunIdentity):
+    sim_time_ms: NonNegativeInt
+    sample: ObservationSample
 
 
 class SimulationStateResponse(SimulationRunIdentity):
@@ -209,20 +234,25 @@ class SimulationStateResponse(SimulationRunIdentity):
         ):
             raise ValueError("State metadata must match the audience snapshot boundary.")
         if self.patrol is not None:
-            if self.patrol.current_decision is not None and (
-                self.patrol.current_decision.run_id != status.run_id
-                or self.patrol.current_decision.sim_time_ms > status.sim_time_ms
+            for dec, name in (
+                (self.patrol.current_decision, "Current"),
+                (self.patrol.latest_stop_decision, "Latest stop"),
             ):
-                raise ValueError(
-                    "Current patrol decision does not belong to this snapshot boundary."
-                )
-            if self.patrol.latest_stop_decision is not None and (
-                self.patrol.latest_stop_decision.run_id != status.run_id
-                or self.patrol.latest_stop_decision.sim_time_ms > status.sim_time_ms
-            ):
-                raise ValueError(
-                    "Latest stop patrol decision does not belong to this snapshot boundary."
-                )
+                if dec is not None:
+                    if dec.run_id != status.run_id or dec.sim_time_ms > status.sim_time_ms:
+                        raise ValueError(
+                            f"{name} patrol decision does not belong to this snapshot boundary."
+                        )
+                    if (
+                        dec.decision_sim_time_ms is not None
+                        and dec.decision_sim_time_ms > status.sim_time_ms
+                    ):
+                        raise ValueError(f"{name} patrol decision timestamp exceeds snapshot time.")
+                    if (
+                        dec.sensor_sim_time_ms is not None
+                        and dec.sensor_sim_time_ms > status.sim_time_ms
+                    ):
+                        raise ValueError(f"{name} patrol sensor timestamp exceeds snapshot time.")
         for capability, sample in self.observation.latest.items():
             if (
                 sample.run_id != status.run_id

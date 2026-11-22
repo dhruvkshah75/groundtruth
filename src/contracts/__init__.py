@@ -61,10 +61,12 @@ from .simulation_api import (
     SimulationControlRequest,
     SimulationDisruptRequest,
     SimulationDisruptResponse,
+    SimulationEvidenceRequest,
     SimulationExportBundle,
     SimulationLoadRequest,
     SimulationPatrolState,
     SimulationRunIdentity,
+    SimulationSampleEvidenceResponse,
     SimulationStateResponse,
 )
 
@@ -135,9 +137,11 @@ __all__ += [
     "SimulationControlRequest",
     "SimulationDisruptRequest",
     "SimulationDisruptResponse",
+    "SimulationEvidenceRequest",
     "SimulationExportBundle",
     "SimulationLoadRequest",
     "SimulationPatrolState",
     "SimulationRunIdentity",
+    "SimulationSampleEvidenceResponse",
     "SimulationStateResponse",
 ]

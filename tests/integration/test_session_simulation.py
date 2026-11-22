@@ -801,12 +801,37 @@ def test_patrol_decision_checkpoint_roundtrip_older_compatibility_and_reset(cloc
     assert restored_old.current_decision_summary is None
     assert restored_old.latest_stop_decision_summary is None
 
-    # 7. Checkpoint rejection on foreign run_id or future sim_time_ms
+    # 7. Checkpoint rejection on foreign run_id, missing sample UUID, or wrong-capability sample
     corrupted = deepcopy(chk)
     corrupted["latest_stop_decision"]["run_id"] = str(uuid4())
     with pytest.raises(ValueError, match="does not belong to the active run"):
         SimulationRuntime.restore(
             corrupted,
+            ingest=session.runtime._ingest,
+            now=lambda: clock[0],
+            memory=session.agent.memory,
+        )
+
+    corrupted_uuid = deepcopy(chk)
+    corrupted_uuid["latest_stop_decision"]["sensor_sample_id"] = str(uuid4())
+    with pytest.raises(ValueError, match="unknown observation sample"):
+        SimulationRuntime.restore(
+            corrupted_uuid,
+            ingest=session.runtime._ingest,
+            now=lambda: clock[0],
+            memory=session.agent.memory,
+        )
+
+    pose_sample = next(
+        s
+        for s in session.agent.memory.query_samples(session.runtime.run_id)
+        if s.request.capability == "robot_pose"
+    )
+    corrupted_cap = deepcopy(chk)
+    corrupted_cap["latest_stop_decision"]["sensor_sample_id"] = str(pose_sample.sample_id)
+    with pytest.raises(ValueError, match="non-LiDAR sample"):
+        SimulationRuntime.restore(
+            corrupted_cap,
             ingest=session.runtime._ingest,
             now=lambda: clock[0],
             memory=session.agent.memory,
@@ -828,14 +853,35 @@ def test_patrol_lidar_outage_waiting_for_sensor_and_clearance_recovery(clock, wa
     load(service, key, warehouse)
     session = service.get_session(key)
 
-    # Advance slightly while moving
-    clock[0] += 0.2
-    service.pump()
+    # 1. Place cart in path and advance until robot reaches LiDAR-confirmed blocked stop
+    block_req = SimulationDisruptRequest(
+        expected=SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        ),
+        request_id=uuid4(),
+        disruption=SetCart(kind="cart_block"),
+        at_ms=100,
+    )
+    service.disrupt_simulation(key, block_req)
+
+    for _ in range(25):
+        clock[0] += 1.0
+        service.pump()
+        state = session.live_simulation_state()
+        if state.patrol is not None and state.patrol.state == "blocked":
+            break
+
     state = session.live_simulation_state()
     assert state.patrol is not None
-    assert state.patrol.state == "moving"
+    assert state.patrol.state == "blocked"
+    assert state.patrol.current_decision is not None
+    assert state.patrol.current_decision.state == "blocked"
+    assert state.patrol.latest_stop_decision is not None
+    assert state.patrol.latest_stop_decision.state == "blocked"
+    original_block_sample_id = state.patrol.latest_stop_decision.sample_id
+    assert original_block_sample_id is not None
 
-    # Inject LiDAR outage
+    # 2. Inject LiDAR outage while blocked
     outage_req = SimulationDisruptRequest(
         expected=SimulationRunIdentity(
             run_id=session.runtime.run_id, generation=session._generation
@@ -862,8 +908,11 @@ def test_patrol_lidar_outage_waiting_for_sensor_and_clearance_recovery(clock, wa
     assert state.patrol.current_decision is not None
     assert state.patrol.current_decision.state == "waiting_for_sensor"
     assert "unavailable" in state.patrol.current_decision.policy_reason.lower()
+    # Historical block still preserves original LiDAR-backed stop!
+    assert state.patrol.latest_stop_decision.sample_id == original_block_sample_id
+    assert state.patrol.latest_stop_decision.state == "blocked"
 
-    # While LiDAR is unavailable, clear cart - robot must NOT resume moving!
+    # 3. While LiDAR is unavailable, clear cart - robot must NOT resume moving!
     clear_req = SimulationDisruptRequest(
         expected=SimulationRunIdentity(
             run_id=session.runtime.run_id, generation=session._generation
@@ -873,14 +922,15 @@ def test_patrol_lidar_outage_waiting_for_sensor_and_clearance_recovery(clock, wa
         at_ms=None,
     )
     service.disrupt_simulation(key, clear_req)
-    clock[0] += 0.3
+    clock[0] += 0.5
     service.pump()
 
     state_unrecovered = session.live_simulation_state()
     assert state_unrecovered.patrol is not None
     assert state_unrecovered.patrol.state == "waiting_for_sensor"
+    assert state_unrecovered.patrol.latest_stop_decision.sample_id == original_block_sample_id
 
-    # Restore LiDAR sensor availability
+    # 4. Restore LiDAR sensor availability
     restore_req = SimulationDisruptRequest(
         expected=SimulationRunIdentity(
             run_id=session.runtime.run_id, generation=session._generation
@@ -894,7 +944,7 @@ def test_patrol_lidar_outage_waiting_for_sensor_and_clearance_recovery(clock, wa
     service.disrupt_simulation(key, restore_req)
 
     # Advance clock: controller acquires new clearance reading and resumes moving
-    for _ in range(20):
+    for _ in range(25):
         clock[0] += 0.1
         service.pump()
         state = session.live_simulation_state()
@@ -906,4 +956,11 @@ def test_patrol_lidar_outage_waiting_for_sensor_and_clearance_recovery(clock, wa
     assert state_resumed.patrol.state == "moving"
     assert state_resumed.patrol.current_decision is not None
     assert state_resumed.patrol.current_decision.state == "moving"
+    assert state_resumed.patrol.current_decision.sample_id is not None
+    # Recovery cites fresh scan, not the old blocking scan!
+    assert state_resumed.patrol.current_decision.sample_id != original_block_sample_id
+    # Historical block still cites original scan!
+    assert state_resumed.patrol.latest_stop_decision is not None
+    assert state_resumed.patrol.latest_stop_decision.state == "blocked"
+    assert state_resumed.patrol.latest_stop_decision.sample_id == original_block_sample_id
     service.shutdown()
