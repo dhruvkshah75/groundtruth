@@ -16,15 +16,24 @@ from typing import Literal, NotRequired, TypedDict
 from uuid import UUID, uuid4
 
 from src.agent import AgentResponse, GroundedAgent
-from src.contracts import CameraScan, FactAssertion, FactQuery, SensorObservation, SpatialContext
+from src.contracts import (
+    CameraScan,
+    FactAssertion,
+    FactQuery,
+    SensorObservation,
+    SpatialContext,
+    StoredFact,
+)
 from src.contracts.simulation import (
     ObservationSample,
     ScenarioDefinition,
     SimulationControl,
     SimulationSnapshot,
+    StoredObservationSample,
     TemporalObservationQuery,
 )
 from src.contracts.simulation_api import (
+    PatrolDecisionSummary,
     SimulationAudience,
     SimulationBeliefState,
     SimulationControlRequest,
@@ -36,15 +45,14 @@ from src.contracts.simulation_api import (
     SimulationObservationState,
     SimulationPatrolState,
     SimulationRunIdentity,
+    SimulationSampleEvidenceResponse,
     SimulationStateResponse,
 )
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.procedural.temporal_belief_ingestion import (
-    IngestionConfig,
     IngestionResult,
-    StationZone,
-    StationZoneMap,
+    LocationAssessment,
     TemporalBeliefIngestionService,
 )
 from src.providers import ProviderConfig, create_provider, get_provider_config
@@ -58,8 +66,12 @@ from src.sensorimotor.world_models import (
 )
 from src.web.session_store import SessionStore
 from src.web.simulation_export import SimulationExporter, SimulationExportTarget
-from src.web.simulation_presets import warehouse_preset
-from src.web.simulation_runtime import MAX_PRESENTER_INPUTS, SimulationRuntime, scenario_route_map
+from src.web.simulation_presets import warehouse_belief_demo_preset, warehouse_preset
+from src.web.simulation_runtime import (
+    MAX_PRESENTER_INPUTS,
+    SimulationRuntime,
+    scenario_observation_context,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -265,27 +277,7 @@ class AgentSession:
         self, scenario: ScenarioDefinition
     ) -> Callable[[ObservationSample], IngestionResult]:
         """Register identities from successful camera observations, not simulator truth."""
-        zones = StationZoneMap(
-            zones=[
-                StationZone.from_center(
-                    zone_id=entity.entity_id,
-                    location=entity.location,
-                    frame_of_reference=scenario.robot_pose.frame_of_reference,
-                    center_x_cm=entity.footprint.x_cm,
-                    center_y_cm=entity.footprint.y_cm,
-                    width_cm=entity.footprint.width_cm,
-                    height_cm=entity.footprint.height_cm,
-                )
-                for entity in scenario.entities
-                if entity.kind == "station"
-            ]
-        )
-        ingestion = TemporalBeliefIngestionService(
-            self.agent.memory,
-            zone_map=zones,
-            route_map=scenario_route_map(scenario),
-            config=IngestionConfig(freshness_ms=scenario.config.freshness_ms),
-        )
+        ingestion = self._belief_service(scenario)
 
         def ingest(sample: ObservationSample) -> IngestionResult:
             self.agent.memory.set_active_run(sample.run_id)
@@ -300,6 +292,12 @@ class AgentSession:
             return result
 
         return ingest
+
+    def _belief_service(self, scenario: ScenarioDefinition) -> TemporalBeliefIngestionService:
+        return TemporalBeliefIngestionService(
+            self.agent.memory,
+            observation_context=scenario_observation_context(scenario),
+        )
 
     def _remember_simulation_entity(self, entity: str) -> None:
         self.agent.memory.add_alias(entity, entity)
@@ -858,15 +856,38 @@ class AgentSession:
                     snapshot = runtime.read() if runtime else None
                     capture_time_ms = snapshot.status.sim_time_ms if snapshot else None
                     capture = agent.capture(
-                        cleaned, intent, sensors=runtime, capture_time_ms=capture_time_ms
+                        cleaned,
+                        intent,
+                        sensors=runtime,
+                        capture_time_ms=capture_time_ms,
+                        location_reader=(
+                            self._belief_service(runtime.scenario).assess_entity_location
+                            if runtime is not None
+                            else None
+                        ),
                     )
                     self._dirty = True
-                item = _response_to_dict(capture())
+                response = capture()
+                item = _response_to_dict(response)
                 if snapshot is not None:
                     item["simulation_evidence"] = {
                         "run_id": str(snapshot.status.run_id),
                         "sim_time_ms": snapshot.status.sim_time_ms,
                         "request_id": request_id,
+                        **(
+                            {"patrol_stop": response.patrol_stop.model_dump(mode="json")}
+                            if response.patrol_stop is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "location_assessment": response.location_assessment.model_dump(
+                                    mode="json"
+                                )
+                            }
+                            if response.location_assessment is not None
+                            else {}
+                        ),
                     }
             except Exception:
                 with self.lock:
@@ -924,6 +945,23 @@ class AgentSession:
             raise SimulationStateConflict("Load a warehouse simulation first.")
         return runtime
 
+    def read_observation_sample(
+        self, sample_id: UUID, expected: SimulationRunIdentity | None = None
+    ) -> StoredObservationSample | None:
+        if expected is not None:
+            self.require_simulation_identity(expected)
+        runtime = self.require_simulation()
+        stored = self.agent.memory.get_observation_sample(sample_id)
+        if stored is not None and stored.run_id == runtime.run_id:
+            return stored
+        return None
+
+    def patrol_decision_summaries(
+        self,
+    ) -> tuple[PatrolDecisionSummary | None, PatrolDecisionSummary | None]:
+        runtime = self.require_simulation()
+        return runtime.patrol_decision_summaries()
+
     def live_simulation_state(self) -> SimulationStateResponse:
         """Capture a detached polling response while the caller holds the session lock."""
         runtime = self.runtime
@@ -954,6 +992,8 @@ class AgentSession:
                 state=runtime.controller.state,
                 waypoint_index=runtime.controller.current_waypoint_index,
                 target_waypoint=runtime.controller.target_waypoint,
+                current_decision=runtime.current_decision_summary,
+                latest_stop_decision=runtime.latest_stop_decision_summary,
             )
             if runtime
             else None,
@@ -974,6 +1014,48 @@ class AgentSession:
                 recent_changes=list(runtime.belief_changes) if runtime else []
             ),
         )
+
+    def _annotate_location_edges(
+        self,
+        edges: list[dict[str, object]],
+        facts: list[StoredFact],
+        runtime: SimulationRuntime,
+        cutoff_ms: int,
+    ) -> None:
+        parcel_ids = {
+            entity.entity_id for entity in runtime.scenario.entities if entity.kind == "parcel"
+        }
+        run_id = str(runtime.run_id)
+        scoped_facts = {
+            str(fact.fact_id): fact
+            for fact in facts
+            if fact.subject in parcel_ids
+            and fact.predicate == "located_at"
+            and fact.context.extra_context.get("run_id") == run_id
+            and fact.evidence.get("sim_time_ms", 0) <= cutoff_ms
+        }
+        belief_service = self._belief_service(runtime.scenario)
+        assessments: dict[str, LocationAssessment] = {}
+        for edge in edges:
+            fact = scoped_facts.get(str(edge["fact_id"]))
+            if fact is None:
+                continue
+            if fact.subject not in assessments:
+                assessments[fact.subject] = belief_service.assess_entity_location(
+                    runtime.run_id, fact.subject, cutoff_ms
+                )
+            assessment = assessments[fact.subject]
+            sighting = assessment.last_sighting
+            if assessment.current_location == fact.object:
+                status = "verified"
+            elif sighting is None or sighting.station_id == fact.object:
+                status = "last_known"
+            else:
+                status = "earlier_station"
+            edge["location_evidence"] = {
+                "status": status,
+                "assessment": assessment.model_dump(mode="json"),
+            }
 
     def snapshot(self) -> dict[str, object]:
         """Read actual environment, graph, active beliefs, and full memory ledger."""
@@ -996,6 +1078,9 @@ class AgentSession:
         world = self.agent.environment.get_world_state()
         if self.runtime is not None:
             physical = self.runtime.read()
+            self._annotate_location_edges(
+                edges, active_facts, self.runtime, physical.status.sim_time_ms
+            )
             world = WorldState(
                 world_version=physical.world_version,
                 scenario_name=physical.scenario_id,
@@ -1352,7 +1437,6 @@ class AgentService:
         self, session_id: str, request: SimulationLoadRequest
     ) -> SimulationStateResponse:
         key = _canonical_session_id(session_id)
-        scenario = warehouse_preset()
         session = self.get_session(key)
         with session.lock:
             session.require_active()
@@ -1366,7 +1450,12 @@ class AgentService:
             else:
                 session.require_simulation_identity(request.expected)
                 try:
-                    session.load_simulation(scenario, self._epoch_now())
+                    preset = (
+                        warehouse_belief_demo_preset
+                        if request.preset == "warehouse_belief_demo_v1"
+                        else warehouse_preset
+                    )
+                    session.load_simulation(preset(), self._epoch_now())
                 except Exception as exc:
                     raise SimulationUnavailable("Could not initialize the simulation.") from exc
                 session._load_request = request
@@ -1479,24 +1568,49 @@ class AgentService:
             session.touch()
             session.require_simulation_identity(request.expected)
             runtime = session.require_simulation()
+            current = runtime.read().status.sim_time_ms
+
+            if request.sample_id is not None:
+                stored = session.agent.memory.get_observation_sample(request.sample_id)
+                if (
+                    stored is None
+                    or stored.run_id != runtime.run_id
+                    or stored.sim_time_ms > current
+                ):
+                    raise SimulationInputRejected("Unknown or inaccessible observation sample.")
+                return SimulationSampleEvidenceResponse(
+                    run_id=runtime.run_id,
+                    generation=session._generation,
+                    sim_time_ms=current,
+                    sample=stored,
+                ).model_dump(mode="json")
+
+            if request.entity_id is None:
+                raise SimulationInputRejected("Either entity_id or sample_id must be provided.")
+
             scenario = runtime.scenario
-            routes = scenario_route_map(scenario)
+            context = scenario_observation_context(scenario)
+            routes = context.route_map
             route_ids = {route.route_id for route in scenario.routes}
             entity_ids = {entity.entity_id for entity in scenario.entities}
             if request.entity_id not in entity_ids | route_ids:
                 raise SimulationInputRejected("Unknown simulation entity.")
-            current = runtime.read().status.sim_time_ms
             service = TemporalBeliefIngestionService(
                 session.agent.memory,
-                route_map=routes,
-                config=IngestionConfig(freshness_ms=scenario.config.freshness_ms),
+                observation_context=context,
             )
             is_route = request.entity_id in route_ids
-            summary = (
-                service.get_route_belief_summary(runtime.run_id, request.entity_id, current)
-                if is_route
-                else service.get_entity_belief_summary(runtime.run_id, request.entity_id, current)
-            )
+            assessment = None
+            if is_route:
+                summary = service.get_route_belief_summary(
+                    runtime.run_id, request.entity_id, current
+                )
+                latest_attempt = summary.latest_lidar_attempt
+            else:
+                summary, assessment = service.get_entity_location_evidence(
+                    runtime.run_id, request.entity_id, current
+                )
+                latest_attempt = summary.latest_sensor_attempt
             samples = session.agent.memory.query_observations(
                 TemporalObservationQuery(
                     run_id=runtime.run_id,
@@ -1514,9 +1628,6 @@ class AgentService:
                     if (match := routes.match_route(sample.observer_pose)[0]) is not None
                     and match.route_id == request.entity_id
                 ]
-            latest_attempt = (
-                summary.latest_lidar_attempt if is_route else summary.latest_sensor_attempt
-            )
             if latest_attempt and all(s.sample_id != latest_attempt.sample_id for s in samples):
                 matched = routes.match_route(latest_attempt.observer_pose)[0] if is_route else None
                 if not is_route or (matched and matched.route_id == request.entity_id):
@@ -1545,11 +1656,25 @@ class AgentService:
                 "entity_id": request.entity_id,
                 "kind": "route" if is_route else "entity",
                 "summary": summary.model_dump(mode="json"),
+                **(
+                    {"location_assessment": assessment.model_dump(mode="json")}
+                    if assessment
+                    else {}
+                ),
                 "samples": [sample.model_dump(mode="json") for sample in samples[-40:]],
                 "facts": [_model_to_dict(fact) for fact in facts[-100:]],
                 "events": list(events.values())[-100:],
                 "truncated": len(samples) > 40 or len(facts) > 100,
             }
+
+    def read_observation_sample(
+        self, session_id: str, sample_id: UUID, expected: SimulationRunIdentity | None = None
+    ) -> StoredObservationSample | None:
+        key = _canonical_session_id(session_id)
+        session = self.get_session(key)
+        with session.lock:
+            session.touch()
+            return session.read_observation_sample(sample_id, expected=expected)
 
     def export_simulation(self, session_id: str) -> SimulationExportBundle:
         key = _canonical_session_id(session_id)

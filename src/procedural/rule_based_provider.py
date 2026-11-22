@@ -126,6 +126,9 @@ class RuleBasedIntentProvider(IntentProvider):
                 "user_question": user_question,
             }
 
+        if re.fullmatch(r"why did (?:the )?robot stop[?.!]?", q):
+            return {"intent": "explain_patrol_stop", "user_question": user_question}
+
         # 1. Temporal object location queries (P2-08)
         # Questions asking where an object is, was, when it was seen, its history, or what changed
         is_obj = (
@@ -183,6 +186,7 @@ class RuleBasedIntentProvider(IntentProvider):
             # A. changes mode: "what changed", "before and what changed", "moved", "previously"
             if (
                 "what changed" in q
+                or bool(re.search(r"\b(?:belief|claim)\b.*\bchange\b", q))
                 or "before and what" in q
                 or "did it change" in q
                 or "moved" in q
@@ -198,25 +202,7 @@ class RuleBasedIntentProvider(IntentProvider):
                     "user_question": user_question,
                 }
 
-            # B. last_seen mode: "when did you last see", "last seen", "last sighting"
-            if (
-                "last see" in q
-                or "last seen" in q
-                or "last saw" in q
-                or "last sighting" in q
-                or "last observe" in q
-                or "last observed" in q
-                or "when did you" in q
-                or "when was" in q
-            ):
-                return {
-                    "intent": "object_location_query",
-                    "mode": "last_seen",
-                    "entity_mentions": mentions,
-                    "user_question": user_question,
-                }
-
-            # C. at_time mode: "where was parcel_01 at 7 seconds", "at 7s", "at 7000ms",
+            # B. at_time mode: "where was parcel_01 at 7 seconds", "at 7s", "at 7000ms",
             # "at twenty five seconds", or malformed "at 7.2.3 seconds"
             has_at_phrase = False
             raw_expr = None
@@ -224,18 +210,18 @@ class RuleBasedIntentProvider(IntentProvider):
 
             # Check 1: joined unit, e.g. "at 4s", "at 4000ms", "at 7.2.3s"
             m_joined = re.search(
-                r"\bat\s+(-?[0-9a-zA-Z.]+?)(ms|milliseconds?|seconds?|secs?|s)\b", q
+                r"\b(?:at|before)\s+(-?[0-9a-zA-Z.]+?)(ms|milliseconds?|seconds?|secs?|s)\b", q
             )
             # Check 2: separate unit, e.g. "at twenty five seconds", "at 7.2.3 seconds"
-            m_sep = re.search(r"\bat\s+(.+?)\s+(seconds?|secs?|s|milliseconds?|ms)\b", q)
+            m_sep = re.search(r"\b(?:at|before)\s+(.+?)\s+(seconds?|secs?|s|milliseconds?|ms)\b", q)
             # Check 3: "at time <expr>" or "at second <expr>"
             m_time = re.search(
-                r"\bat\s+(?:time|second|seconds)\s+(.+?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
+                r"\b(?:at|before)\s+(?:time|second|seconds)\s+(.+?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
                 q,
             )
             # Check 4: generic "at <expr>" followed by end of phrase/question
             m_gen = re.search(
-                r"\bat\s+([^\s?.,;]+(?:\s+[^\s?.,;]+)*?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
+                r"\b(?:at|before)\s+([^\s?.,;]+(?:\s+[^\s?.,;]+)*?)(?:\s*(seconds?|secs?|s|milliseconds?|ms)\b|[?,;]|\bin\s+run\b|$)",
                 q,
             )
 
@@ -262,7 +248,7 @@ class RuleBasedIntentProvider(IntentProvider):
                     has_at_phrase = True
                     raw_expr = candidate
                     unit = (m_gen.group(2) or "").lower()
-            elif bool(re.search(r"\bat\s+\S+", q)) and ("time" in q or "second" in q):
+            elif bool(re.search(r"\b(?:at|before)\s+\S+", q)) and ("time" in q or "second" in q):
                 has_at_phrase = True
                 raw_expr = None
                 unit = ""
@@ -310,6 +296,24 @@ class RuleBasedIntentProvider(IntentProvider):
                     "intent": "object_location_query",
                     "mode": "at_time",
                     "at_sim_time_ms": at_sim_time_ms,
+                    "entity_mentions": mentions,
+                    "user_question": user_question,
+                }
+
+            # C. last_seen mode: "when did you last see", "last seen", "last sighting"
+            if (
+                "last see" in q
+                or "last seen" in q
+                or "last saw" in q
+                or "last sighting" in q
+                or "last observe" in q
+                or "last observed" in q
+                or "when did you" in q
+                or "when was" in q
+            ):
+                return {
+                    "intent": "object_location_query",
+                    "mode": "last_seen",
                     "entity_mentions": mentions,
                     "user_question": user_question,
                 }

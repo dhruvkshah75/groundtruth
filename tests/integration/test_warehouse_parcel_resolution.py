@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.contracts import FactQuery
+from src.contracts import FactQuery, ObservationRequest
 from src.contracts.simulation_api import SimulationEvidenceRequest, SimulationRunIdentity
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
@@ -327,3 +327,322 @@ def test_route_and_station_evidence_use_the_loaded_scenario_map():
         assert "packing_station" not in session.snapshot()["graph"]["nodes"]
     finally:
         service.shutdown()
+
+
+def test_off_station_parcel_verification_bug_at_25_5_seconds():
+    """Reproduce default preset at 25.5s: off-station sample cannot verify old station."""
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        # Step to 25.5 simulated seconds (255 steps * 100ms)
+        for _ in range(255):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 25500
+
+        identity = SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        )
+        request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        evidence = service.read_simulation_evidence(key, request)
+
+        summary = evidence["summary"]
+        # Verified off-station coordinates with null station
+        assert summary["verification_status"] == "verified"
+        assert summary["supported_location"] is None
+        assert summary["current_location"] is None
+        assert summary["last_observed_position"] == {"x_cm": 372.5, "y_cm": 367.5}
+        assert summary["earlier_station"] == "inspection_station"
+
+        # SQLite fact retains earlier station in history without mutation
+        active_facts = session.agent.memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(active_facts) == 1
+        assert active_facts[0].object == "inspection_station"
+    finally:
+        service.shutdown()
+
+
+def test_full_acceptance_station_a_to_aisle_to_station_b_sqlite_periodic_sensing():
+    """Full acceptance from #48: A -> aisle -> B with periodic camera acquisition and SQLite.
+
+    Asserts:
+    1. Chat history remains empty throughout (no chat questions asked).
+    2. At Station A (5.0s): initial fact packing_station in SQLite.
+    3. In aisle (6.0s): independently retrievable aisle sample in SQLite ledger;
+       leaves the SQLite station fact chain intact (packing_station); 0 revisions.
+    4. At Station B (7.0s): B sample produces exactly 1 atomic A-to-B revision in SQLite audit.
+    """
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        memory = session.agent.memory
+
+        # Ensure empty chat history
+        assert len(session.history) == 0
+
+        # Step to 5.0 simulated seconds (50 steps * 100ms): Station A (packing_station)
+        for _ in range(50):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 5000
+
+        identity = SimulationRunIdentity(
+            run_id=session.runtime.run_id, generation=session._generation
+        )
+        ev_a = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        )
+        assert ev_a["summary"]["verification_status"] == "verified"
+        assert ev_a["summary"]["current_location"] == "packing_station"
+
+        # Check SQLite facts at Station A
+        facts_a = memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(facts_a) == 1
+        assert facts_a[0].object == "packing_station"
+        trail_a = memory.get_audit_chain(facts_a[0].fact_id)
+        assert len(trail_a.events) == 0
+        assert len(ev_a["events"]) == 0
+
+        # Step to 6.0 simulated seconds (10 steps): Corridor/Aisle at (115, 370)
+        for _ in range(10):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 6000
+
+        ev_aisle = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        )
+        assert ev_aisle["summary"]["verification_status"] == "verified"
+        assert ev_aisle["summary"]["current_location"] is None
+        assert ev_aisle["summary"]["earlier_station"] == "packing_station"
+        assert ev_aisle["summary"]["last_observed_position"] == {"x_cm": 115.0, "y_cm": 370.0}
+
+        # Assert independently retrievable aisle sample in SQLite observation ledger
+        aisle_sighting = memory.get_last_sighting(
+            run_id=session.runtime.run_id,
+            entity_id="parcel_01",
+            capability="camera_detect",
+            at_sim_time_ms=6000,
+        )
+        assert aisle_sighting is not None
+        assert aisle_sighting.sim_time_ms == 6000
+
+        # Assert station chain in SQLite is left intact (no mutation, still packing_station)
+        facts_aisle = memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(facts_aisle) == 1
+        assert facts_aisle[0].object == "packing_station"
+        assert facts_aisle[0].fact_id == facts_a[0].fact_id
+        trail_aisle = memory.get_audit_chain(facts_aisle[0].fact_id)
+        assert len(trail_aisle.events) == 0
+        assert len(ev_aisle["events"]) == 0
+
+        # Step to 7.0 simulated seconds (10 steps): Station B (inspection_station)
+        for _ in range(10):
+            session.runtime.step()
+        assert session.runtime.sim_time_ms == 7000
+
+        ev_b = service.read_simulation_evidence(
+            key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+        )
+        assert ev_b["summary"]["verification_status"] == "verified"
+        assert ev_b["summary"]["current_location"] == "inspection_station"
+
+        # Assert SQLite active fact is now Station B
+        facts_b = memory.query_facts(
+            FactQuery(subject="parcel_01", predicate="located_at", active_only=True)
+        )
+        assert len(facts_b) == 1
+        assert facts_b[0].object == "inspection_station"
+
+        # Assert exactly ONE revision was produced from Station A to Station B
+        trail_b = memory.get_audit_chain(facts_b[0].fact_id)
+        assert len(trail_b.events) == 1
+        assert trail_b.events[0].input_fact_ids == [facts_a[0].fact_id, facts_b[0].fact_id]
+        assert trail_b.events[0].output_fact_ids == [facts_b[0].fact_id]
+        assert "revising previous location packing_station" in trail_b.events[0].reason
+        assert len(ev_b["events"]) == 1
+        assert ev_b["events"][0]["policy_rule"] == "camera_observation_revision"
+        assert "revising previous location packing_station" in ev_b["events"][0]["reason"]
+
+        # Verify chat history remained completely empty throughout
+        assert len(session.history) == 0
+    finally:
+        service.shutdown()
+
+
+@pytest.fixture
+def loaded_warehouse():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        runtime = session.runtime
+        assert runtime is not None
+        identity = SimulationRunIdentity(run_id=runtime.run_id, generation=session._generation)
+        yield service, key, session, runtime, identity
+    finally:
+        service.shutdown()
+
+
+def _step_to(runtime, target_ms):
+    while runtime.sim_time_ms < target_ms:
+        runtime.step()
+    assert runtime.sim_time_ms == target_ms
+
+
+def test_current_answer_evidence_and_graph_share_the_paused_parcel_assessment(loaded_warehouse):
+    service, key, session, runtime, identity = loaded_warehouse
+    request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+    checkpoints = [
+        (5000, "verified", "packing_station", "packing_station"),
+        (5100, "verified", "packing_station", "packing_station"),
+        (6000, "earlier_station", "packing_station", None),
+        (7000, "verified", "inspection_station", "inspection_station"),
+        (24500, "last_known", "inspection_station", None),
+        (25500, "earlier_station", "inspection_station", None),
+    ]
+    for time_ms, edge_status, stored_station, current_station in checkpoints:
+        _step_to(runtime, time_ms)
+        if time_ms == 5100:
+            # A newer targeted scan for another entity must not replace the applicable attempt.
+            runtime.observe(ObservationRequest(capability="camera_detect", target="parcel_03"))
+
+        evidence = service.read_simulation_evidence(key, request)
+        assessment = evidence["location_assessment"]
+        response = session.ask("Where is parcel_01 now?", expected=identity)
+        snapshot = session.snapshot()
+        edge = next(
+            edge
+            for edge in snapshot["graph"]["edges"]
+            if edge["source"] == "parcel_01" and edge["predicate"] == "located_at"
+        )
+        assert edge["target"] == stored_station
+        assert edge["location_evidence"] == {"status": edge_status, "assessment": assessment}
+        assert response["simulation_evidence"]["location_assessment"] == assessment
+        assert (
+            snapshot["simulation_status"]["sim_time_ms"]
+            == assessment["as_of_sim_time_ms"]
+            == time_ms
+        )
+        assert assessment["run_id"] == str(runtime.run_id)
+        assert (
+            evidence["summary"]["current_location"]
+            == assessment["current_location"]
+            == current_station
+        )
+        assert evidence["summary"]["verification_status"] == assessment["verification_status"]
+        assert str(assessment["last_sighting"]["sample_id"]) in response["answer"]
+        if time_ms == 5100:
+            assert evidence["summary"]["latest_sensor_attempt"]["sim_time_ms"] == 5000
+        if edge_status == "last_known":
+            assert assessment["freshness"] == "stale"
+            assert response["status"] == "uncertain"
+            assert "Last confirmed sighting" in response["answer"]
+            last_seen = session.ask("When was parcel_01 last seen?", expected=identity)
+            assert last_seen["simulation_evidence"]["location_assessment"] == assessment
+        else:
+            assert response["status"] == "verified"
+            if current_station is None:
+                assert "Earlier recorded station" in response["answer"]
+                assert stored_station not in response["answer"].split("Earlier recorded station")[0]
+
+
+def test_historical_cutoff_and_change_answer_cite_distinct_camera_evidence(loaded_warehouse):
+    service, key, session, runtime, identity = loaded_warehouse
+    _step_to(runtime, 7500)
+    historical = session.ask("Where was parcel_01 at 6.7 seconds?", expected=identity)
+    assert historical["status"] == "verified"
+    assert "6700 ms" in historical["answer"] and "captured at 6500 ms" in historical["answer"]
+    assert [sample["sim_time_ms"] for sample in historical["sensor_telemetry"]] == [6500]
+    assert "interpolated" in historical["answer"]
+    assert not any(
+        operation["name"] == "temporal_query_latest"
+        for operation in historical["react_trace"]["operations"]
+    )
+
+    change = session.ask(
+        "What evidence caused parcel_01's location belief to change?", expected=identity
+    )
+    evidence = service.read_simulation_evidence(
+        key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+    )
+    assert change["status"] == "verified"
+    assert change["audit_events"] == evidence["events"]
+    (revision,) = change["audit_events"]
+    (qualifying_sample,) = change["sensor_telemetry"]
+    successor = next(
+        fact for fact in evidence["facts"] if fact["fact_id"] in revision["output_fact_ids"]
+    )
+    assert qualifying_sample["sample_id"] == successor["evidence"]["sample_id"]
+    assert qualifying_sample["sim_time_ms"] == successor["evidence"]["sim_time_ms"]
+    for expected in (
+        "prior location belief was packing_station",
+        "inspection_station",
+        revision["event_id"],
+        revision["policy_rule"],
+        revision["reason"],
+        qualifying_sample["sample_id"],
+        "do not establish the route, exact time of the move, or cause",
+    ):
+        assert expected in change["answer"]
+
+
+def test_stop_answer_preserves_original_decision_after_resumption(loaded_warehouse):
+    service, key, session, runtime, identity = loaded_warehouse
+    question = "Why did the robot stop?"
+    missing = session.ask(question, expected=identity)
+    assert missing["status"] == "no_data"
+    assert "No patrol stop was recorded" in missing["answer"]
+    assert missing["sensor_telemetry"] == []
+
+    _step_to(runtime, 12000)
+    stopped = session.ask(question, expected=identity)
+    stop = stopped["simulation_evidence"]["patrol_stop"]
+    assert stop["state"] == "blocked"
+    assert stop["sample_id"] in stopped["answer"]
+    assert stop["policy_reason"] in stopped["answer"]
+    assert str(stop["sensor_sim_time_ms"]) + " ms" in stopped["answer"]
+    cited = service.read_simulation_evidence(
+        key, SimulationEvidenceRequest(expected=identity, sample_id=stop["sample_id"])
+    )["sample"]
+    assert cited["request"]["capability"] == "lidar_scan"
+
+    _step_to(runtime, 22000)
+    assert runtime.current_decision_summary.state in ("moving", "turning")
+    assert runtime.current_decision_summary.sample_id != stop["sample_id"]
+    before = session.agent.memory.export_snapshot()
+    resumed = session.ask(question, expected=identity)
+    assert resumed["simulation_evidence"]["patrol_stop"] == stop
+    assert resumed["answer"] == stopped["answer"]
+    assert [sample["sample_id"] for sample in resumed["sensor_telemetry"]] == [stop["sample_id"]]
+    assert resumed["revisions"] == resumed["audit_events"] == []
+    assert session.agent.memory.export_snapshot() == before
+
+
+def test_captured_assessment_retains_original_as_of_time(loaded_warehouse, monkeypatch):
+    service, key, session, runtime, identity = loaded_warehouse
+    request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+    _step_to(runtime, 5000)
+    captured = service.read_simulation_evidence(key, request)["location_assessment"]
+
+    def explain(**kwargs):
+        _step_to(runtime, 6000)
+        return kwargs["tool_result"]["deterministic_evaluation_summary"]
+
+    monkeypatch.setattr(
+        session.agent.provider, "generate_grounded_explanation", explain, raising=False
+    )
+    answer = session.ask("Where is parcel_01 now?", expected=identity)
+    assert answer["simulation_evidence"]["sim_time_ms"] == 5000
+    assert answer["simulation_evidence"]["location_assessment"] == captured
+    assert captured["current_location"] == "packing_station"
+    current = service.read_simulation_evidence(key, request)["location_assessment"]
+    assert current["as_of_sim_time_ms"] == 6000 and current["current_location"] is None

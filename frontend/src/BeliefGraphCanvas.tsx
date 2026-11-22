@@ -5,7 +5,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import type { DisplayFact } from "./BeliefGraphPage";
 import { graphPositions, type GraphPoint } from "./beliefGraphLayout";
-import { factColor } from "./beliefGraphAppearance";
+import { factColor, locationVerificationLabels } from "./beliefGraphAppearance";
 import { placeGraphLabels, type GraphLabel } from "./beliefGraphLabels";
 
 export type CameraAction = {
@@ -208,12 +208,16 @@ export function BeliefGraphCanvas({
       const start = source.clone().addScaledVector(normalized, 0.27);
       const end = target.clone().addScaledVector(normalized, -0.3);
       const lineGeometry = new THREE.BufferGeometry().setFromPoints([start, end]);
-      const lineMaterial = new THREE.LineBasicMaterial({
+      const materialOptions = {
         color: factColor(fact.active, false, false, false, document.documentElement.dataset.theme === "dark"),
         transparent: true,
         opacity: fact.active ? 0.95 : 0.7,
-      });
+      };
+      const lineMaterial = fact.locationStatus === "last_known" || fact.locationStatus === "earlier_station"
+        ? new THREE.LineDashedMaterial({ ...materialOptions, dashSize: fact.locationStatus === "last_known" ? 0.14 : 0.04, gapSize: 0.08 })
+        : new THREE.LineBasicMaterial(materialOptions);
       const line = new THREE.Line(lineGeometry, lineMaterial);
+      line.computeLineDistances();
       line.userData = { factId: fact.factId };
       scene.add(line);
 
@@ -227,6 +231,10 @@ export function BeliefGraphCanvas({
       scene.add(arrow);
 
       const labelObject = makeLabel(displayText(fact.predicate), fact.active ? "belief-edge-label" : "belief-edge-label superseded");
+      if (fact.locationStatus) {
+        labelObject.element.dataset.verification = locationVerificationLabels[fact.locationStatus];
+        labelObject.element.classList.add(fact.locationStatus);
+      }
       labelObject.position.copy(start).lerp(end, 0.5);
       scene.add(labelObject);
       labelObject.element.title = `${displayText(fact.source)} ${displayText(fact.predicate)} ${displayText(fact.target)} · ${Math.round(fact.confidence * 100)}% confidence · ${displayText(fact.sourceAgent)}`;

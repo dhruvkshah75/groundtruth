@@ -6,6 +6,7 @@ from src.procedural.intent_planner import IntentPlanner, IntentPlannerOutcome
 from src.procedural.plan_builder import PlanBuilder
 from src.procedural.plan_executor import (
     EnvironmentInterface,
+    LocationReader,
     MemoryRepositoryInterface,
     PlanExecutor,
 )
@@ -39,15 +40,26 @@ class CompositionService:
         return self.execute_intent(self.interpret(user_question))
 
     def execute_intent(
-        self, intent_outcome: IntentPlannerOutcome, *, sensors: EnvironmentInterface | None = None
+        self,
+        intent_outcome: IntentPlannerOutcome,
+        *,
+        sensors: EnvironmentInterface | None = None,
+        location_reader: LocationReader | None = None,
+        capture_time_ms: int | None = None,
     ) -> PlanExecutionResult | PlanningOutcome | IntentPlannerOutcome:
         if intent_outcome.fallback is not None:
             return intent_outcome
 
         assert intent_outcome.intent is not None
-        plan_outcome = self._builder.build(intent_outcome.intent, sensors=sensors)
+        plan_outcome = self._builder.build(
+            intent_outcome.intent,
+            sensors=sensors,
+            warehouse_time_ms=capture_time_ms if location_reader is not None else None,
+        )
         if plan_outcome.fallback is not None:
             return plan_outcome
 
         assert plan_outcome.plan is not None
-        return self._executor.execute(plan_outcome.plan, sensors=sensors)
+        return self._executor.execute(
+            plan_outcome.plan, sensors=sensors, location_reader=location_reader
+        )

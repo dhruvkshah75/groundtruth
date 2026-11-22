@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from traceback import format_exception
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -223,7 +224,7 @@ def test_propose_intent_raises_unavailable_on_client_error() -> None:
         provider.propose_intent("Is route A clear?")
 
     assert "Groq API call failed" in str(exc_info.value)
-    assert provider.last_error == "Rate limit reached"
+    assert provider.last_error == "Groq API call failed"
 
 
 def test_repair_intent_submits_error_feedback() -> None:
@@ -417,6 +418,8 @@ def test_planner_repairs_malformed_initial_proposal(monkeypatch: pytest.MonkeyPa
 def test_get_provider_config_default_is_live(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.providers.config import get_provider_config
 
+    monkeypatch.setattr("src.providers.config.load_env_file", lambda: None)
+
     monkeypatch.delenv("GROUNDTRUTH_PROVIDER_MODE", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
 
@@ -428,6 +431,8 @@ def test_get_provider_config_default_is_live(monkeypatch: pytest.MonkeyPatch) ->
 def test_get_provider_config_explicit_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.providers.config import get_provider_config
 
+    monkeypatch.setattr("src.providers.config.load_env_file", lambda: None)
+
     monkeypatch.setenv("GROUNDTRUTH_PROVIDER_MODE", "offline")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
 
@@ -438,6 +443,8 @@ def test_get_provider_config_explicit_offline(monkeypatch: pytest.MonkeyPatch) -
 def test_get_provider_config_typo_mode_defaults_to_live(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.providers.config import get_provider_config
 
+    monkeypatch.setattr("src.providers.config.load_env_file", lambda: None)
+
     # A typo like "ofline" must NOT silently fall back to rule-based
     monkeypatch.setenv("GROUNDTRUTH_PROVIDER_MODE", "ofline")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
@@ -445,3 +452,100 @@ def test_get_provider_config_typo_mode_defaults_to_live(monkeypatch: pytest.Monk
     config = get_provider_config()
     assert config.mode == "live"
     assert config.has_valid_key is False
+
+
+def test_dotenv_credential_is_hidden_from_provider_diagnostics(
+    tmp_path, monkeypatch, caplog, capsys
+):
+    from src.providers import config as provider_config
+
+    secret = "synthetic-groq-credential"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"GROQ_API_KEY={secret}\n")
+    load_env_file = provider_config.load_env_file
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.delenv("GROQ_API_KEY")
+    monkeypatch.setattr(provider_config, "load_env_file", lambda: load_env_file(env_file))
+    resolved = provider_config.get_provider_config()
+    assert resolved.has_valid_key
+    print(resolved)
+    assert secret not in capsys.readouterr().out
+
+    class UpstreamError(Exception):
+        status_code = 413
+
+    provider = GroqIntentProvider(client=FakeGroqClient([UpstreamError(secret) for _ in range(5)]))
+    operations = (
+        lambda: provider.propose_intent("Where?"),
+        lambda: provider.repair_intent("Where?", "Invalid intent"),
+        lambda: provider.reconsider_unsupported("Where?", ("current_route_status",)),
+        lambda: provider.generate_grounded_explanation(
+            "Where?", "current_route_status", "call", {}
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(IntentProviderUnavailableError) as failure:
+            operation()
+        assert failure.value.status_code == 413
+        assert secret not in "".join(format_exception(failure.value))
+        assert secret not in (provider.last_error or "")
+    assert provider.verify_grounded_explanation("Where?", {}, "Here") is False
+    assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("question", "name", "arguments"),
+    [
+        ("Where is parcel_01 now?", "object_location_query", {"mode": "current"}),
+        (
+            "Where was parcel_01 at 6.7 seconds?",
+            "object_location_query",
+            {"mode": "at_time", "at_sim_time_ms": 6700},
+        ),
+        (
+            "Where was parcel_01 last seen before 8 seconds?",
+            "object_location_query",
+            {"mode": "at_time", "at_sim_time_ms": 8000},
+        ),
+        (
+            "What evidence caused parcel_01's location belief to change?",
+            "object_location_query",
+            {"mode": "changes"},
+        ),
+        ("Why did the robot stop?", "explain_patrol_stop", {}),
+    ],
+)
+def test_warehouse_recording_prompts_validate_in_both_providers(question, name, arguments):
+    from json import dumps
+
+    from src.agent import GroundedAgent
+
+    payload = (
+        {"entity_mentions": ["parcel_01"], **arguments}
+        if name == "object_location_query"
+        else arguments
+    )
+    completion = FakeChatCompletion(
+        [FakeChatChoice(FakeChatCompletionMessage(tool_calls=[FakeToolCall(name, dumps(payload))]))]
+    )
+    client = FakeGroqClient([completion])
+    live = GroundedAgent.create(provider=GroqIntentProvider(client=client, model="test-model"))
+    offline = GroundedAgent.create()
+    try:
+        live_intent = live.interpret(question).intent
+        offline_intent = offline.interpret(question).intent
+        assert live_intent == offline_intent
+        assert live_intent.intent == name
+        assert live_intent.mode == arguments.get("mode")
+        assert live_intent.at_sim_time_ms == arguments.get("at_sim_time_ms")
+        function = next(
+            tool["function"]
+            for tool in client.calls[0]["tools"]
+            if tool["function"]["name"] == name
+        )
+        assert function["parameters"]["additionalProperties"] is False
+        if name == "explain_patrol_stop":
+            assert function["parameters"]["properties"] == {}
+    finally:
+        live.close()
+        offline.close()

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { highlightedFacts, visibleGraphNodes } from "./beliefGraphAppearance";
+import { factVerification, highlightedFacts, locationVerificationLabels, visibleGraphNodes } from "./beliefGraphAppearance";
 import {
   BrainCircuit,
   ChevronRight,
@@ -43,6 +43,7 @@ export type DisplayFact = {
   context: SpatialContext | null;
   active: boolean;
   supersededBy: string | null;
+  locationStatus?: NonNullable<GraphEdge["location_evidence"]>["status"];
 };
 
 function activeFact(edge: GraphEdge): DisplayFact {
@@ -58,10 +59,11 @@ function activeFact(edge: GraphEdge): DisplayFact {
     context: edge.context,
     active: true,
     supersededBy: null,
+    locationStatus: edge.location_evidence?.status,
   };
 }
 
-function ledgerFact(fact: Fact): DisplayFact {
+function ledgerFact(fact: Fact, locationStatus: DisplayFact["locationStatus"]): DisplayFact {
   return {
     factId: fact.fact_id,
     source: fact.subject,
@@ -74,6 +76,7 @@ function ledgerFact(fact: Fact): DisplayFact {
     context: fact.context,
     active: fact.superseded_by === null,
     supersededBy: fact.superseded_by,
+    locationStatus,
   };
 }
 
@@ -116,7 +119,9 @@ function GraphControls({ state, scope, onScopeChange }: {
     </section>
     <section className="belief-sidebar-section belief-legend" aria-labelledby="graph-legend-title">
       <h2 id="graph-legend-title">Legend</h2>
-      <ul><li><i className="node" />Entity or value node</li><li><i className="node historical" />No active relationships</li><li><i className="edge" />Active stored fact</li><li><i className="edge superseded" />Superseded fact in history</li><li><i className="changed" />New or revised fact</li></ul>
+      <ul><li><i className="node" />Entity or value node</li><li><i className="node historical" />No active relationships</li><li><i className="edge" />Active stored fact</li><li><i className="edge superseded" />Superseded fact in history</li><li><i className="changed" />New or revised fact</li>
+        {Object.entries(locationVerificationLabels).map(([status, label]) => <li key={status}><i className={`edge ${status}`} />{label}</li>)}
+      </ul>
     </section>
   </div>;
 }
@@ -142,6 +147,7 @@ function FactDetails({
   onOpenList: () => void;
   onSelectFact: (factId: string) => void;
 }) {
+  const verification = fact && factVerification(fact.locationStatus, fact.active);
   return (
     <aside className={`belief-details ${open ? "open" : ""}`} aria-label="Selected belief details" aria-hidden={!open} ref={(element) => { if (element) element.inert = !open; }}>
       <div className="belief-panel-content t-panel-slide" data-open={open}>
@@ -152,7 +158,11 @@ function FactDetails({
       {fact ? (
         <div className="belief-details-body">
           <div className="belief-detail-title">
-            <div><span className={`belief-state ${fact.active ? "active" : "superseded"}`}>{fact.active ? "Active fact" : "Superseded fact"}</span><h2>{displayText(fact.predicate)}</h2></div>
+            <div>
+              {verification && <span className={`belief-state ${verification.className}`}>{verification.label}</span>}
+              {fact.locationStatus && <small>{fact.active ? "Active fact" : "Superseded fact"}</small>}
+              <h2>{displayText(fact.predicate)}</h2>
+            </div>
             <GitCommitHorizontal size={22} aria-hidden="true" />
           </div>
           <p className="belief-detail-note">{fact.sourceAgent === "scenario_map"
@@ -291,7 +301,7 @@ function AccessibleFactList({
               key={fact.factId}
               onClick={() => { onSelect(fact.factId); onClose(); }}
             >
-              <span className={`belief-state ${fact.active ? "active" : "superseded"}`}>{fact.active ? "Active" : "Superseded"}</span>
+              <span className={`belief-state ${fact.active ? "active" : "superseded"}`}>{fact.locationStatus ? locationVerificationLabels[fact.locationStatus] : fact.active ? "Active" : "Superseded"}</span>
               <strong>{displayText(fact.source)} <em>{displayText(fact.predicate)}</em> {displayText(fact.target)}</strong>
               <small>{displayText(fact.sourceAgent)} · {Math.round(fact.confidence * 100)}% · {formatTime(fact.observedAt)}</small>
               <ChevronRight size={16} aria-hidden="true" />
@@ -409,12 +419,19 @@ export default function BeliefGraphPage({ embedded = false, sessionId, workspace
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const allFacts = useMemo(
-    () => scope === "active"
-      ? (state?.graph.edges ?? []).map(activeFact)
-      : (state?.ledger ?? []).map(ledgerFact),
-    [scope, state],
-  );
+  const allFacts = useMemo(() => {
+    const edges = state?.graph.edges ?? [];
+    if (scope === "active") return edges.map(activeFact);
+    const metadata = new Map(edges.flatMap((edge) => edge.location_evidence ? [[edge.fact_id, edge.location_evidence]] : []));
+    const assessedParcels = new Map([...metadata.values()].map(({ assessment }) => [assessment.entity_id, assessment.run_id]));
+    return (state?.ledger ?? []).map((fact) => {
+      const earlierStation = fact.superseded_by !== null && fact.predicate === "located_at"
+        && typeof fact.evidence.sample_id === "string"
+        && assessedParcels.has(fact.subject)
+        && assessedParcels.get(fact.subject) === fact.context.extra_context.run_id;
+      return ledgerFact(fact, metadata.get(fact.fact_id)?.status ?? (earlierStation ? "earlier_station" : undefined));
+    });
+  }, [scope, state]);
   const facts = allFacts;
   const displayedHighlights = useMemo(
     () => highlightedFacts(highlightedFactIds, state?.ledger ?? [], state?.audit_events ?? []),

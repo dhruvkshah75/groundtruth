@@ -20,6 +20,7 @@ import networkx as nx
 
 from src.composition import CompositionService
 from src.contracts import AuditEvent, AuditTrail, FactQuery, SensorObservation, StoredFact
+from src.contracts.simulation_api import PatrolDecisionSummary
 from src.declarative.active_graph import ActiveBeliefGraph, GraphSyncedRepository
 from src.declarative.memory_repository import MemoryRepository, RevisionOutcome
 from src.procedural.capability_validator import CapabilityValidator
@@ -29,8 +30,9 @@ from src.procedural.intent_coverage_reviewer import IntentCoverageReviewer
 from src.procedural.intent_planner import IntentPlanner, IntentPlannerOutcome
 from src.procedural.intent_provider import IntentProvider, IntentProviderUnavailableError
 from src.procedural.plan_builder import PlanBuilder
-from src.procedural.plan_executor import EnvironmentInterface
+from src.procedural.plan_executor import EnvironmentInterface, LocationReader
 from src.procedural.rule_based_provider import RuleBasedIntentProvider
+from src.procedural.temporal_belief_ingestion import LocationAssessment
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import RobotState, WorldState
 
@@ -87,6 +89,8 @@ class AgentResponse:
     plan_verifiable: bool | None = None
     plan_reason: str | None = None
     react_trace: ReActTrace | None = None
+    location_assessment: LocationAssessment | None = None
+    patrol_stop: PatrolDecisionSummary | None = None
 
 
 class GroundedAgent:
@@ -191,16 +195,9 @@ class GroundedAgent:
         *,
         sensors: EnvironmentInterface | None = None,
         capture_time_ms: int | None = None,
+        location_reader: LocationReader | None = None,
     ) -> Callable[[], AgentResponse]:
         """Execute deterministic operations and prepare a detached provider-only continuation."""
-        plan_result = self._composition.execute_intent(intent, sensors=sensors)
-
-        # Propagate live provider failures immediately to the API layer
-        fallback = getattr(plan_result, "fallback", None)
-        if fallback is not None and fallback.category == "provider_unavailable":
-            last_err = getattr(self._provider, "last_error", None) or fallback.reason
-            raise IntentProviderUnavailableError(f"Live intent provider failed: {last_err}")
-
         sim_time = capture_time_ms
         if sim_time is None and sensors is not None:
             sim_time = getattr(sensors, "sim_time_ms", None)
@@ -209,6 +206,16 @@ class GroundedAgent:
                     sim_time = sensors.read().status.sim_time_ms
                 except Exception:
                     pass
+
+        plan_result = self._composition.execute_intent(
+            intent, sensors=sensors, location_reader=location_reader, capture_time_ms=sim_time
+        )
+
+        # Propagate live provider failures immediately to the API layer
+        fallback = getattr(plan_result, "fallback", None)
+        if fallback is not None and fallback.category == "provider_unavailable":
+            last_err = getattr(self._provider, "last_error", None) or fallback.reason
+            raise IntentProviderUnavailableError(f"Live intent provider failed: {last_err}")
 
         # 2. Epistemically evaluate against memory and observations
         eval_outcome: EpistemicEvaluation = self._evaluator.evaluate(
@@ -265,7 +272,38 @@ class GroundedAgent:
 
         # Build detailed operations trace with actual returned values and evidence IDs
         operations_trace: list[dict[str, Any]] = []
+        assessment = getattr(plan_result, "location_assessment", None)
+        patrol_stop = getattr(plan_result, "patrol_stop", None)
         if isinstance(plan_result, PlanExecutionResult):
+            if plan_result.intent and plan_result.intent.intent == "explain_patrol_stop":
+                stop_sample = plan_result.patrol_stop_sample
+                operations_trace.append(
+                    {
+                        "name": "patrol_stop",
+                        "purpose": "Read the recorded patrol stop and its LiDAR citation.",
+                        "ran": True,
+                        "status": "completed" if patrol_stop else "no_data",
+                        "evidence_ids": [str(stop_sample.sample_id)] if stop_sample else [],
+                        "returned_values": patrol_stop.model_dump(mode="json")
+                        if patrol_stop
+                        else {},
+                        "summary": "Read the latest stop record for the active run.",
+                    }
+                )
+            if assessment is not None:
+                operations_trace.append(
+                    {
+                        "name": "location_assessment",
+                        "purpose": "Read applicable camera evidence for the parcel.",
+                        "ran": True,
+                        "status": assessment.verification_status,
+                        "evidence_ids": [
+                            str(sample.sample_id) for sample in plan_result.location_samples
+                        ],
+                        "returned_values": assessment.model_dump(mode="json"),
+                        "summary": "Assessed location at the captured simulation time.",
+                    }
+                )
             for mem_res in plan_result.memory_results:
                 fact_ids = [str(f.fact_id) for f in mem_res.facts]
                 returned_facts = [
@@ -353,7 +391,8 @@ class GroundedAgent:
                         "purpose": audit_res.purpose,
                         "ran": True,
                         "status": "completed",
-                        "evidence_ids": audit_ids,
+                        "evidence_ids": audit_ids
+                        + [str(sample.sample_id) for sample in audit_res.samples],
                         "returned_values": {
                             str(k): [str(e.event_id) for e in trail.events]
                             for k, trail in audit_res.trails.items()
@@ -388,11 +427,21 @@ class GroundedAgent:
                 plan_verifiable=plan_verifiable,
                 plan_reason=_plan_reason(plan_result),
                 react_trace=react_trace,
+                location_assessment=assessment,
+                patrol_stop=patrol_stop,
             )
         )
         evaluation = deepcopy(eval_outcome)
         payload = deepcopy(tool_result)
-        return lambda: _explain(response, provider, evaluation, payload)
+        request = getattr(plan_result, "intent", None)
+        preserve_citations = request is not None and (
+            request.intent == "explain_patrol_stop"
+            or assessment is not None
+            or (location_reader is not None and request.mode in ("at_time", "changes"))
+        )
+        return lambda: _explain(
+            response, provider, evaluation, payload, preserve_citations=preserve_citations
+        )
 
 
 def _explain(
@@ -400,6 +449,8 @@ def _explain(
     provider: IntentProvider | None,
     eval_outcome: EpistemicEvaluation,
     tool_result: dict[str, Any],
+    *,
+    preserve_citations: bool = False,
 ) -> AgentResponse:
     """Run synthesis and review with request-owned evidence only."""
     trace = response.react_trace
@@ -439,9 +490,14 @@ def _explain(
                     tool_call_id=tool_call_id,
                     tool_result=tool_result,
                 )
-            exact = validate_grounded_response(grounded_text, eval_outcome)
+            exact = (
+                (grounded_text or "").strip() == eval_outcome.explanation
+                if preserve_citations
+                else validate_grounded_response(grounded_text, eval_outcome)
+            )
             reviewed = (
-                bool(grounded_text and grounded_text.strip())
+                not preserve_citations
+                and bool(grounded_text and grounded_text.strip())
                 and not exact
                 and hasattr(provider, "verify_grounded_explanation")
                 and provider.verify_grounded_explanation(question, tool_result, grounded_text)
@@ -461,7 +517,9 @@ def _explain(
                 final_answer = eval_outcome.explanation
                 explanation_source = "deterministic_fallback"
         except IntentProviderUnavailableError:
-            raise
+            if not preserve_citations:
+                raise
+            explanation_source = "deterministic_fallback"
         except Exception as exc:
             if history_query:
                 raise IntentProviderUnavailableError(

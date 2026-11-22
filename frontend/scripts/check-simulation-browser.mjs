@@ -67,7 +67,7 @@ try {
   }, { first: session, second: secondSession });
   await page.goto(`${base}/simulation`);
   await page.getByRole("heading", { name: "Warehouse inspection" }).waitFor();
-  await post("Load preset", "load");
+  const initial = await post("Load preset", "load");
   await robot.waitFor();
   assert.equal(await page.getByRole("complementary", { name: "Agent workspace" })
     .getByRole("button", { name: "Reload preset" }).count(), 1);
@@ -85,17 +85,34 @@ try {
   const questionBox = await questions.boundingBox();
   const mapBox = await page.locator(".sim-layout").boundingBox();
   assert.ok(questionBox.x >= mapBox.x + mapBox.width);
-  assert.ok(Math.abs(questionBox.y - mapBox.y) < 2);
+  const evidenceBox = await page.getByRole("region", { name: "Belief and evidence" }).boundingBox();
+  assert.ok(Math.abs(evidenceBox.y - mapBox.y) < 2);
+  assert.ok(questionBox.y > evidenceBox.y + evidenceBox.height);
   assert.ok(Math.abs(questionBox.width - mapBox.width) < 2);
   await questions.getByLabel("Entity").selectOption("parcel_01");
   const evidencePanel = page.getByRole("region", { name: "Belief and evidence" });
+  const locationDetails = evidencePanel.getByText("Location evidence", { exact: true });
+  const locationRecords = locationDetails.locator("..");
+  const timelineSummary = (panel) => panel.getByText(/^Observation and revision timeline/);
+  const cameraAt = (state) => state.observation.latest.camera_detect;
+  const shownAt = (ms) => `${(ms / 1000).toFixed(3)} s`;
+  const liveRegion = page.getByRole("region", { name: "Simulated world" });
+  await liveRegion.getByText("Simulated objects and coordinates", { exact: true }).click();
+  const parcelButton = liveRegion.getByRole("button", { name: "Parcel 01", exact: true });
+  await parcelButton.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await parcelButton.getAttribute("aria-pressed"), "true");
+  await liveRegion.getByText("Simulated objects and coordinates", { exact: true }).click();
   await evidencePanel.getByRole("heading", { name: "Parcel 01" }).waitFor();
-  await evidencePanel.getByText(/Verification · verified/).waitFor();
-  await evidencePanel.getByText(/Last observed · 0.000 s/).waitFor();
+  await evidencePanel.getByText("Verified · Packing station", { exact: true }).waitFor();
+  await locationDetails.focus();
+  await page.keyboard.press("Enter");
+  await locationRecords.getByText(cameraAt(initial).sample_id, { exact: true }).waitFor();
+  await locationDetails.click();
   await page.locator("[data-entity=parcel_03]").click({ force: true });
   await evidencePanel.getByRole("heading", { name: "Parcel 03" }).waitFor();
-  await evidencePanel.getByText(/No stored location or route status/).waitFor();
-  assert.equal(await evidencePanel.getByText(/Last observed/).count(), 0);
+  await evidencePanel.getByText("Current location unknown").waitFor();
+  assert.equal(await evidencePanel.getByText(/Last seen ·/).count(), 0);
   await questions.getByLabel("Entity").selectOption("parcel_01");
   await questions.getByRole("button", { name: "Where is parcel 01 now?" }).click();
   assert.equal(await questions.getByLabel("Your question").inputValue(), "Where is parcel_01 now?");
@@ -184,20 +201,23 @@ try {
   await page.getByRole("complementary", { name: "Agent workspace" }).getByText(conflict.error, { exact: true }).waitFor();
   await post("Play", "control");
   await observations.getByText("Camera unavailable", { exact: true }).waitFor();
-  await evidencePanel.getByText(/Verification · unavailable/).waitFor();
-  const outageTime = await evidencePanel.getByText(/Sensor unavailable · [\d.]+ s/).innerText();
-  const lastSeen = await evidencePanel.getByText(/Last observed · [\d.]+ s/).innerText();
+  await evidencePanel.getByText("Current location unknown", { exact: true }).waitFor();
+  const outageTime = await evidencePanel.getByText(/Camera unavailable · [\d.]+ s/).innerText();
+  const lastSeen = await evidencePanel.getByText(/Last seen ·/).innerText();
+  await liveRegion.getByText("Camera coverage unavailable", { exact: true }).waitFor();
+  assert.equal(await liveRegion.locator(".warehouse-sector").count(), 0);
   const seconds = (text) => Number(text.match(/([\d.]+) s/)[1]);
   assert.ok(seconds(lastSeen) < seconds(outageTime));
   await post("Pause", "control");
   await schedule("camera_on");
   await schedule("lidar_off");
   await schedule("yellow");
-  await schedule("cart_block");
+  const { event: cartBlock } = await schedule("cart_block");
   await schedule("relocate");
   await post("Play", "control");
   await observations.getByText("LiDAR unavailable", { exact: true }).waitFor();
-  await eventually(async () => Number((await clock.innerText()).split(" ")[0]) >= paused.sim_time_ms / 1000 + 2);
+  await eventually(async () =>
+    seconds(await clock.innerText()) * 1000 >= cartBlock.at_ms + cartBlock.duration_ms);
   await post("Pause", "control");
   await schedule("cart_clear");
   await schedule("lidar_on");
@@ -455,7 +475,77 @@ try {
   await page.reload();
   await page.getByRole("heading", { name: "Warehouse inspection" }).waitFor();
   await page.getByText("Session · Second chat", { exact: true }).waitFor();
-  await post("Load preset", "load");
+  const second = await post("Load preset", "load");
+  const runIdentity = (state) => ({ run_id: state.run_id, generation: state.generation });
+  const secondApi = (path, data) => context.request.post(`${base}/api/simulation/${path}`, {
+    headers: { "X-Session-ID": secondSession }, data,
+  });
+  let reading = second;
+  async function stepTo(ms) {
+    while (reading.sim_time_ms < ms) {
+      const response = await secondApi("control", { action: "step", expected: runIdentity(reading) });
+      assert.equal(response.status(), 200, await response.text());
+      reading = await response.json();
+    }
+    await eventually(async () => await clock.innerText() === shownAt(ms));
+  }
+  async function locationAt(ms, status) {
+    await stepTo(ms);
+    const response = await secondApi("evidence", { expected: runIdentity(reading), entity_id: "parcel_01" });
+    assert.equal(response.status(), 200, await response.text());
+    const { location_assessment } = await response.json();
+    assert.equal(location_assessment.verification_status, status);
+    return location_assessment;
+  }
+  async function assertSighting(sighting, label) {
+    await evidencePanel.getByText(label, { exact: true }).waitFor();
+    await locationRecords.getByText(sighting.sample_id, { exact: true }).waitFor();
+  }
+  await locationDetails.click();
+  const aisle = await locationAt(6_000, "verified");
+  assert.equal(aisle.current_location, null);
+  assert.notEqual(aisle.current_sighting.sample_id, cameraAt(second).sample_id);
+  await assertSighting(aisle.current_sighting, "Verified · (115, 370) cm");
+  // A later robot pose must leave coverage anchored to its original camera sample.
+  await stepTo(6_100);
+  const camera = cameraAt(reading);
+  const { x_cm, y_cm, direction } = camera.observer_pose;
+  assert.notEqual(reading.audience.snapshot.robot_pose.y_cm, y_cm);
+  await liveRegion.getByText(new RegExp(`Camera coverage · ${direction}.*${shownAt(camera.sim_time_ms)}`, "i")).waitFor();
+  assert.ok((await liveRegion.locator(".warehouse-sector").getAttribute("d"))
+    .startsWith(`M ${x_cm} ${reading.audience.bounds.height_cm - y_cm} L `));
+
+  const stationB = await locationAt(7_000, "verified");
+  assert.notEqual(stationB.current_sighting.sample_id, aisle.current_sighting.sample_id);
+  await assertSighting(stationB.current_sighting, "Verified · Inspection station");
+  // The latest stop remains linked to its original stored sample after resumption.
+  await stepTo(21_600);
+  const prior = reading.patrol.latest_stop_decision;
+  assert.ok(prior?.sensor_sample_id);
+  assert.equal(reading.patrol.current_decision.state, "moving");
+  const patrol = page.getByRole("region", { name: "Patrol evidence" });
+  const priorButton = patrol.getByRole("button", { name: "Open prior stop LiDAR sample" });
+  await priorButton.focus();
+  await page.keyboard.press("Enter");
+  await patrol.getByText(prior.sensor_sample_id, { exact: true }).waitFor();
+  assert.equal(await patrol.getByRole("heading", { name: "Recorded LiDAR sample" }).evaluate((heading) => document.activeElement === heading), true);
+  await patrol.getByText("Raw LiDAR sample", { exact: true }).focus();
+  await page.keyboard.press("Enter");
+  const raw = JSON.parse(await patrol.locator("pre").innerText());
+  assert.equal(raw.sample_id, prior.sensor_sample_id);
+  assert.equal(raw.sim_time_ms, prior.sensor_sim_time_ms);
+  assert.equal(raw.request.capability, "lidar_scan");
+
+  const lost = await locationAt(24_500, "last_seen");
+  await assertSighting(lost.last_sighting, "Current location unknown");
+  const worldParcel = reading.audience.snapshot.entities.find((item) => item.entity_id === "parcel_01").footprint;
+  assert.notDeepEqual([worldParcel.x_cm, worldParcel.y_cm], [lost.last_sighting.position.x_cm, lost.last_sighting.position.y_cm]);
+  await eventually(async () => await page.locator("[data-entity=parcel_01]").getAttribute("transform")
+    === `translate(${worldParcel.x_cm},${reading.audience.bounds.height_cm - worldParcel.y_cm})`);
+  const laterAisle = await locationAt(25_500, "verified");
+  await assertSighting(laterAisle.current_sighting, "Verified · (372.5, 367.5) cm");
+  await locationDetails.click();
+
   await post("2×", "control");
   await post("Play", "control");
   await page.getByText("Run finished. Reload the preset to schedule disruptions.", { exact: true })
@@ -466,8 +556,8 @@ try {
   await page.getByLabel("Entity").selectOption("parcel_01");
   const finalEvidence = page.getByRole("region", { name: "Belief and evidence" });
   await finalEvidence.getByRole("heading", { name: "Parcel 01" }).waitFor();
-  await finalEvidence.locator(".sim-timeline-details > summary").click();
-  await finalEvidence.getByText(/Verification · last seen · not currently visible · stale/).waitFor();
+  await timelineSummary(finalEvidence).click();
+  await finalEvidence.getByText("Current location unknown", { exact: true }).waitFor();
   await finalEvidence.getByText("Earlier belief · packing station", { exact: true }).waitFor();
   await finalEvidence.getByText("Updated belief · inspection station", { exact: true }).waitFor();
   const receipt = finalEvidence.getByText(/Received by ledger/).first();
@@ -479,6 +569,7 @@ try {
   await dragTab("Belief graph");
   const graph = dock.locator(".belief-shell");
   await graph.getByText("Superseded fact", { exact: true }).waitFor();
+  await graph.locator(".belief-detail-title .belief-state.earlier_station").getByText("Earlier station", { exact: true }).waitFor();
   await finalEvidence.getByRole("button", { name: "Focus updated belief" }).last().click();
   await graph.getByText("Active fact", { exact: true }).waitFor();
   const timelineCount = await finalEvidence.locator(".sim-timeline-list > li").count();
@@ -489,13 +580,13 @@ try {
   await page.keyboard.press("Enter");
   await eventually(async () => (await questions.getByLabel("Entity").inputValue()) === "route_A");
   await finalEvidence.getByRole("heading", { name: "Route A" }).waitFor();
-  await finalEvidence.locator(".sim-timeline-details > summary").click();
+  await timelineSummary(finalEvidence).click();
   await finalEvidence.getByText("Updated belief · blocked", { exact: true }).first().waitFor();
   await finalEvidence.getByText("Updated belief · clear", { exact: true }).first().waitFor();
   await graph.getByRole("heading", { name: "Stored beliefs" }).waitFor();
   assert.ok(await graph.evaluate((element) => element.scrollWidth <= element.clientWidth + 1));
   await page.getByLabel("Entity").selectOption("parcel_01");
-  await finalEvidence.locator(".sim-timeline-details > summary").click();
+  await timelineSummary(finalEvidence).click();
   assert.equal(await finalEvidence.locator(".sim-timeline-list > li").count(), timelineCount);
   await finalEvidence.getByRole("button", { name: "Focus updated belief" }).last().click();
   await graph.locator(".belief-details-body").getByText("parcel 01", { exact: true }).first().waitFor();
@@ -515,10 +606,11 @@ try {
   // Move a parcel outside the initial camera view. Its audience position changes,
   // but a real answer and the evidence panel must not disclose that position.
   await button("Simulation").click();
-  const fresh = await post("Reload preset", "load");
-  const secondApi = (path, data) => context.request.post(`${base}/api/simulation/${path}`, {
-    headers: { "X-Session-ID": secondSession }, data,
-  });
+  const fresh = await post("Reset run", "control");
+  assert.notEqual(fresh.run_id, second.run_id);
+  assert.equal(fresh.audience.snapshot.scenario_id, second.audience.snapshot.scenario_id);
+  assert.equal(fresh.sim_time_ms, 0);
+  assert.equal(await patrol.getByText(prior.sensor_sample_id, { exact: true }).count(), 0);
   const move = await secondApi("disrupt", {
     expected: { run_id: fresh.run_id, generation: fresh.generation }, request_id: randomUUID(),
     disruption: { kind: "relocate_parcel", entity_id: "parcel_03", to: { x_cm: 735, y_cm: 200 }, duration_ms: 100 },
@@ -532,8 +624,8 @@ try {
     return current.audience.snapshot.entities.some((item) => item.entity_id === "parcel_03" && item.footprint.x_cm === 735);
   });
   await questions.getByLabel("Entity").selectOption("parcel_03");
-  await finalEvidence.getByText(/No stored location or route status/).waitFor();
-  assert.equal(await finalEvidence.getByText(/Last observed|735/).count(), 0);
+  await finalEvidence.getByText("Current location unknown").waitFor();
+  assert.equal(await finalEvidence.getByText(/Last seen ·|735/).count(), 0);
 
   // Hold a real answer after capture while simulation time continues to advance.
   async function holdAsk(text) {
@@ -567,6 +659,71 @@ try {
   old.deliver.resolve();
   await questions.getByRole("button", { name: "Where is parcel 01 now?" }).waitFor();
   assert.equal(await questions.locator(".conversation-turn").count(), 0);
+
+  await page.getByLabel("Warehouse preset").selectOption("warehouse_belief_demo_v1");
+  const demo = await post("Load preset", "load");
+  await page.getByRole("heading", { name: "Warehouse belief demo" }).waitFor();
+
+  async function rehearseDemo(run) {
+    assert.equal(run.audience.snapshot.scenario_id, "warehouse_belief_demo_v1");
+    assert.equal(run.sim_time_ms, 0);
+    reading = run;
+    await finalEvidence.getByText("Verified · Station A", { exact: true }).waitFor();
+    await locationDetails.click();
+    const atA = await locationAt(0, "verified");
+    await assertSighting(atA.current_sighting, "Verified · Station A");
+
+    const notVisible = await locationAt(6_500, "last_seen");
+    assert.equal(notVisible.last_sighting.station_id, "station_A");
+    assert.equal(notVisible.last_sighting.sim_time_ms, 6_000);
+    assert.notEqual(notVisible.last_sighting.sample_id, atA.current_sighting.sample_id);
+    await assertSighting(notVisible.last_sighting, "Current location unknown");
+    await liveRegion.locator("[data-entity=parcel_01][transform='translate(365,95)']").waitFor();
+    await finalEvidence.getByText(/Last seen · Station A/).waitFor();
+
+    const inAisle = await locationAt(12_500, "verified");
+    assert.equal(inAisle.current_location, null);
+    assert.notEqual(inAisle.current_sighting.sample_id, notVisible.last_sighting.sample_id);
+    await assertSighting(inAisle.current_sighting, "Verified · (390, 240) cm");
+    const atB = await locationAt(19_500, "verified");
+    assert.notEqual(atB.current_sighting.sample_id, inAisle.current_sighting.sample_id);
+    await assertSighting(atB.current_sighting, "Verified · Station B");
+
+    await stepTo(28_500);
+    assert.equal(reading.patrol.state, "blocked");
+    const stop = reading.patrol.latest_stop_decision;
+    assert.ok(stop?.sensor_sample_id);
+    await patrol.getByRole("heading", { name: "Blocked", exact: true }).waitFor();
+    await stepTo(33_000);
+    assert.equal(reading.patrol.state, "moving");
+    await patrol.getByRole("button", { name: "Open prior stop LiDAR sample" }).press("Enter");
+    await patrol.getByText(stop.sensor_sample_id, { exact: true }).waitFor();
+    const current = await locationAt(33_000, "verified");
+    await assertSighting(current.current_sighting, "Verified · Station B");
+
+    await questionInput.fill("Where is parcel_01 now?");
+    const [answerResponse] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith("/api/ask") && response.request().method() === "POST"),
+      questions.getByRole("button", { name: "Ask", exact: true }).click(),
+    ]);
+    assert.equal(answerResponse.status(), 200, await answerResponse.text());
+    const { answer } = await answerResponse.json();
+    assert.equal(answer.simulation_evidence.location_assessment.current_sighting.sample_id, current.current_sighting.sample_id);
+    return stop.sensor_sample_id;
+  }
+
+  const firstStop = await rehearseDemo(demo);
+  const reloaded = await post("Reload preset", "load");
+  assert.notEqual(reloaded.run_id, demo.run_id);
+  await patrol.getByText(firstStop, { exact: true }).waitFor({ state: "detached" });
+  assert.notEqual(await rehearseDemo(reloaded), firstStop);
+  const restarted = await post("Reset run", "control");
+  assert.notEqual(restarted.run_id, reloaded.run_id);
+  assert.equal(restarted.audience.snapshot.scenario_id, "warehouse_belief_demo_v1");
+  assert.equal(restarted.sim_time_ms, 0);
+  await finalEvidence.getByText("Verified · Station A", { exact: true }).waitFor();
+  const previousSample = await secondApi("evidence", { expected: runIdentity(restarted), sample_id: firstStop });
+  assert.equal(previousSample.status(), 400);
 
   console.log("Simulation browser checks passed on the real backend at 1440, 1024, 768 and 390px.");
 } finally {
