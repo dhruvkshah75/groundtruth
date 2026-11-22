@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Activity, ArrowUp, Camera, Check, CircleAlert, LoaderCircle, Map, Pause, Play, SkipForward, SlidersHorizontal, WifiOff, X } from "lucide-react";
 import { api, ApiRequestError } from "./api";
 import type {
-  CameraDetection, SimulationControlRequest, SimulationDisruptRequest,
+  CameraDetection, PatrolDecisionSummary, SimulationControlRequest, SimulationDisruptRequest, SimulationSampleEvidenceResponse,
   SimulationStateResponse, StoredObservationSample,
 } from "./simulationTypes";
 import { useSimulation } from "./useSimulation";
@@ -11,6 +11,12 @@ import type { AgentResponse, LocationAssessment, LocationSighting, SimulationEvi
 import { displayText } from "./display";
 import WarehouseMap, { warehouseLabel } from "./WarehouseMap";
 import "./simulation-workspace.css";
+
+const presets = {
+  warehouse_inspection_v1: "Warehouse inspection",
+  warehouse_belief_demo_v1: "Warehouse belief demo",
+};
+type Preset = keyof typeof presets;
 
 const rates = [0.25, 0.5, 1, 2] as const;
 const patrolLabels = {
@@ -35,8 +41,7 @@ function captureAge(state: SimulationStateResponse, sample: StoredObservationSam
   return `Captured at ${simTime(sample.sim_time_ms)}${age > freshness ? " · old sample" : ""}`;
 }
 
-function ObservationPanel({ state, stale }: { state: SimulationStateResponse | null; stale: boolean }) {
-  const camera = state?.observation.latest.camera_detect;
+function ObservationPanel({ state, camera, stale }: { state: SimulationStateResponse | null; camera?: StoredObservationSample; stale: boolean }) {
   const lidar = state?.observation.latest.lidar_scan;
   const objects = camera && "measurements" in camera.result ? camera.result.measurements.objects : null;
   const detections = Array.isArray(objects) ? objects as CameraDetection[] : null;
@@ -81,6 +86,74 @@ function ObservationPanel({ state, stale }: { state: SimulationStateResponse | n
   </section>;
 }
 
+function Decision({ decision, label, onSample }: {
+  decision: PatrolDecisionSummary; label: string; onSample: (id: string) => void;
+}) {
+  const sampleId = decision.sensor_sample_id ?? decision.sample_id;
+  return <div className="sim-observation">
+    <h3>{label}</h3>
+    <p>{decision.policy_reason}</p>
+    <p className="sim-subtle">Decided at {simTime(decision.decision_sim_time_ms ?? decision.sim_time_ms)}
+      {decision.computed_clearance_cm != null && ` · Clearance ${decision.computed_clearance_cm.toFixed(1)} cm`}
+    </p>
+    {sampleId && <button type="button" className="sim-history-button" onClick={() => onSample(sampleId)}>
+      {label === "Prior stop" ? "Open prior stop LiDAR sample" : "Open decision LiDAR sample"}
+    </button>}
+  </div>;
+}
+
+function PatrolPanel({ sessionId, runId, generation, patrol, stale }: {
+  sessionId: string; runId: string; generation: number; patrol: SimulationStateResponse["patrol"]; stale: boolean;
+}) {
+  const [request, setRequest] = useState<{ id: string }>();
+  const sampleId = request?.id;
+  const [sampleResult, setSampleResult] = useState<{
+    id: string; sample?: SimulationSampleEvidenceResponse["sample"]; error?: string;
+  }>();
+  const sampleHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!sampleId) return;
+    sampleHeading.current?.focus();
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]);
+    void api.simulationSampleEvidence({ run_id: runId, generation }, sampleId, { sessionId, signal }).then((result) => {
+      if (result.run_id !== runId || result.generation !== generation || result.sample.sample_id !== sampleId
+        || result.sample.run_id !== runId || result.sample.request.capability !== "lidar_scan") {
+        throw new Error("The cited LiDAR sample is unavailable.");
+      }
+      if (!controller.signal.aborted) setSampleResult({ id: sampleId, sample: result.sample });
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setSampleResult({ id: sampleId, error: error instanceof Error ? error.message : "The cited LiDAR sample is unavailable." });
+    });
+    return () => controller.abort();
+  }, [sessionId, runId, generation, request, sampleId]);
+
+  function openSample(id: string) {
+    setSampleResult(undefined);
+    setRequest({ id });
+  }
+
+  const current = patrol?.current_decision;
+  const prior = patrol?.latest_stop_decision;
+  const sameDecision = prior && current?.state === prior.state && current.sim_time_ms === prior.sim_time_ms;
+  const result = sampleResult?.id === sampleId ? sampleResult : undefined;
+  const title = useId();
+  return <section className="sim-panel" aria-labelledby={title}>
+    <div className="sim-panel-heading"><h2 id={title}>Patrol evidence</h2>{stale && <span className="sim-chip warn">Stale</span>}</div>
+    {current ? <Decision decision={current} label={patrolLabels[current.state]} onSample={openSample} />
+      : <div className="sim-observation"><p>Awaiting a patrol decision.</p></div>}
+    {prior && !sameDecision && <Decision decision={prior} label="Prior stop" onSample={openSample} />}
+    {sampleId && <div className="sim-observation sim-decision-sample">
+      <h3 tabIndex={-1} ref={sampleHeading}>Recorded LiDAR sample</h3>
+      {result?.sample ? <>
+        <p>Captured at {simTime(result.sample.sim_time_ms)} · {displayText(result.sample.sensor_id)}</p>
+        <p><code>{result.sample.sample_id}</code></p>
+        <details><summary>Raw LiDAR sample</summary><pre>{JSON.stringify(result.sample, null, 2)}</pre></details>
+      </> : result?.error ? <p role="alert" className="sim-warning">{result.error}</p> : <p role="status">Loading LiDAR sample…</p>}
+    </div>}
+  </section>;
+}
+
 function sightingPosition({ position }: LocationSighting) {
   return `(${position.x_cm}, ${position.y_cm}) cm`;
 }
@@ -99,7 +172,7 @@ function ParcelBelief({ assessment }: { assessment: LocationAssessment }) {
       ? <p className="sim-subtle">Camera · {simTime(current.sim_time_ms)} · {displayText(current.frame_of_reference)}</p>
       : <>
         {last && <p>Last seen · {last.station_id ? warehouseLabel(last.station_id) : sightingPosition(last)} · {simTime(last.sim_time_ms)}</p>}
-        {assessment.verification_status === "unavailable" && <p className="sim-warning">Camera unavailable</p>}
+        {assessment.verification_status === "unavailable" && <p className="sim-warning">Camera unavailable{lost && ` · ${simTime(lost.sim_time_ms)}`}</p>}
       </>}
     {reasonText && <p className="sim-subtle">{reasonText}</p>}
     {earlier && earlier !== sighting?.station_id && <p className="sim-subtle">Earlier station · {warehouseLabel(earlier)}</p>}
@@ -131,33 +204,39 @@ function observationDescription(sample: StoredObservationSample, entity: string)
   return "Sensor observation recorded";
 }
 
-function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId: string; state: SimulationStateResponse; entity: string; onFocusFact: (factId: string) => void }) {
-  const [evidence, setEvidence] = useState<SimulationEvidence | null>(null);
-  const [error, setError] = useState("");
+function useEntityEvidence(sessionId: string, runId: string | null, generation: number, entity: string) {
+  const scope = JSON.stringify([sessionId, runId, generation, entity]);
+  const [response, setResponse] = useState<{ scope: string; evidence?: SimulationEvidence; error?: string }>();
   useEffect(() => {
-    if (!state.run_id || !entity) { setEvidence(null); return; }
-    let active = true;
+    setResponse(undefined);
+    if (!runId || !entity) return;
+    const controller = new AbortController();
     let timer: number;
-    let controller: AbortController;
-    setEvidence(null);
-    setError("");
     const poll = async () => {
-      controller = new AbortController();
       try {
-        const result = await api.simulationEvidence({ run_id: state.run_id!, generation: state.generation }, entity, { sessionId, signal: controller.signal });
-        if (!active) return;
-        if (result.run_id !== state.run_id || result.generation !== state.generation || result.entity_id !== entity) {
+        const evidence = await api.simulationEvidence({ run_id: runId, generation }, entity, {
+          sessionId, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
+        });
+        if (controller.signal.aborted) return;
+        if (evidence.run_id !== runId || evidence.generation !== generation || evidence.entity_id !== entity) {
           throw new Error("Evidence for this run and selection is unavailable.");
         }
-        setEvidence(result);
-        setError("");
+        setResponse({ scope, evidence });
       } catch (cause) {
-        if (active && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load evidence.");
-      } finally { if (active) timer = window.setTimeout(poll, 1500); }
+        if (!controller.signal.aborted) setResponse({ scope, error: cause instanceof Error ? cause.message : "Could not load evidence." });
+      } finally {
+        if (!controller.signal.aborted) timer = window.setTimeout(poll, 1_500);
+      }
     };
     void poll();
-    return () => { active = false; window.clearTimeout(timer); controller?.abort(); };
-  }, [sessionId, state.run_id, state.generation, entity]);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [sessionId, runId, generation, entity, scope]);
+  return response?.scope === scope ? response : undefined;
+}
+
+function EvidenceTimeline({ entity, evidence, error, stale, onFocusFact }: {
+  entity: string; evidence?: SimulationEvidence; error?: string; stale: boolean; onFocusFact: (factId: string) => void;
+}) {
   const facts = evidence?.facts ?? [];
   const revisions = (evidence?.events ?? []).map((event) => {
     const next = facts.find((fact) => event.output_fact_ids.includes(fact.fact_id));
@@ -174,13 +253,13 @@ function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId
   const latest = summary?.latest_sensor_attempt ?? summary?.latest_lidar_attempt;
   const position = summary?.last_observed_position;
   return <section className="sim-panel sim-timeline" aria-labelledby="sim-timeline-title">
-    <div className="sim-panel-heading"><h2 id="sim-timeline-title"><Activity size={17} />Belief and evidence</h2></div>
+    <div className="sim-panel-heading"><h2 id="sim-timeline-title"><Activity size={17} aria-hidden="true" />Belief and evidence</h2>{stale && <span className="sim-chip warn">Stale</span>}</div>
     <div className="sim-timeline-body">
       {!entity ? <p>Select an entity to inspect its evidence.</p> : error ? <p role="alert" className="sim-warning">{error}</p> : !evidence ? <p role="status">Loading evidence…</p> : <>
         <h3>{warehouseLabel(entity)}</h3>
         {evidence.location_assessment ? <ParcelBelief assessment={evidence.location_assessment} /> : <>
-        <p>Stored belief · {summary?.supported_location ? displayText(summary.supported_location) : summary?.status ? displayText(summary.status) : "No stored location or route status"}</p>
-        <p>Verification · {displayText(summary?.verification_status ?? "unverified")}{summary?.visibility && ` · ${displayText(summary.visibility)}`} · {displayText(summary?.freshness ?? "unverified")}</p>
+          <p>Stored belief · {summary?.supported_location ? displayText(summary.supported_location) : summary?.status ? displayText(summary.status) : "No stored location or route status"}</p>
+          <p>Verification · {displayText(summary?.verification_status ?? "unverified")}{summary?.visibility && ` · ${displayText(summary.visibility)}`} · {displayText(summary?.freshness ?? "unverified")}</p>
         {last && <p>Last observed · {simTime(last.sim_time_ms)} · {displayText(last.sensor_id)}{position && <> · ({position.x_cm}, {position.y_cm}) cm{summary?.last_observed_frame && ` · ${displayText(summary.last_observed_frame)}`}</>}</p>}
         {latest && "reason" in latest.result && latest.result.reason === "sensor_unavailable" && <p>Sensor unavailable · {simTime(latest.sim_time_ms)} · {displayText(latest.sensor_id)}</p>}
         {summary?.uncertainty_reason && <p>{displayText(summary.uncertainty_reason)}</p>}
@@ -389,7 +468,11 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
 }) {
   const { state, connection, connectionError, pending, notice, run } = useSimulation(sessionId);
   const [entity, setEntity] = useState("");
-  useEffect(() => { setEntity(state?.audience?.snapshot.entities[0]?.entity_id ?? ""); }, [state?.run_id, state?.generation]);
+  const [chosenPreset, setChosenPreset] = useState<Preset>();
+  const scenario = state?.audience?.snapshot.scenario_id;
+  const loadedPreset = scenario === "warehouse_belief_demo_v1" ? scenario : "warehouse_inspection_v1";
+  const preset = chosenPreset ?? loadedPreset;
+  useEffect(() => { setEntity(state?.audience?.snapshot.entities.find((item) => item.kind === "parcel")?.entity_id ?? ""); }, [state?.run_id, state?.generation]);
   useEffect(() => {
     if (focus && focus.runId === state?.run_id && (state?.audience?.snapshot.entities.some((item) => item.entity_id === focus.entity) || state?.audience?.routes.some((item) => item.route_id === focus.entity))) setEntity(focus.entity);
   }, [focus, state?.run_id, state?.audience]);
@@ -397,6 +480,11 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
     setEntity(value);
     if (state?.run_id) onFocus({ runId: state.run_id, entity: value });
   }
+  const entityEvidence = useEntityEvidence(sessionId, state?.run_id ?? null, state?.generation ?? 0, entity);
+  const latestCamera = state?.observation.latest.camera_detect;
+  const inspectingParcel = state?.audience?.snapshot.entities.some((item) => item.entity_id === entity && item.kind === "parcel");
+  const camera = inspectingParcel && latestCamera?.request.target && latestCamera.request.target !== entity
+    ? entityEvidence?.evidence?.summary.latest_sensor_attempt ?? undefined : latestCamera;
   const layout = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = layout.current;
@@ -419,9 +507,9 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
     : active ? "Running" : state?.state === "paused" ? "Paused"
     : state?.state === "completed" ? "Completed" : "No run loaded";
 
-  function control(action: Exclude<SimulationControlRequest["action"], "reset">, rate?: typeof rates[number]) {
+  function control(action: SimulationControlRequest["action"], rate?: typeof rates[number]) {
     const messages = { play: "Playback started.", pause: "Playback paused.", step: "Step confirmed.",
-      set_rate: `Rate set to ${rate}×.` };
+      set_rate: `Rate set to ${rate}×.`, reset: "Warehouse reset." };
     void run("Applying control…", async (expected, options) => {
       try {
         return { state: await api.controlSimulation({ action, expected, playback_rate: rate }, options), message: messages[action] };
@@ -436,10 +524,16 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
 
   function load() {
     const request_id = crypto.randomUUID();
-    void run("Loading warehouse…", async (expected, options) => ({
-      state: await api.loadSimulation({ preset: "warehouse_inspection_v1", expected, request_id }, options),
-      message: "Warehouse loaded.",
-    }));
+    void run("Loading warehouse…", async (expected, options) => {
+      try {
+        return { state: await api.loadSimulation({ preset, expected, request_id }, options), message: "Warehouse loaded." };
+      } catch (error) {
+        if (preset === "warehouse_belief_demo_v1" && error instanceof ApiRequestError && error.code === "invalid_request") {
+          throw new Error("The warehouse belief demo is unavailable on this backend.");
+        }
+        throw error;
+      }
+    });
   }
 
   function disrupt(disruption: PresenterDisruption) {
@@ -458,9 +552,18 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
   </div>;
 
   const presenter = <section className="sim-presenter" aria-label="Presenter controls">
-    <button type="button" className="sim-button" onClick={load} disabled={blocked || active}>
-      <Map size={16} />{loaded ? "Reload preset" : "Load preset"}
-    </button>
+    <label className="sim-preset-field">Warehouse preset
+      <select value={preset} disabled={blocked || active} onChange={(event) => setChosenPreset(event.target.value as Preset)}>
+        {Object.entries(presets).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+      </select>
+    </label>
+    <div className="sim-actions">
+      <button type="button" className="sim-button" onClick={load} disabled={blocked || active}>
+        <Map size={16} />{loaded && preset === loadedPreset ? "Reload preset" : "Load preset"}
+      </button>
+      {loaded && <button type="button" className="sim-button" onClick={() => control("reset")}
+        disabled={blocked || active || preset !== loadedPreset}>Reset run</button>}
+    </div>
     <div className="sim-rate-field" role="group" aria-label="Playback speed">
       <span>Playback speed</span>
       <div className="sim-rates" style={{ "--selected-rate": rates.indexOf(state?.playback_rate ?? 0.5) } as React.CSSProperties}>
@@ -480,7 +583,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
   return <section className="simulation-workspace" aria-label="Warehouse simulation">
     <div className="sim-content">
       <div className="sim-heading">
-        <div><h2>Warehouse inspection</h2><p>Session · {chatName}</p></div>
+        <div><h2>{presets[loadedPreset]}</h2><p>Session · {chatName}</p></div>
         {!(live && state?.state === "completed") && <div className={`sim-chip ${live && active ? "success" : !live || state?.state === "error" ? "warn" : ""}`} role="status">
           {connection === "disconnected" ? <WifiOff size={15} /> : active && live ? <Play size={13} /> : <Activity size={15} />}{status}
         </div>}
@@ -518,15 +621,17 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
               {loaded && <a className="sim-evidence-link" href="#simulation-evidence">Evidence</a>}
             </div>
           </div>
-          {state?.audience ? <WarehouseMap key={`${state.generation}:${state.run_id}`} state={state} live={live} selectedEntity={entity} onSelectEntity={selectEntity} />
+          {state?.audience ? <WarehouseMap key={`${state.generation}:${state.run_id}`} state={state} live={live} camera={camera} selectedEntity={entity} onSelectEntity={selectEntity} />
             : <div className="sim-map-empty">
               <Map size={28} strokeWidth={1.4} aria-hidden="true" />
               <p>{live ? "Load the warehouse preset to see the room and robot." : "Waiting for the warehouse backend."}</p>
             </div>}
         </section>
         <aside id="simulation-evidence" className="sim-evidence" aria-label="Simulation evidence">
-          {loaded && state && <EvidenceTimeline key={`${state.run_id}:${state.generation}:${entity}`} sessionId={sessionId} state={state} entity={entity} onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />}
-          <ObservationPanel state={state} stale={stale} />
+          {loaded && state && <EvidenceTimeline key={`${state.run_id}:${state.generation}:${entity}`} entity={entity} evidence={entityEvidence?.evidence} error={entityEvidence?.error} stale={stale} onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />}
+          <ObservationPanel state={state} camera={camera} stale={stale} />
+          {state?.run_id && <PatrolPanel key={`${sessionId}:${state.run_id}:${state.generation}`}
+            sessionId={sessionId} runId={state.run_id} generation={state.generation} patrol={state.patrol} stale={stale} />}
         </aside>
       </div>
       {loaded && state && <SimulationQuestions key={`${sessionId}:${state.generation}:${state.run_id}`} sessionId={sessionId} state={state} renderAnswer={renderAnswer} entity={entity} onSelectEntity={selectEntity} />}

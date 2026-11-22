@@ -1,15 +1,15 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { cameraSector, headingRotation, interpolatePoint, screenPoint } from "./simulationGeometry";
 import { POLL_MS } from "./useSimulation";
-import type { SceneEntity, SimulationStateResponse } from "./simulationTypes";
+import type { SceneEntity, SimulationStateResponse, StoredObservationSample } from "./simulationTypes";
 
 export function warehouseLabel(id: string) {
   return id.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
-type Props = { state: SimulationStateResponse; live: boolean; selectedEntity?: string; onSelectEntity?: (entity: string) => void };
+type Props = { state: SimulationStateResponse; live: boolean; camera?: StoredObservationSample; selectedEntity?: string; onSelectEntity?: (entity: string) => void };
 
-export default function WarehouseMap({ state, live, selectedEntity, onSelectEntity }: Props) {
+export default function WarehouseMap({ state, live, camera, selectedEntity, onSelectEntity }: Props) {
   const id = useId();
   const [reducedMotion, setReducedMotion] = useState(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
   const previous = useRef<SimulationStateResponse | null>(null);
@@ -56,7 +56,6 @@ export default function WarehouseMap({ state, live, selectedEntity, onSelectEnti
   const robotPoint = screenPoint(robot, height);
   const cameraFov = snapshot.config.camera_fov_deg ?? 90;
   const cameraRange = snapshot.config.camera_range_cm ?? 350;
-  const camera = state.observation.latest.camera_detect;
   const capturedPose = camera && !("reason" in camera.result && camera.result.reason === "sensor_unavailable")
     ? camera.observer_pose : null;
   const entities = [...snapshot.entities].sort((a, b) => Number(a.kind === "parcel") - Number(b.kind === "parcel"));

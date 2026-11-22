@@ -111,7 +111,10 @@ export const api = {
     request<SimulationEvidence>("/api/simulation/evidence", { ...simulationOptions(options), method: "POST", body: JSON.stringify({ expected, entity_id }) }),
   simulationSampleEvidence: (expected: { run_id: string; generation: number }, sample_id: string, options?: SimulationRequestOptions) =>
     request<SimulationSampleEvidenceResponse>("/api/simulation/evidence", { ...simulationOptions(options), method: "POST", body: JSON.stringify({ expected, sample_id }) }),
-  loadSimulation: (payload: SimulationLoadRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("load", payload, options),
+  // WD-06 publishes the demo ID ahead of its generated contract.
+  loadSimulation: (payload: Omit<SimulationLoadRequest, "preset"> & {
+    preset: SimulationLoadRequest["preset"] | "warehouse_belief_demo_v1";
+  }, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("load", payload, options),
   controlSimulation: (payload: SimulationControlRequest, options?: SimulationRequestOptions) => postSimulation<SimulationStateResponse>("control", payload, options),
   disruptSimulation: (payload: SimulationDisruptRequest, options?: SimulationRequestOptions) => postSimulation<SimulationDisruptResponse>("disrupt", payload, options),
   exportSimulation: () => request<SimulationExportBundle>("/api/simulation/export"),
