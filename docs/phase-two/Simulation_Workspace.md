@@ -52,11 +52,11 @@ required.
 | 28.500 s | Patrol is blocked. Open the decision LiDAR sample to inspect the stop. |
 | 33.000 s | Patrol has resumed. The prior stop still links to its original LiDAR sample, and the Station B sighting is fresh. |
 
-Pause at 33.000 s to ask “Where is parcel_01 now?”, “Where was parcel_01
-earlier?”, “What evidence caused parcel_01's location belief to change?”, or
-“Why did the robot stop?” Open **Location evidence** or the patrol sample to
-compare the answer with the recorded evidence. The 33-second sequence takes
-about 66 seconds of playback at 0.5×, before pauses.
+Pause at 33.000 s for the four questions in the
+[recording runbook](Warehouse_Belief_Demo_Script.md). The runbook includes
+exact prompt wording, the pre-cart clearance checkpoint, and the evidence
+to show for each answer. The sequence takes about 66 seconds of playback
+at 0.5×, before pauses.
 
 When the workspace has at least 900 px available beside the sidebar, drag
 a navigation tab to the left or right drop area. Shift+Left Arrow places it
