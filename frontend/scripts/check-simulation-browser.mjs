@@ -212,11 +212,12 @@ try {
   await schedule("camera_on");
   await schedule("lidar_off");
   await schedule("yellow");
-  await schedule("cart_block");
+  const { event: cartBlock } = await schedule("cart_block");
   await schedule("relocate");
   await post("Play", "control");
   await observations.getByText("LiDAR unavailable", { exact: true }).waitFor();
-  await eventually(async () => Number((await clock.innerText()).split(" ")[0]) >= paused.sim_time_ms / 1000 + 2);
+  await eventually(async () =>
+    seconds(await clock.innerText()) * 1000 >= cartBlock.at_ms + cartBlock.duration_ms);
   await post("Pause", "control");
   await schedule("cart_clear");
   await schedule("lidar_on");

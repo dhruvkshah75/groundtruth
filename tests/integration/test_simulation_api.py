@@ -309,6 +309,10 @@ def test_http_belief_demo_reload_and_reset_keep_unique_run_evidence(api):
         assert state["audience"]["snapshot"]["scenario_id"] == preset
         assert state["sim_time_ms"] == 0
 
+    code, cart, _ = send(BASE + "/disrupt", disruption(reset, "cart_block"))
+    assert code == 200, cart
+    assert cart["event"]["to"] == {"x_cm": 465, "y_cm": 200}
+
     initial_sample = first["observation"]["latest"]["camera_detect"]["sample_id"]
     assert_error(
         send(BASE + "/evidence", {"expected": identity(reset), "sample_id": initial_sample}),

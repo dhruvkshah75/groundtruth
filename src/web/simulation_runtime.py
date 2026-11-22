@@ -444,13 +444,25 @@ class SimulationRuntime:
                 duration_ms=disruption.duration_ms,
             )
         elif isinstance(disruption, SetCart):
-            # The named warehouse uses these two cart positions in its script.
+            block = disruption.kind == "cart_block"
+            target = Point(x_cm=100 if block else 180, y_cm=470)
+            duration_ms = 1000
+            if self.scenario.scenario_id == "warehouse_belief_demo_v1":
+                cart_moves = [
+                    event
+                    for event in self.scenario.events
+                    if isinstance(event, MoveEvent) and event.entity_id == "cart_01"
+                ]
+                if len(cart_moves) < 2:
+                    raise ValueError("The demo needs a scripted cart stop and clearance.")
+                move = cart_moves[0 if block else -1]
+                target, duration_ms = move.to, move.duration_ms
             event = MoveEvent(
                 kind="move",
                 **fields,
                 entity_id="cart_01",
-                to=Point(x_cm=100 if disruption.kind == "cart_block" else 180, y_cm=470),
-                duration_ms=1000,
+                to=target,
+                duration_ms=duration_ms,
             )
         elif isinstance(disruption, SetLighting):
             event = LightingEvent(**fields, **disruption.model_dump())
