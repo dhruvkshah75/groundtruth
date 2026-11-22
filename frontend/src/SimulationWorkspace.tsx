@@ -7,7 +7,7 @@ import type {
   SimulationStateResponse, StoredObservationSample,
 } from "./simulationTypes";
 import { useSimulation } from "./useSimulation";
-import type { AgentResponse, SimulationEvidence } from "./types";
+import type { AgentResponse, LocationAssessment, LocationSighting, SimulationEvidence } from "./types";
 import { displayText } from "./display";
 import WarehouseMap, { warehouseLabel } from "./WarehouseMap";
 import "./simulation-workspace.css";
@@ -73,6 +73,7 @@ function ObservationPanel({ state, stale }: { state: SimulationStateResponse | n
       <ul className="sim-list">
         {[camera, lidar].map((sample) => sample && <li key={sample.sample_id}>
           <strong>{sample === camera ? "Camera" : "LiDAR"} · sample {sample.sample_sequence}</strong>
+          <span><code>{sample.sample_id}</code></span>
           <span>{sample.observer_pose.frame_of_reference} · world {sample.world_version} · {sample.observer_pose.direction}</span>
         </li>)}
       </ul>
@@ -80,28 +81,38 @@ function ObservationPanel({ state, stale }: { state: SimulationStateResponse | n
   </section>;
 }
 
-function BeliefPanel({ state, stale }: { state: SimulationStateResponse | null; stale: boolean }) {
-  const changes = state?.belief.recent_changes ?? [];
-  const latest = changes.at(-1);
-  return <section className="sim-panel" aria-labelledby="sim-belief-title">
-    <div className="sim-panel-heading">
-      <h2 id="sim-belief-title"><Activity size={17} aria-hidden="true" />Agent belief</h2>
-      {stale && state?.run_id && <span className="sim-chip warn">Stale</span>}
-    </div>
-    <div className="sim-observation">
-      <p>{latest ? `${changes.length} recent evidence-backed ${changes.length === 1 ? "change" : "changes"}` : "No belief changes recorded for this run."}</p>
-      {latest && <p className="sim-subtle sim-time">Latest evidence · {simTime(latest.sim_time_ms)}</p>}
-    </div>
-    {latest && <details className="sim-details">
-      <summary>Evidence references</summary>
+function sightingPosition({ position }: LocationSighting) {
+  return `(${position.x_cm}, ${position.y_cm}) cm`;
+}
+
+function ParcelBelief({ assessment }: { assessment: LocationAssessment }) {
+  const { current_sighting: current, last_sighting: last, current_location: station,
+    earlier_station: earlier, lost_verification_sample: lost } = assessment;
+  const sighting = current ?? last;
+  const reason = assessment.lost_verification_reason ?? assessment.uncertainty_reason;
+  const reasonText = lost ? reason?.replace(` (sample ${lost.sample_id})`, "") : reason;
+  return <>
+    <p><strong>{current
+      ? `Verified · ${station ? warehouseLabel(station) : sightingPosition(current)}`
+      : "Current location unknown"}</strong></p>
+    {current
+      ? <p className="sim-subtle">Camera · {simTime(current.sim_time_ms)} · {displayText(current.frame_of_reference)}</p>
+      : <>
+        {last && <p>Last seen · {last.station_id ? warehouseLabel(last.station_id) : sightingPosition(last)} · {simTime(last.sim_time_ms)}</p>}
+        {assessment.verification_status === "unavailable" && <p className="sim-warning">Camera unavailable</p>}
+      </>}
+    {reasonText && <p className="sim-subtle">{reasonText}</p>}
+    {earlier && earlier !== sighting?.station_id && <p className="sim-subtle">Earlier station · {warehouseLabel(earlier)}</p>}
+    {(sighting || lost) && <details className="sim-timeline-details">
+      <summary>Location evidence</summary>
       <ul className="sim-list">
-        {[...changes].reverse().map((change, index) => <li key={`${change.fact_id}-${index}`}>
-          <strong>{change.revision_event_id ? "Revision" : "Fact"} · {simTime(change.sim_time_ms)}</strong>
-          <span>Sample {change.sample_sequence} · <code>{change.fact_id}</code></span>
-        </li>)}
+        {sighting && <li>{current ? "Current sighting" : "Last sighting"} · {simTime(sighting.sim_time_ms)}
+          <span><code>{sighting.sample_id}</code></span></li>}
+        {lost && <li>Latest relevant attempt · {simTime(lost.sim_time_ms)}
+          <span><code>{lost.sample_id}</code></span></li>}
       </ul>
     </details>}
-  </section>;
+  </>;
 }
 
 function observationDescription(sample: StoredObservationSample, entity: string) {
@@ -134,7 +145,12 @@ function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId
       controller = new AbortController();
       try {
         const result = await api.simulationEvidence({ run_id: state.run_id!, generation: state.generation }, entity, { sessionId, signal: controller.signal });
-        if (active) { setEvidence(result); setError(""); }
+        if (!active) return;
+        if (result.run_id !== state.run_id || result.generation !== state.generation || result.entity_id !== entity) {
+          throw new Error("Evidence for this run and selection is unavailable.");
+        }
+        setEvidence(result);
+        setError("");
       } catch (cause) {
         if (active && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load evidence.");
       } finally { if (active) timer = window.setTimeout(poll, 1500); }
@@ -160,20 +176,24 @@ function EvidenceTimeline({ sessionId, state, entity, onFocusFact }: { sessionId
   return <section className="sim-panel sim-timeline" aria-labelledby="sim-timeline-title">
     <div className="sim-panel-heading"><h2 id="sim-timeline-title"><Activity size={17} />Belief and evidence</h2></div>
     <div className="sim-timeline-body">
-      {!entity ? <p>Select an entity to inspect its evidence.</p> : error ? <p role="alert" className="sim-warning">{error}</p> : !evidence ? <p>Loading evidence…</p> : <>
+      {!entity ? <p>Select an entity to inspect its evidence.</p> : error ? <p role="alert" className="sim-warning">{error}</p> : !evidence ? <p role="status">Loading evidence…</p> : <>
         <h3>{warehouseLabel(entity)}</h3>
+        {evidence.location_assessment ? <ParcelBelief assessment={evidence.location_assessment} /> : <>
         <p>Stored belief · {summary?.supported_location ? displayText(summary.supported_location) : summary?.status ? displayText(summary.status) : "No stored location or route status"}</p>
         <p>Verification · {displayText(summary?.verification_status ?? "unverified")}{summary?.visibility && ` · ${displayText(summary.visibility)}`} · {displayText(summary?.freshness ?? "unverified")}</p>
         {last && <p>Last observed · {simTime(last.sim_time_ms)} · {displayText(last.sensor_id)}{position && <> · ({position.x_cm}, {position.y_cm}) cm{summary?.last_observed_frame && ` · ${displayText(summary.last_observed_frame)}`}</>}</p>}
         {latest && "reason" in latest.result && latest.result.reason === "sensor_unavailable" && <p>Sensor unavailable · {simTime(latest.sim_time_ms)} · {displayText(latest.sensor_id)}</p>}
         {summary?.uncertainty_reason && <p>{displayText(summary.uncertainty_reason)}</p>}
-        <p className="sim-subtle">Run {evidence.run_id} · as of {simTime(evidence.sim_time_ms)}</p>
+        </>}
         <details className="sim-timeline-details"><summary>Observation and revision timeline ({timeline.length})</summary>
           {timeline.length ? <ol className="sim-timeline-list">{timeline.map(({ key, time, sample, revision }) => <li key={key}>
             <strong>{simTime(time)} · {revision ? "Belief revision" : displayText(sample!.sensor_id)}{revision?.next && ` · ${displayText(revision.next.source_agent)}`}</strong>
             {revision ? <>{revision.previous && <p>Earlier belief · {displayText(revision.previous.object)}</p>}<p>{displayText(revision.event.reason)}</p><p>Rule · {displayText(revision.event.policy_rule)}</p>{revision.next && <p>Updated belief · {displayText(revision.next.object)}</p>}<div className="sim-timeline-actions">{revision.previous && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.previous!.fact_id)}>Focus earlier belief</button>}{revision.next && <button type="button" className="sim-history-button" onClick={() => onFocusFact(revision.next!.fact_id)}>Focus updated belief</button>}</div></>
               : <><p>{observationDescription(sample!, entity)}</p><p>Received by ledger · <time dateTime={sample!.stored_at}>{new Date(sample!.stored_at).toISOString()}</time> (wall time)</p></>}
-            <details><summary>Raw record</summary><pre>{JSON.stringify(revision ? { audit: revision.event, earlier: revision.previous, updated: revision.next } : sample, null, 2)}</pre></details>
+            <details><summary>Raw record</summary>
+              {revision ? <p>Revision <code>{revision.event.event_id}</code></p> : <p>Sample <code>{sample!.sample_id}</code></p>}
+              {typeof revision?.next?.evidence.sample_id === "string" && <p>Source sample <code>{revision.next.evidence.sample_id}</code></p>}
+              <pre>{JSON.stringify(revision ? { audit: revision.event, earlier: revision.previous, updated: revision.next } : sample, null, 2)}</pre></details>
           </li>)}</ol> : <p>No observations or revisions recorded for this selection.</p>}
           {evidence.truncated && <p>Showing a bounded selection of the recorded history.</p>}
         </details>
@@ -489,7 +509,7 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
       <div className="sim-layout" ref={layout}>
         <section className="sim-panel sim-map-panel" aria-labelledby="audience-world-title">
           <div className="sim-panel-heading">
-            <h2 id="audience-world-title"><Map size={17} aria-hidden="true" />Audience world</h2>
+            <h2 id="audience-world-title"><Map size={17} aria-hidden="true" />Simulated world</h2>
             <div className="sim-map-status">
               {stale && state?.audience && <span className="sim-chip warn">Stale snapshot</span>}
               {state?.patrol && <span className={`sim-chip ${["blocked", "stalled", "waiting_for_sensor"].includes(state.patrol.state) ? "warn" : ""}`}>
@@ -505,9 +525,8 @@ export default function SimulationWorkspace({ sessionId, chatName, presenterTarg
             </div>}
         </section>
         <aside id="simulation-evidence" className="sim-evidence" aria-label="Simulation evidence">
-          <ObservationPanel state={state} stale={stale} />
-          <BeliefPanel state={state} stale={stale} />
           {loaded && state && <EvidenceTimeline key={`${state.run_id}:${state.generation}:${entity}`} sessionId={sessionId} state={state} entity={entity} onFocusFact={(factId) => { if (state.run_id) onFocus({ runId: state.run_id, entity, factId }); }} />}
+          <ObservationPanel state={state} stale={stale} />
         </aside>
       </div>
       {loaded && state && <SimulationQuestions key={`${sessionId}:${state.generation}:${state.run_id}`} sessionId={sessionId} state={state} renderAnswer={renderAnswer} entity={entity} onSelectEntity={selectEntity} />}
