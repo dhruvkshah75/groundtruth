@@ -371,3 +371,53 @@ def test_real_engine_reacquires_parcel_after_moving_out_of_shelf_occlusion():
             "bounding_box": {"width_cm": 12.0, "height_cm": 12.0},
         }
     ]
+
+
+def test_pure_simulation_geometry_functions():
+    """Verify shared range, angle, FOV, and line-of-sight pure geometry."""
+    from src.contracts.simulation import (
+        Point,
+        Rectangle,
+        find_line_of_sight_blocker,
+        heading_vector,
+        in_camera_view,
+        is_line_of_sight_blocked,
+        point_distance_and_angle,
+        rectangle_entry,
+    )
+
+    # Heading vectors
+    assert heading_vector("north") == (0, 1)
+    assert heading_vector("east") == (1, 0)
+    assert heading_vector("south") == (0, -1)
+    assert heading_vector("west") == (-1, 0)
+
+    # Point distance and angle
+    origin = Point(x_cm=100.0, y_cm=100.0)
+    target_north = Point(x_cm=100.0, y_cm=200.0)
+    dist, angle = point_distance_and_angle(origin, target_north, "north")
+    assert dist == 100.0
+    assert angle == 0.0
+
+    target_ne = Point(x_cm=200.0, y_cm=200.0)
+    dist, angle = point_distance_and_angle(origin, target_ne, "north")
+    assert round(dist, 2) == 141.42
+    assert round(angle, 1) == 45.0
+
+    # In camera view
+    assert in_camera_view(origin, target_north, "north", range_cm=150.0, fov_deg=90.0)
+    assert not in_camera_view(origin, target_north, "north", range_cm=50.0, fov_deg=90.0)
+    assert not in_camera_view(origin, target_north, "south", range_cm=150.0, fov_deg=90.0)
+    assert in_camera_view(origin, target_ne, "north", range_cm=150.0, fov_deg=90.0)
+    assert not in_camera_view(origin, target_ne, "north", range_cm=150.0, fov_deg=80.0)
+
+    # Line of sight and occluder detection
+    shelf = Rectangle(x_cm=100.0, y_cm=150.0, width_cm=20.0, height_cm=20.0)
+    assert rectangle_entry(origin, target_north, shelf) is not None
+    assert is_line_of_sight_blocked(origin, target_north, [shelf])
+    assert find_line_of_sight_blocker(origin, target_north, [shelf]) == shelf
+
+    # Non-blocking shelf
+    side_shelf = Rectangle(x_cm=300.0, y_cm=150.0, width_cm=20.0, height_cm=20.0)
+    assert not is_line_of_sight_blocked(origin, target_north, [side_shelf])
+    assert find_line_of_sight_blocker(origin, target_north, [side_shelf]) is None

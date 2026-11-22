@@ -32,6 +32,8 @@ MODELS = [
     simulation_api.SimulationControlRequest,
     simulation_api.SimulationDisruptRequest,
     simulation_api.SimulationDisruptResponse,
+    simulation_api.SimulationEvidenceRequest,
+    simulation_api.SimulationSampleEvidenceResponse,
     simulation_api.SimulationExportBundle,
     simulation_api.SimulationApiError,
 ]

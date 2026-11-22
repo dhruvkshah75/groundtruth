@@ -972,31 +972,50 @@ class MemoryRepository:
         return self._row_to_stored_sample(row)
 
     def get_latest_camera_attempt(
-        self, run_id: UUID, entity_id: str, observer_pose: Pose, at_sim_time_ms: int
+        self,
+        run_id: UUID,
+        entity_id: str,
+        observer_pose: Pose | None = None,
+        at_sim_time_ms: int | None = None,
+        robot_id: str | None = None,
+        location: str | None = None,
+        frame_of_reference: str | None = None,
     ) -> StoredObservationSample | None:
         """Latest broad or target-specific attempt in the sighting's observer context."""
         TemporalObservationQuery(
             run_id=run_id, mode="latest", capability="camera_detect", end_ms=at_sim_time_ms
         )
+        if observer_pose is not None:
+            if robot_id is None:
+                robot_id = observer_pose.robot_id
+            if location is None:
+                location = observer_pose.location
+            if frame_of_reference is None:
+                frame_of_reference = observer_pose.frame_of_reference
+
+        clauses = ["run_id = ?", "capability = 'camera_detect'", "(target IS NULL OR target = ?)"]
+        params: list[object] = [str(run_id), entity_id]
+        if at_sim_time_ms is not None:
+            clauses.append("sim_time_ms <= ?")
+            params.append(at_sim_time_ms)
+        if robot_id is not None:
+            clauses.append("json_extract(observer_pose_json, '$.robot_id') = ?")
+            params.append(robot_id)
+        if location is not None:
+            clauses.append("json_extract(observer_pose_json, '$.location') = ?")
+            params.append(location)
+        if frame_of_reference is not None:
+            clauses.append("json_extract(observer_pose_json, '$.frame_of_reference') = ?")
+            params.append(frame_of_reference)
+
         row = self._conn.execute(
-            """
+            f"""
             SELECT raw_sample_json, stored_at FROM observation_samples
-            WHERE run_id = ? AND capability = 'camera_detect'
-              AND (target IS NULL OR target = ?) AND sim_time_ms <= ?
-              AND json_extract(observer_pose_json, '$.robot_id') = ?
-              AND json_extract(observer_pose_json, '$.location') = ?
-              AND json_extract(observer_pose_json, '$.frame_of_reference') = ?
+            WHERE {" AND ".join(clauses)}
             ORDER BY sim_time_ms DESC, sample_sequence DESC, sample_id DESC
             LIMIT 1
             """,
-            (
-                str(run_id),
-                entity_id,
-                at_sim_time_ms,
-                observer_pose.robot_id,
-                observer_pose.location,
-                observer_pose.frame_of_reference,
-            ),
+            params,
         ).fetchone()
         return self._row_to_stored_sample(row) if row is not None else None
 
@@ -1008,6 +1027,10 @@ class MemoryRepository:
         sensor_id: str | None = None,
         start_ms: int | None = None,
         at_sim_time_ms: int | None = None,
+        observer_pose: Pose | None = None,
+        robot_id: str | None = None,
+        location: str | None = None,
+        frame_of_reference: str | None = None,
     ) -> StoredObservationSample | None:
         """Return the latest positive sighting sample for an entity at or before simulation time."""
         if not entity_id:
@@ -1018,6 +1041,14 @@ class MemoryRepository:
             raise ValueError("at_sim_time_ms must be non-negative")
         if start_ms is not None and at_sim_time_ms is not None and start_ms > at_sim_time_ms:
             raise ValueError("start_ms must not exceed at_sim_time_ms")
+
+        if observer_pose is not None:
+            if robot_id is None:
+                robot_id = observer_pose.robot_id
+            if location is None:
+                location = observer_pose.location
+            if frame_of_reference is None:
+                frame_of_reference = observer_pose.frame_of_reference
 
         clauses = ["d.run_id = ?", "d.entity_id = ?"]
         params: list[object] = [str(run_id), entity_id]
@@ -1033,6 +1064,19 @@ class MemoryRepository:
         if at_sim_time_ms is not None:
             clauses.append("d.sim_time_ms <= ?")
             params.append(at_sim_time_ms)
+        if robot_id is not None:
+            clauses.append("json_extract(s.observer_pose_json, '$.robot_id') = ?")
+            params.append(robot_id)
+        if location is not None:
+            clauses.append("json_extract(s.observer_pose_json, '$.location') = ?")
+            params.append(location)
+        if frame_of_reference is not None:
+            clauses.append(
+                "(json_extract(s.observer_pose_json, '$.frame_of_reference') = ? "
+                "AND (json_extract(d.detection_json, '$.frame_of_reference') IS NULL "
+                "OR json_extract(d.detection_json, '$.frame_of_reference') = ?))"
+            )
+            params.extend([frame_of_reference, frame_of_reference])
 
         sql = f"""
             SELECT s.raw_sample_json, s.stored_at
@@ -1056,6 +1100,10 @@ class MemoryRepository:
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 100,
+        observer_pose: Pose | None = None,
+        robot_id: str | None = None,
+        location: str | None = None,
+        frame_of_reference: str | None = None,
     ) -> list[StoredObservationSample]:
         """Return chronological positive sightings for an entity within time bounds."""
         if not entity_id:
@@ -1068,6 +1116,14 @@ class MemoryRepository:
             raise ValueError("start_ms must not exceed end_ms")
         if limit < 1 or limit > 1000:
             raise ValueError("limit must be between 1 and 1000")
+
+        if observer_pose is not None:
+            if robot_id is None:
+                robot_id = observer_pose.robot_id
+            if location is None:
+                location = observer_pose.location
+            if frame_of_reference is None:
+                frame_of_reference = observer_pose.frame_of_reference
 
         clauses = ["d.run_id = ?", "d.entity_id = ?"]
         params: list[object] = [str(run_id), entity_id]
@@ -1083,6 +1139,19 @@ class MemoryRepository:
         if end_ms is not None:
             clauses.append("d.sim_time_ms <= ?")
             params.append(end_ms)
+        if robot_id is not None:
+            clauses.append("json_extract(s.observer_pose_json, '$.robot_id') = ?")
+            params.append(robot_id)
+        if location is not None:
+            clauses.append("json_extract(s.observer_pose_json, '$.location') = ?")
+            params.append(location)
+        if frame_of_reference is not None:
+            clauses.append(
+                "(json_extract(s.observer_pose_json, '$.frame_of_reference') = ? "
+                "AND (json_extract(d.detection_json, '$.frame_of_reference') IS NULL "
+                "OR json_extract(d.detection_json, '$.frame_of_reference') = ?))"
+            )
+            params.extend([frame_of_reference, frame_of_reference])
 
         sql = f"""
             SELECT s.raw_sample_json, s.stored_at

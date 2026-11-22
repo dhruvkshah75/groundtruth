@@ -1,5 +1,6 @@
 """Executes validated plans against Tier 1 and Tier 3."""
 
+from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from src.contracts import (
     StoredObservationSample,
     TemporalObservationQuery,
 )
+from src.contracts.simulation_api import PatrolDecisionSummary
 from src.procedural.execution_plan import ExecutionPlan
 from src.procedural.execution_results import (
     AuditExecutionResult,
@@ -21,10 +23,14 @@ from src.procedural.execution_results import (
     PlanExecutionResult,
     TemporalObservationExecutionResult,
 )
+from src.procedural.temporal_belief_ingestion import LocationAssessment
+
+LocationReader = Callable[[UUID, str, int], LocationAssessment]
 
 
 class MemoryRepositoryInterface(Protocol):
     def query_facts(self, query: FactQuery) -> list[StoredFact]: ...
+    def get_observation_sample(self, sample_id: UUID) -> StoredObservationSample | None: ...
     def get_audit_chain(self, fact_id: UUID) -> AuditTrail: ...
     def query_observations(
         self, query: TemporalObservationQuery
@@ -47,7 +53,11 @@ class PlanExecutor:
         self._environment = environment
 
     def execute(
-        self, plan: ExecutionPlan, *, sensors: EnvironmentInterface | None = None
+        self,
+        plan: ExecutionPlan,
+        *,
+        sensors: EnvironmentInterface | None = None,
+        location_reader: LocationReader | None = None,
     ) -> PlanExecutionResult:
         """Execute all memory, observation, temporal, and audit operations in the plan."""
         memory_results: list[MemoryExecutionResult] = []
@@ -98,12 +108,43 @@ class PlanExecutor:
             for fact in target_facts:
                 trails[fact.fact_id] = self._memory.get_audit_chain(fact.fact_id)
 
+            cited_samples = {}
+            if audit_op.as_of_sim_time_ms is not None:
+                for trail in trails.values():
+                    output_ids = {
+                        fact_id
+                        for event in trail.events
+                        if event.event_type == "belief_revision"
+                        for fact_id in event.output_fact_ids
+                    }
+                    for fact in trail.facts:
+                        raw_id = fact.evidence.get("sample_id")
+                        if fact.fact_id not in output_ids or not isinstance(raw_id, str):
+                            continue
+                        try:
+                            sample_id = UUID(raw_id)
+                        except ValueError:
+                            continue
+                        if sample_id in cited_samples:
+                            continue
+                        sample = self._memory.get_observation_sample(sample_id)
+                        if (
+                            sample is not None
+                            and sample.run_id == audit_op.run_id
+                            and sample.sim_time_ms <= audit_op.as_of_sim_time_ms
+                            and sample.request.capability == "camera_detect"
+                            and isinstance(sample.result, SensorObservation)
+                        ):
+                            cited_samples[sample_id] = sample
+
             audit_results.append(
                 AuditExecutionResult(
                     operation_index=idx,
                     purpose=audit_op.purpose,
                     run_id=audit_op.run_id,
                     trails=trails,
+                    as_of_sim_time_ms=audit_op.as_of_sim_time_ms,
+                    samples=list(cited_samples.values()),
                 )
             )
 
@@ -117,6 +158,34 @@ class PlanExecutor:
         for audit_op in plan.audit_operations:
             approved_operations.append(f"audit_lookup: {audit_op.purpose}")
 
+        assessment = None
+        location_samples = []
+        if (op := plan.location_operation) is not None:
+            assert location_reader is not None
+            assessment = location_reader(op.run_id, op.entity_id, op.as_of_sim_time_ms)
+            sighting_id = assessment.last_sighting.sample_id if assessment.last_sighting else None
+            for sample_id in dict.fromkeys((sighting_id, assessment.latest_attempt_sample_id)):
+                if sample_id is not None:
+                    sample = self._memory.get_observation_sample(sample_id)
+                    if sample is not None:
+                        location_samples.append(sample)
+            approved_operations.append("location_assessment: Read applicable camera evidence.")
+
+        stop: PatrolDecisionSummary | None = None
+        stop_sample = None
+        if plan.read_patrol_stop:
+            stop = getattr(sensors, "latest_stop_decision_summary", None)
+            if stop is not None and stop.sensor_sample_id is not None:
+                sample = self._memory.get_observation_sample(stop.sensor_sample_id)
+                if (
+                    sample is not None
+                    and sample.run_id == stop.run_id
+                    and sample.sim_time_ms == stop.sensor_sim_time_ms
+                    and sample.request.capability == "lidar_scan"
+                ):
+                    stop_sample = sample
+            approved_operations.append("patrol_stop: Read the recorded decision and cited LiDAR.")
+
         # 5. ActionPlaceholder is ignored as per instructions.
         return PlanExecutionResult(
             intent=plan.intent,
@@ -128,5 +197,9 @@ class PlanExecutor:
             observation_results=observation_results,
             temporal_results=temporal_results,
             audit_results=audit_results,
+            patrol_stop=stop,
+            patrol_stop_sample=stop_sample,
+            location_assessment=assessment,
+            location_samples=location_samples,
             approved_operations=approved_operations,
         )

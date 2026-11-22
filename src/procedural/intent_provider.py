@@ -11,6 +11,10 @@ from typing import Protocol, runtime_checkable
 class IntentProviderUnavailableError(Exception):
     """Raised when a provider cannot complete an expected request."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @runtime_checkable
 class IntentProvider(Protocol):

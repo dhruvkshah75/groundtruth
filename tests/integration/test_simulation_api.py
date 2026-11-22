@@ -147,6 +147,82 @@ def test_evidence_endpoint_is_run_scoped_and_does_not_expose_unseen_parcel(api):
     assert error["code"] == "stale_run"
 
 
+def test_http_evidence_sample_lookup_after_newer_scan_and_isolation(api):
+    send, service, clock, key = api
+    loaded = load(send)
+    run_ident = identity(loaded)
+    control(send, loaded, "play")
+
+    # Disrupt with cart_block to cause a stop
+    disrupt_body = {
+        "expected": run_ident,
+        "request_id": str(uuid4()),
+        "disruption": {"kind": "cart_block"},
+        "at_ms": 100,
+    }
+    code, _, _ = send(BASE + "/disrupt", disrupt_body)
+    assert code == 200
+
+    for _ in range(25):
+        clock[0] += 1.0
+        service.pump()
+        code, state, _ = send(BASE + "/state")
+        if code == 200 and state.get("patrol", {}).get("state") == "blocked":
+            break
+
+    code, state, _ = send(BASE + "/state")
+    assert code == 200
+    patrol = state["patrol"]
+    assert patrol["state"] == "blocked"
+    stop_dec = patrol["latest_stop_decision"]
+    assert stop_dec is not None
+    sample_id = stop_dec["sample_id"]
+    sensor_sim_time = stop_dec["sensor_sim_time_ms"]
+    assert sample_id is not None
+
+    # Advance clock so a newer scan arrives and sim_time advances
+    clock[0] += 2.0
+    service.pump()
+    code, state_later, _ = send(BASE + "/state")
+    assert state_later["sim_time_ms"] > sensor_sim_time
+
+    # Query exact cited sample via HTTP evidence endpoint
+    code, evidence, _ = send(
+        BASE + "/evidence",
+        {"expected": run_ident, "sample_id": sample_id},
+    )
+    assert code == 200
+    assert evidence["run_id"] == run_ident["run_id"]
+    assert evidence["sim_time_ms"] == state_later["sim_time_ms"]
+    sample = evidence["sample"]
+    assert sample["sample_id"] == sample_id
+    assert sample["run_id"] == run_ident["run_id"]
+    assert sample["request"]["capability"] == "lidar_scan"
+    assert sample["sim_time_ms"] == sensor_sim_time
+
+    # Rejection of stale run identity after reset
+    code, reset_res, _ = control(send, state_later, "reset")
+    assert code == 200
+    new_run_id = reset_res["run_id"]
+    assert new_run_id != run_ident["run_id"]
+
+    # Query with stale identity returns 409 stale_run
+    code, error, _ = send(
+        BASE + "/evidence",
+        {"expected": run_ident, "sample_id": sample_id},
+    )
+    assert code == 409
+    assert error["code"] == "stale_run"
+
+    # Query with new run identity for the previous run's sample returns 400
+    new_ident = {"run_id": new_run_id, "generation": reset_res["generation"]}
+    code, error, _ = send(
+        BASE + "/evidence",
+        {"expected": new_ident, "sample_id": sample_id},
+    )
+    assert code == 400
+
+
 def test_timeline_keeps_capture_order_when_an_older_observation_arrives_late(api):
     send, service, _, key = api
     loaded = load(send)
@@ -211,6 +287,38 @@ def test_ask_sanitizes_upstream_request_size_error(api, monkeypatch):
 
 def control(send, state, action, **kwargs):
     return send(BASE + "/control", {"expected": identity(state), "action": action, **kwargs})
+
+
+def test_http_belief_demo_reload_and_reset_keep_unique_run_evidence(api):
+    send, _, _, _ = api
+    preset = "warehouse_belief_demo_v1"
+    legacy = load(send)
+    code, first, _ = send(BASE + "/load", {**load_body(legacy), "preset": preset})
+    assert code == 200, first
+    code, second, _ = send(BASE + "/load", {**load_body(first), "preset": preset})
+    assert code == 200, second
+    code, reset, _ = control(send, second, "reset")
+    assert code == 200, reset
+
+    runs = (first, second, reset)
+    assert len({state["run_id"] for state in runs}) == len(runs)
+    assert len(
+        {state["observation"]["latest"]["camera_detect"]["sample_id"] for state in runs}
+    ) == len(runs)
+    for state in runs:
+        assert state["audience"]["snapshot"]["scenario_id"] == preset
+        assert state["sim_time_ms"] == 0
+
+    code, cart, _ = send(BASE + "/disrupt", disruption(reset, "cart_block"))
+    assert code == 200, cart
+    assert cart["event"]["to"] == {"x_cm": 465, "y_cm": 200}
+
+    initial_sample = first["observation"]["latest"]["camera_detect"]["sample_id"]
+    assert_error(
+        send(BASE + "/evidence", {"expected": identity(reset), "sample_id": initial_sample}),
+        400,
+        "invalid_request",
+    )
 
 
 def test_shared_http_examples():

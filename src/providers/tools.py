@@ -6,6 +6,7 @@ from typing import Any
 
 ALLOWED_INTENTS = (
     "current_route_status",
+    "explain_patrol_stop",
     "current_object_perception",
     "historical_fact_lookup",
     "audit_explanation",
@@ -212,6 +213,22 @@ INTENT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "explain_patrol_stop",
+            "description": (
+                "Explain the most recent recorded patrol stop in the active simulation run. "
+                "Use for 'Why did the robot stop?' even if it has since resumed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "unsupported",
             "description": (
                 "Select when the user question cannot be handled by the supported "
@@ -250,10 +267,13 @@ INTENT_PROPOSAL_SYSTEM_PROMPT = (
     "'historical_fact_lookup' alone for that comparison. Use 'historical_fact_lookup' only "
     "when the user asks about stored or past facts without asking for a current sensor view.\n"
     "4. For questions about an object's location over time (e.g. 'Where is parcel_01 now?', "
-    "'When did you last see parcel_01?', 'Where was parcel_01 at 7 seconds?', "
-    "'Where was parcel_01 before, and what changed?'), call 'object_location_query' with the "
-    "appropriate mode ('current', 'last_seen', 'at_time', 'history', or 'changes'). If mode "
-    "is 'at_time', provide 'at_sim_time_ms' (e.g. 7 seconds = 7000).\n"
+    "'When did you last see parcel_01?', 'Where was parcel_01 at 6.7 seconds?', "
+    "'What evidence caused parcel_01's location belief to change?'), call 'object_location_query' "
+    "with the appropriate mode ('current', 'last_seen', 'at_time', 'history', or 'changes'). "
+    "Use 'at_time' for an explicit cutoff even if the question says 'last seen before'. "
+    "Provide 'at_sim_time_ms' (e.g. 6.7 seconds = 6700).\n"
+    "For 'Why did the robot stop?', call 'explain_patrol_stop' with no arguments. Use "
+    "'current_route_status' to answer whether a route is clear now.\n"
     "5. Do not author SQL queries, Python code, database commands, or direct "
     "hardware sensor calls.\n"
     "6. If the question does not match any capability or memory lookup, call 'unsupported'.\n"

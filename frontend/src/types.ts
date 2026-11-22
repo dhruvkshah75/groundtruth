@@ -1,4 +1,9 @@
-import type { SimulationStateResponse, StoredObservationSample } from "./simulationTypes";
+import type {
+  BoundingBox,
+  PatrolDecisionSummary,
+  SimulationStateResponse,
+  StoredObservationSample,
+} from "./simulationTypes";
 
 export type SpatialContext = {
   location: string | null;
@@ -22,6 +27,38 @@ export type Fact = {
   evidence: Record<string, unknown>;
 };
 
+export type LocationSighting = {
+  sample_id: string;
+  sim_time_ms: number;
+  captured_at: string;
+  frame_of_reference: string;
+  position: { x_cm: number; y_cm: number };
+  station_id: string | null;
+  bounding_box: BoundingBox | Record<string, number> | null;
+  apparent_color: string | null;
+};
+
+export type LocationAssessment = {
+  entity_id: string;
+  run_id: string;
+  as_of_sim_time_ms: number;
+  verification_status: "verified" | "last_seen" | "unverified" | "unavailable";
+  current_location: string | null;
+  current_sighting: LocationSighting | null;
+  last_sighting: LocationSighting | null;
+  latest_attempt_sample_id: string | null;
+  earlier_station: string | null;
+  lost_verification_reason: string | null;
+  lost_verification_sample: StoredObservationSample | null;
+  visibility: "currently_visible" | "not_currently_visible" | "unknown";
+  freshness: "fresh" | "stale" | "future_dated" | "incompatible" | "unverified";
+  age_ms: number | null;
+  last_observed_position: LocationSighting["position"] | null;
+  last_observed_frame: string | null;
+  uncertainty: boolean;
+  uncertainty_reason: string | null;
+};
+
 export type GraphEdge = {
   source: string;
   target: string;
@@ -32,6 +69,10 @@ export type GraphEdge = {
   confidence_score: number;
   observed_at: string | null;
   context: SpatialContext | null;
+  location_evidence?: {
+    status: "verified" | "last_known" | "earlier_station";
+    assessment: LocationAssessment;
+  };
 };
 
 export type AuditEvent = {
@@ -50,6 +91,19 @@ export type SimulationEvidence = {
     verification_status: "verified" | "last_seen" | "unverified" | "unavailable";
     visibility?: "currently_visible" | "not_currently_visible" | "unknown";
     freshness: string; uncertainty_reason: string | null; supported_location?: string | null;
+    current_location?: string | null;
+    earlier_station?: string | null;
+    lost_verification_reason?: string | null;
+    lost_verification_sample?: StoredObservationSample | null;
+    current_sighting?: {
+      sample_id: string;
+      sim_time_ms: number;
+      captured_at?: string;
+      frame_of_reference?: string;
+      position: { x_cm: number; y_cm: number };
+      station_id?: string | null;
+      apparent_color?: string | null;
+    } | null;
     status?: string | null; last_positive_sighting?: StoredObservationSample | null;
     last_positive_lidar_sample?: StoredObservationSample | null;
     latest_sensor_attempt?: StoredObservationSample | null;
@@ -57,6 +111,7 @@ export type SimulationEvidence = {
     last_observed_position?: { x_cm: number; y_cm: number } | null;
     last_observed_frame?: string | null;
   };
+  location_assessment?: LocationAssessment;
   samples: StoredObservationSample[]; facts: Fact[]; events: AuditEvent[]; truncated: boolean;
 };
 
@@ -103,7 +158,13 @@ export type AgentResponse = {
   plan_verifiable: boolean | null;
   plan_reason: string | null;
   react_trace?: ReActTrace | null;
-  simulation_evidence?: { run_id: string; sim_time_ms: number; request_id: string };
+  simulation_evidence?: {
+    run_id: string;
+    sim_time_ms: number;
+    request_id: string;
+    location_assessment?: LocationAssessment;
+    patrol_stop?: PatrolDecisionSummary;
+  };
 };
 
 export type WorldState = {

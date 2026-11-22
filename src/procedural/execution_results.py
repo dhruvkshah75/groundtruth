@@ -12,6 +12,8 @@ from src.contracts import (
     StoredFact,
     StoredObservationSample,
 )
+from src.contracts.simulation_api import PatrolDecisionSummary
+from src.procedural.temporal_belief_ingestion import LocationAssessment
 
 
 class MemoryExecutionResult(BaseModel):
@@ -54,6 +56,8 @@ class AuditExecutionResult(BaseModel):
     purpose: str
     run_id: UUID | None = None
     trails: dict[UUID, AuditTrail]
+    as_of_sim_time_ms: int | None = None
+    samples: list[StoredObservationSample] = Field(default_factory=list)
 
 
 class PlanExecutionResult(BaseModel):
@@ -69,4 +73,8 @@ class PlanExecutionResult(BaseModel):
     observation_results: list[ObservationExecutionResult] = Field(default_factory=list)
     temporal_results: list[TemporalObservationExecutionResult] = Field(default_factory=list)
     audit_results: list[AuditExecutionResult] = Field(default_factory=list)
+    patrol_stop: PatrolDecisionSummary | None = None
+    patrol_stop_sample: StoredObservationSample | None = None
+    location_assessment: LocationAssessment | None = None
+    location_samples: list[StoredObservationSample] = Field(default_factory=list)
     approved_operations: list[str] = Field(default_factory=list)
