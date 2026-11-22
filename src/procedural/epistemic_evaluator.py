@@ -110,6 +110,9 @@ class EpistemicEvaluator:
                 explanation=f"Request could not be planned: {reason}",
             )
 
+        if plan_result.location_assessment is not None:
+            return self._evaluate_location_assessment(plan_result)
+
         # 2. Handle temporal object location queries (Issue #32)
         if getattr(plan_result, "temporal_results", None):
             return self._evaluate_temporal_object_query(
@@ -553,6 +556,76 @@ class EpistemicEvaluator:
             sensor_telemetry=telemetry,
         )
 
+    @staticmethod
+    def _sample_telemetry(samples: list[StoredObservationSample]) -> list[dict[str, Any]]:
+        telemetry: list[dict[str, Any]] = []
+        for s in samples:
+            if isinstance(s.result, SensorObservation):
+                obs_dict = s.result.model_dump(mode="json")
+                obs_dict["sample_id"] = str(s.sample_id)
+                obs_dict["run_id"] = str(s.run_id)
+                obs_dict["sim_time_ms"] = s.sim_time_ms
+                obs_dict["sample_sequence"] = s.sample_sequence
+                obs_dict["observer_pose"] = s.observer_pose.model_dump(mode="json")
+                telemetry.append(obs_dict)
+            else:
+                telemetry.append(
+                    {
+                        "sample_id": str(s.sample_id),
+                        "run_id": str(s.run_id),
+                        "sim_time_ms": s.sim_time_ms,
+                        "sample_sequence": s.sample_sequence,
+                        "capability": s.request.capability,
+                        "status": "unavailable",
+                        "reason": s.result.reason,
+                        "observer_pose": s.observer_pose.model_dump(mode="json"),
+                    }
+                )
+        return telemetry
+
+    @staticmethod
+    def _evaluate_location_assessment(plan_result: PlanExecutionResult) -> EpistemicEvaluation:
+        assessment = plan_result.location_assessment
+        assert assessment is not None and plan_result.intent is not None
+        entity = assessment.entity_id
+        sighting = assessment.last_sighting
+        as_of = f"At simulation time {assessment.as_of_sim_time_ms} ms"
+        if sighting is not None:
+            point = sighting.position
+            coordinates = (
+                f"x={point.x_cm:g} cm, y={point.y_cm:g} cm in {sighting.frame_of_reference}"
+            )
+            place = f"{sighting.station_id} ({coordinates})" if sighting.station_id else coordinates
+            capture = f"{sighting.sim_time_ms} ms (camera sample ID: {sighting.sample_id})"
+
+        if assessment.current_sighting is not None and sighting is not None:
+            if plan_result.intent.mode == "last_seen":
+                answer = f"{as_of}, the last confirmed sighting of {entity} was at {place}, captured at {capture}."
+            else:
+                answer = f"{as_of}, the camera verifies {entity} at {place} from a sighting captured at {capture}."
+            if assessment.uncertainty_reason:
+                answer += f" {assessment.uncertainty_reason}"
+            status = "verified"
+        else:
+            answer = f"{as_of}, the current location of {entity} cannot be verified."
+            if sighting is not None:
+                answer += f" Last confirmed sighting: {place}, captured at {capture}."
+            if assessment.lost_verification_reason:
+                answer += f" {assessment.lost_verification_reason}"
+            status = (
+                "uncertain" if sighting is not None or assessment.earlier_station else "no_data"
+            )
+
+        if assessment.earlier_station and (
+            sighting is None or sighting.station_id != assessment.earlier_station
+        ):
+            answer += f" Earlier recorded station: {assessment.earlier_station}."
+        return EpistemicEvaluation(
+            status=status,
+            explanation=answer,
+            sensor_telemetry=EpistemicEvaluator._sample_telemetry(plan_result.location_samples),
+        )
+
     def _evaluate_temporal_object_query(
         self,
         plan_result: PlanExecutionResult,
@@ -608,29 +681,7 @@ class EpistemicEvaluator:
                 latest_cam_samples.extend(tr.samples)
 
         all_samples = [s for tr in temporal_results for s in tr.samples]
-        telemetry: list[dict[str, Any]] = []
-        for s in all_samples:
-            if isinstance(s.result, SensorObservation):
-                obs_dict = s.result.model_dump(mode="json")
-                obs_dict["sample_id"] = str(s.sample_id)
-                obs_dict["run_id"] = str(s.run_id)
-                obs_dict["sim_time_ms"] = s.sim_time_ms
-                obs_dict["sample_sequence"] = s.sample_sequence
-                obs_dict["observer_pose"] = s.observer_pose.model_dump(mode="json")
-                telemetry.append(obs_dict)
-            else:
-                telemetry.append(
-                    {
-                        "sample_id": str(s.sample_id),
-                        "run_id": str(s.run_id),
-                        "sim_time_ms": s.sim_time_ms,
-                        "sample_sequence": s.sample_sequence,
-                        "capability": s.request.capability,
-                        "status": "unavailable",
-                        "reason": s.result.reason,
-                        "observer_pose": s.observer_pose.model_dump(mode="json"),
-                    }
-                )
+        telemetry = self._sample_telemetry(all_samples)
         memory_facts = [f for m in plan_result.memory_results for f in m.facts]
         trails = [trail for ar in plan_result.audit_results for trail in ar.trails.values()]
         events = [e for trail in trails for e in trail.events]

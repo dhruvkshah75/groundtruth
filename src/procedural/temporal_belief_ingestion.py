@@ -322,6 +322,7 @@ class LocationAssessment(BaseModel):
     current_location: str | None = None
     current_sighting: LocationSighting | None = None
     last_sighting: LocationSighting | None = None
+    latest_attempt_sample_id: UUID | None = None
     lost_verification_reason: str | None = None
     lost_verification_sample: StoredObservationSample | None = None
     earlier_station: str | None = None
@@ -505,6 +506,8 @@ def assess_location(
     if latest_attempt_sample is not None and latest_attempt_sample.sim_time_ms > as_of_sim_time_ms:
         latest_attempt_sample = None
 
+    attempt_id = latest_attempt_sample.sample_id if latest_attempt_sample else None
+
     # 1. Parse sighting if available
     sighting: LocationSighting | None = None
     pos: Point | None = None
@@ -554,6 +557,7 @@ def assess_location(
                     entity_id=entity_id,
                     run_id=run_id,
                     as_of_sim_time_ms=as_of_sim_time_ms,
+                    latest_attempt_sample_id=attempt_id,
                     verification_status="unavailable",
                     current_location=None,
                     current_sighting=None,
@@ -578,6 +582,7 @@ def assess_location(
                 entity_id=entity_id,
                 run_id=run_id,
                 as_of_sim_time_ms=as_of_sim_time_ms,
+                latest_attempt_sample_id=attempt_id,
                 verification_status="last_seen",
                 current_location=None,
                 current_sighting=None,
@@ -598,6 +603,7 @@ def assess_location(
             entity_id=entity_id,
             run_id=run_id,
             as_of_sim_time_ms=as_of_sim_time_ms,
+            latest_attempt_sample_id=attempt_id,
             verification_status="unverified",
             current_location=None,
             current_sighting=None,
@@ -722,6 +728,7 @@ def assess_location(
         entity_id=entity_id,
         run_id=run_id,
         as_of_sim_time_ms=as_of_sim_time_ms,
+        latest_attempt_sample_id=attempt_id,
         verification_status=verification_status,
         current_location=current_location,
         current_sighting=current_sighting,
@@ -1582,8 +1589,7 @@ class TemporalBeliefIngestionService:
         current_sim_time_ms: int,
     ) -> EntityBeliefSummary:
         """Evaluate the time-aware epistemic status of an entity as-of current_sim_time_ms."""
-        with self._lock:
-            return self._locked_get_entity_belief_summary(run_id, entity_id, current_sim_time_ms)
+        return self.get_entity_location_evidence(run_id, entity_id, current_sim_time_ms)[0]
 
     def assess_entity_location(
         self,
@@ -1593,7 +1599,7 @@ class TemporalBeliefIngestionService:
     ) -> LocationAssessment:
         """Evaluate run-scoped location assessment from evidence and configured geometry."""
         with self._lock:
-            return self._locked_assess_entity_location(run_id, entity_id, current_sim_time_ms)
+            return self._read_entity_location(run_id, entity_id, current_sim_time_ms)[0]
 
     def _locked_resolve_sighting_and_attempt(
         self,
@@ -1639,36 +1645,15 @@ class TemporalBeliefIngestionService:
         )
         return last_sighting, latest_attempt, station_fact
 
-    def _locked_assess_entity_location(
-        self,
-        run_id: UUID,
-        entity_id: str,
-        current_sim_time_ms: int,
-    ) -> LocationAssessment:
-        last_sighting, latest_attempt, active_fact = self._locked_resolve_sighting_and_attempt(
-            run_id, entity_id, current_sim_time_ms
-        )
-        return assess_location(
-            entity_id=entity_id,
-            run_id=run_id,
-            as_of_sim_time_ms=current_sim_time_ms,
-            last_sighting_sample=last_sighting,
-            latest_attempt_sample=latest_attempt,
-            zone_map=self._zone_map,
-            freshness_ms=self._config.freshness_ms,
-            active_fact_station=active_fact.object if active_fact else None,
-            camera_range_cm=self._camera_range_cm,
-            camera_fov_deg=self._camera_fov_deg,
-            shelves=self._shelves,
-        )
-
-    def _locked_get_entity_belief_summary(
-        self,
-        run_id: UUID,
-        entity_id: str,
-        current_sim_time_ms: int,
-    ) -> EntityBeliefSummary:
-        last_sighting, latest_attempt, active_fact = self._locked_resolve_sighting_and_attempt(
+    def _read_entity_location(
+        self, run_id: UUID, entity_id: str, current_sim_time_ms: int
+    ) -> tuple[
+        LocationAssessment,
+        StoredObservationSample | None,
+        StoredObservationSample | None,
+        StoredFact | None,
+    ]:
+        last_sighting, latest_attempt, station_fact = self._locked_resolve_sighting_and_attempt(
             run_id, entity_id, current_sim_time_ms
         )
         assessment = assess_location(
@@ -1679,10 +1664,25 @@ class TemporalBeliefIngestionService:
             latest_attempt_sample=latest_attempt,
             zone_map=self._zone_map,
             freshness_ms=self._config.freshness_ms,
-            active_fact_station=active_fact.object if active_fact else None,
+            active_fact_station=station_fact.object if station_fact else None,
             camera_range_cm=self._camera_range_cm,
             camera_fov_deg=self._camera_fov_deg,
             shelves=self._shelves,
+        )
+        return assessment, last_sighting, latest_attempt, station_fact
+
+    def get_entity_location_evidence(
+        self, run_id: UUID, entity_id: str, current_sim_time_ms: int
+    ) -> tuple[EntityBeliefSummary, LocationAssessment]:
+        """Read the legacy summary and the assessment from the same evidence."""
+        with self._lock:
+            return self._locked_get_entity_location_evidence(run_id, entity_id, current_sim_time_ms)
+
+    def _locked_get_entity_location_evidence(
+        self, run_id: UUID, entity_id: str, current_sim_time_ms: int
+    ) -> tuple[EntityBeliefSummary, LocationAssessment]:
+        assessment, last_sighting, latest_attempt, active_fact = self._read_entity_location(
+            run_id, entity_id, current_sim_time_ms
         )
 
         supported_location: str | None = None
@@ -1708,7 +1708,7 @@ class TemporalBeliefIngestionService:
                     active_fact.evidence.get("frame", active_fact.context.frame_of_reference or "")
                 )
 
-        return EntityBeliefSummary(
+        summary = EntityBeliefSummary(
             entity_id=entity_id,
             run_id=run_id,
             as_of_sim_time_ms=current_sim_time_ms,
@@ -1732,6 +1732,8 @@ class TemporalBeliefIngestionService:
             uncertainty=assessment.uncertainty,
             uncertainty_reason=assessment.uncertainty_reason,
         )
+
+        return summary, assessment
 
     def get_route_belief_summary(
         self,

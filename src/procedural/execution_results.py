@@ -14,6 +14,9 @@ from src.contracts import (
 )
 
 
+from src.procedural.temporal_belief_ingestion import LocationAssessment
+
+
 class MemoryExecutionResult(BaseModel):
     """Result of one memory query operation."""
 
@@ -69,4 +72,6 @@ class PlanExecutionResult(BaseModel):
     observation_results: list[ObservationExecutionResult] = Field(default_factory=list)
     temporal_results: list[TemporalObservationExecutionResult] = Field(default_factory=list)
     audit_results: list[AuditExecutionResult] = Field(default_factory=list)
+    location_assessment: LocationAssessment | None = None
+    location_samples: list[StoredObservationSample] = Field(default_factory=list)
     approved_operations: list[str] = Field(default_factory=list)

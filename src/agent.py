@@ -29,7 +29,8 @@ from src.procedural.intent_coverage_reviewer import IntentCoverageReviewer
 from src.procedural.intent_planner import IntentPlanner, IntentPlannerOutcome
 from src.procedural.intent_provider import IntentProvider, IntentProviderUnavailableError
 from src.procedural.plan_builder import PlanBuilder
-from src.procedural.plan_executor import EnvironmentInterface
+from src.procedural.plan_executor import EnvironmentInterface, LocationReader
+from src.procedural.temporal_belief_ingestion import LocationAssessment
 from src.procedural.rule_based_provider import RuleBasedIntentProvider
 from src.sensorimotor.mock_environment import MockEnvironment
 from src.sensorimotor.world_models import RobotState, WorldState
@@ -87,6 +88,7 @@ class AgentResponse:
     plan_verifiable: bool | None = None
     plan_reason: str | None = None
     react_trace: ReActTrace | None = None
+    location_assessment: LocationAssessment | None = None
 
 
 class GroundedAgent:
@@ -191,16 +193,9 @@ class GroundedAgent:
         *,
         sensors: EnvironmentInterface | None = None,
         capture_time_ms: int | None = None,
+        location_reader: LocationReader | None = None,
     ) -> Callable[[], AgentResponse]:
         """Execute deterministic operations and prepare a detached provider-only continuation."""
-        plan_result = self._composition.execute_intent(intent, sensors=sensors)
-
-        # Propagate live provider failures immediately to the API layer
-        fallback = getattr(plan_result, "fallback", None)
-        if fallback is not None and fallback.category == "provider_unavailable":
-            last_err = getattr(self._provider, "last_error", None) or fallback.reason
-            raise IntentProviderUnavailableError(f"Live intent provider failed: {last_err}")
-
         sim_time = capture_time_ms
         if sim_time is None and sensors is not None:
             sim_time = getattr(sensors, "sim_time_ms", None)
@@ -209,6 +204,16 @@ class GroundedAgent:
                     sim_time = sensors.read().status.sim_time_ms
                 except Exception:
                     pass
+
+        plan_result = self._composition.execute_intent(
+            intent, sensors=sensors, location_reader=location_reader, capture_time_ms=sim_time
+        )
+
+        # Propagate live provider failures immediately to the API layer
+        fallback = getattr(plan_result, "fallback", None)
+        if fallback is not None and fallback.category == "provider_unavailable":
+            last_err = getattr(self._provider, "last_error", None) or fallback.reason
+            raise IntentProviderUnavailableError(f"Live intent provider failed: {last_err}")
 
         # 2. Epistemically evaluate against memory and observations
         eval_outcome: EpistemicEvaluation = self._evaluator.evaluate(
@@ -265,7 +270,22 @@ class GroundedAgent:
 
         # Build detailed operations trace with actual returned values and evidence IDs
         operations_trace: list[dict[str, Any]] = []
+        assessment = getattr(plan_result, "location_assessment", None)
         if isinstance(plan_result, PlanExecutionResult):
+            if assessment is not None:
+                operations_trace.append(
+                    {
+                        "name": "location_assessment",
+                        "purpose": "Read applicable camera evidence for the parcel.",
+                        "ran": True,
+                        "status": assessment.verification_status,
+                        "evidence_ids": [
+                            str(sample.sample_id) for sample in plan_result.location_samples
+                        ],
+                        "returned_values": assessment.model_dump(mode="json"),
+                        "summary": "Assessed location at the captured simulation time.",
+                    }
+                )
             for mem_res in plan_result.memory_results:
                 fact_ids = [str(f.fact_id) for f in mem_res.facts]
                 returned_facts = [
@@ -388,6 +408,7 @@ class GroundedAgent:
                 plan_verifiable=plan_verifiable,
                 plan_reason=_plan_reason(plan_result),
                 react_trace=react_trace,
+                location_assessment=assessment,
             )
         )
         evaluation = deepcopy(eval_outcome)

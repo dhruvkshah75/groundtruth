@@ -1,5 +1,6 @@
 """Executes validated plans against Tier 1 and Tier 3."""
 
+from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
@@ -22,9 +23,14 @@ from src.procedural.execution_results import (
     TemporalObservationExecutionResult,
 )
 
+from src.procedural.temporal_belief_ingestion import LocationAssessment
+
+LocationReader = Callable[[UUID, str, int], LocationAssessment]
+
 
 class MemoryRepositoryInterface(Protocol):
     def query_facts(self, query: FactQuery) -> list[StoredFact]: ...
+    def get_observation_sample(self, sample_id: UUID) -> StoredObservationSample | None: ...
     def get_audit_chain(self, fact_id: UUID) -> AuditTrail: ...
     def query_observations(
         self, query: TemporalObservationQuery
@@ -47,7 +53,11 @@ class PlanExecutor:
         self._environment = environment
 
     def execute(
-        self, plan: ExecutionPlan, *, sensors: EnvironmentInterface | None = None
+        self,
+        plan: ExecutionPlan,
+        *,
+        sensors: EnvironmentInterface | None = None,
+        location_reader: LocationReader | None = None,
     ) -> PlanExecutionResult:
         """Execute all memory, observation, temporal, and audit operations in the plan."""
         memory_results: list[MemoryExecutionResult] = []
@@ -117,6 +127,19 @@ class PlanExecutor:
         for audit_op in plan.audit_operations:
             approved_operations.append(f"audit_lookup: {audit_op.purpose}")
 
+        assessment = None
+        location_samples = []
+        if (op := plan.location_operation) is not None:
+            assert location_reader is not None
+            assessment = location_reader(op.run_id, op.entity_id, op.as_of_sim_time_ms)
+            sighting_id = assessment.last_sighting.sample_id if assessment.last_sighting else None
+            for sample_id in dict.fromkeys((sighting_id, assessment.latest_attempt_sample_id)):
+                if sample_id is not None:
+                    sample = self._memory.get_observation_sample(sample_id)
+                    if sample is not None:
+                        location_samples.append(sample)
+            approved_operations.append("location_assessment: Read applicable camera evidence.")
+
         # 5. ActionPlaceholder is ignored as per instructions.
         return PlanExecutionResult(
             intent=plan.intent,
@@ -128,5 +151,7 @@ class PlanExecutor:
             observation_results=observation_results,
             temporal_results=temporal_results,
             audit_results=audit_results,
+            location_assessment=assessment,
+            location_samples=location_samples,
             approved_operations=approved_operations,
         )

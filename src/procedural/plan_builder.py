@@ -21,6 +21,7 @@ from .entity_resolver import EntityResolver
 from .execution_plan import (
     AuditChainOperation,
     ExecutionPlan,
+    LocationAssessmentOperation,
     MemoryQueryOperation,
     ObservationOperation,
     TemporalObservationOperation,
@@ -50,7 +51,13 @@ class PlanBuilder:
         self._entity_resolver = entity_resolver
         self._capability_validator = capability_validator
 
-    def build(self, intent: IntentRequest, *, sensors: object | None = None) -> PlanningOutcome:
+    def build(
+        self,
+        intent: IntentRequest,
+        *,
+        sensors: object | None = None,
+        warehouse_time_ms: int | None = None,
+    ) -> PlanningOutcome:
         """Create the required typed operations for one validated intent.
 
         Args:
@@ -71,7 +78,9 @@ class PlanBuilder:
         if intent.intent == "current_robot_pose":
             return self._build_robot_pose(intent)
         if intent.intent == "object_location_query":
-            return self._build_object_location_query(intent, sensors=sensors)
+            return self._build_object_location_query(
+                intent, sensors=sensors, warehouse_time_ms=warehouse_time_ms
+            )
         if intent.intent == "environment_action":
             return self._fallback(
                 "unsupported_intent",
@@ -358,7 +367,11 @@ class PlanBuilder:
         return True
 
     def _build_object_location_query(
-        self, intent: IntentRequest, *, sensors: object | None = None
+        self,
+        intent: IntentRequest,
+        *,
+        sensors: object | None = None,
+        warehouse_time_ms: int | None = None,
     ) -> PlanningOutcome:
         """Build memory and observation ledger operations for an object location question."""
         entity = self._resolve_one_entity(intent)
@@ -373,6 +386,22 @@ class PlanBuilder:
         if run_id is None:
             run_id = UUID(int=0)
 
+        mode = intent.mode or "current"
+        warehouse_run = warehouse_time_ms is not None and run_id == getattr(sensors, "run_id", None)
+        if warehouse_run and mode in ("current", "last_seen"):
+            assert warehouse_time_ms is not None
+            return PlanningOutcome(
+                plan=ExecutionPlan(
+                    intent=intent,
+                    resolved_entity_ids=[entity],
+                    location_operation=LocationAssessmentOperation(
+                        run_id=run_id, entity_id=entity, as_of_sim_time_ms=warehouse_time_ms
+                    ),
+                    current_state_verifiable=True,
+                    plan_reason="Read the run-scoped parcel assessment from the observation ledger.",
+                )
+            )
+
         memory_ops: list[MemoryQueryOperation] = [
             MemoryQueryOperation(
                 query=FactQuery(subject=entity, predicate="located_at"),
@@ -381,8 +410,6 @@ class PlanBuilder:
         ]
 
         temporal_ops: list[TemporalObservationOperation] = []
-        mode = intent.mode or "current"
-
         if mode == "current":
             temporal_ops.append(
                 TemporalObservationOperation(
@@ -426,27 +453,34 @@ class PlanBuilder:
                 )
             )
         elif mode == "at_time":
+            if warehouse_run:
+                memory_ops.clear()
+            cutoff = intent.at_sim_time_ms
+            if warehouse_run and warehouse_time_ms is not None and cutoff is not None:
+                cutoff = min(cutoff, warehouse_time_ms)
             temporal_ops.append(
                 TemporalObservationOperation(
                     query=TemporalObservationQuery(
                         run_id=run_id,
                         mode="last_seen",
                         entity_id=entity,
-                        end_ms=intent.at_sim_time_ms,
+                        capability="camera_detect",
+                        end_ms=cutoff,
                     ),
                     purpose=f"Query sighting for {entity} at or before {intent.at_sim_time_ms} ms.",
                 )
             )
-            temporal_ops.append(
-                TemporalObservationOperation(
-                    query=TemporalObservationQuery(
-                        run_id=run_id,
-                        mode="latest",
-                        capability="camera_detect",
-                    ),
-                    purpose="Query latest camera sensor status to verify simulation time horizon.",
+            if not warehouse_run:
+                temporal_ops.append(
+                    TemporalObservationOperation(
+                        query=TemporalObservationQuery(
+                            run_id=run_id,
+                            mode="latest",
+                            capability="camera_detect",
+                        ),
+                        purpose="Query latest camera sensor status to verify simulation time horizon.",
+                    )
                 )
-            )
         elif mode in ("history", "changes"):
             temporal_ops.append(
                 TemporalObservationOperation(
@@ -454,6 +488,7 @@ class PlanBuilder:
                         run_id=run_id,
                         mode="history",
                         entity_id=entity,
+                        end_ms=warehouse_time_ms if warehouse_run else None,
                     ),
                     purpose=f"Query chronological sighting history for {entity}.",
                 )

@@ -22,6 +22,38 @@ export type Fact = {
   evidence: Record<string, unknown>;
 };
 
+export type LocationSighting = {
+  sample_id: string;
+  sim_time_ms: number;
+  captured_at: string;
+  frame_of_reference: string;
+  position: { x_cm: number; y_cm: number };
+  station_id: string | null;
+  bounding_box: Record<string, number> | null;
+  apparent_color: string | null;
+};
+
+export type LocationAssessment = {
+  entity_id: string;
+  run_id: string;
+  as_of_sim_time_ms: number;
+  verification_status: "verified" | "last_seen" | "unverified" | "unavailable";
+  current_location: string | null;
+  current_sighting: LocationSighting | null;
+  last_sighting: LocationSighting | null;
+  latest_attempt_sample_id: string | null;
+  earlier_station: string | null;
+  lost_verification_reason: string | null;
+  lost_verification_sample: StoredObservationSample | null;
+  visibility: "currently_visible" | "not_currently_visible" | "unknown";
+  freshness: "fresh" | "stale" | "future_dated" | "incompatible" | "unverified";
+  age_ms: number | null;
+  last_observed_position: LocationSighting["position"] | null;
+  last_observed_frame: string | null;
+  uncertainty: boolean;
+  uncertainty_reason: string | null;
+};
+
 export type GraphEdge = {
   source: string;
   target: string;
@@ -32,6 +64,10 @@ export type GraphEdge = {
   confidence_score: number;
   observed_at: string | null;
   context: SpatialContext | null;
+  location_evidence?: {
+    status: "verified" | "last_known" | "earlier_station";
+    assessment: LocationAssessment;
+  };
 };
 
 export type AuditEvent = {
@@ -70,6 +106,7 @@ export type SimulationEvidence = {
     last_observed_position?: { x_cm: number; y_cm: number } | null;
     last_observed_frame?: string | null;
   };
+  location_assessment?: LocationAssessment;
   samples: StoredObservationSample[]; facts: Fact[]; events: AuditEvent[]; truncated: boolean;
 };
 
@@ -116,7 +153,12 @@ export type AgentResponse = {
   plan_verifiable: boolean | null;
   plan_reason: string | null;
   react_trace?: ReActTrace | null;
-  simulation_evidence?: { run_id: string; sim_time_ms: number; request_id: string };
+  simulation_evidence?: {
+    run_id: string;
+    sim_time_ms: number;
+    request_id: string;
+    location_assessment?: LocationAssessment;
+  };
 };
 
 export type WorldState = {

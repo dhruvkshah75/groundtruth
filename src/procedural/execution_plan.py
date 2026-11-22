@@ -55,6 +55,16 @@ class TemporalObservationOperation(BaseModel):
     purpose: str = Field(min_length=1)
 
 
+class LocationAssessmentOperation(BaseModel):
+    """Read a parcel's location assessment at the request boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    entity_id: str
+    as_of_sim_time_ms: int = Field(ge=0)
+
+
 class AuditChainOperation(BaseModel):
     """One approved request for an audit history.
 
@@ -112,6 +122,7 @@ class ExecutionPlan(BaseModel):
     observation_operations: list[ObservationOperation] = Field(default_factory=list)
     temporal_operations: list[TemporalObservationOperation] = Field(default_factory=list)
     audit_operations: list[AuditChainOperation] = Field(default_factory=list)
+    location_operation: LocationAssessmentOperation | None = None
     action_placeholder: ActionPlaceholder | None = None
     current_state_verifiable: bool
     blocking_reasons: list[str] = Field(default_factory=list)

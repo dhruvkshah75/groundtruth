@@ -16,7 +16,14 @@ from typing import Literal, NotRequired, TypedDict
 from uuid import UUID, uuid4
 
 from src.agent import AgentResponse, GroundedAgent
-from src.contracts import CameraScan, FactAssertion, FactQuery, SensorObservation, SpatialContext
+from src.contracts import (
+    CameraScan,
+    FactAssertion,
+    FactQuery,
+    SensorObservation,
+    SpatialContext,
+    StoredFact,
+)
 from src.contracts.simulation import (
     ObservationSample,
     ScenarioDefinition,
@@ -45,6 +52,7 @@ from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.procedural.temporal_belief_ingestion import (
     IngestionResult,
+    LocationAssessment,
     TemporalBeliefIngestionService,
 )
 from src.providers import ProviderConfig, create_provider, get_provider_config
@@ -269,11 +277,7 @@ class AgentSession:
         self, scenario: ScenarioDefinition
     ) -> Callable[[ObservationSample], IngestionResult]:
         """Register identities from successful camera observations, not simulator truth."""
-        context = scenario_observation_context(scenario)
-        ingestion = TemporalBeliefIngestionService(
-            self.agent.memory,
-            observation_context=context,
-        )
+        ingestion = self._belief_service(scenario)
 
         def ingest(sample: ObservationSample) -> IngestionResult:
             self.agent.memory.set_active_run(sample.run_id)
@@ -288,6 +292,12 @@ class AgentSession:
             return result
 
         return ingest
+
+    def _belief_service(self, scenario: ScenarioDefinition) -> TemporalBeliefIngestionService:
+        return TemporalBeliefIngestionService(
+            self.agent.memory,
+            observation_context=scenario_observation_context(scenario),
+        )
 
     def _remember_simulation_entity(self, entity: str) -> None:
         self.agent.memory.add_alias(entity, entity)
@@ -846,15 +856,33 @@ class AgentSession:
                     snapshot = runtime.read() if runtime else None
                     capture_time_ms = snapshot.status.sim_time_ms if snapshot else None
                     capture = agent.capture(
-                        cleaned, intent, sensors=runtime, capture_time_ms=capture_time_ms
+                        cleaned,
+                        intent,
+                        sensors=runtime,
+                        capture_time_ms=capture_time_ms,
+                        location_reader=(
+                            self._belief_service(runtime.scenario).assess_entity_location
+                            if runtime is not None
+                            else None
+                        ),
                     )
                     self._dirty = True
-                item = _response_to_dict(capture())
+                response = capture()
+                item = _response_to_dict(response)
                 if snapshot is not None:
                     item["simulation_evidence"] = {
                         "run_id": str(snapshot.status.run_id),
                         "sim_time_ms": snapshot.status.sim_time_ms,
                         "request_id": request_id,
+                        **(
+                            {
+                                "location_assessment": response.location_assessment.model_dump(
+                                    mode="json"
+                                )
+                            }
+                            if response.location_assessment is not None
+                            else {}
+                        ),
                     }
             except Exception:
                 with self.lock:
@@ -982,6 +1010,48 @@ class AgentSession:
             ),
         )
 
+    def _annotate_location_edges(
+        self,
+        edges: list[dict[str, object]],
+        facts: list[StoredFact],
+        runtime: SimulationRuntime,
+        cutoff_ms: int,
+    ) -> None:
+        parcel_ids = {
+            entity.entity_id for entity in runtime.scenario.entities if entity.kind == "parcel"
+        }
+        run_id = str(runtime.run_id)
+        scoped_facts = {
+            str(fact.fact_id): fact
+            for fact in facts
+            if fact.subject in parcel_ids
+            and fact.predicate == "located_at"
+            and fact.context.extra_context.get("run_id") == run_id
+            and fact.evidence.get("sim_time_ms", 0) <= cutoff_ms
+        }
+        belief_service = self._belief_service(runtime.scenario)
+        assessments: dict[str, LocationAssessment] = {}
+        for edge in edges:
+            fact = scoped_facts.get(str(edge["fact_id"]))
+            if fact is None:
+                continue
+            if fact.subject not in assessments:
+                assessments[fact.subject] = belief_service.assess_entity_location(
+                    runtime.run_id, fact.subject, cutoff_ms
+                )
+            assessment = assessments[fact.subject]
+            sighting = assessment.last_sighting
+            if assessment.current_location == fact.object:
+                status = "verified"
+            elif sighting is None or sighting.station_id == fact.object:
+                status = "last_known"
+            else:
+                status = "earlier_station"
+            edge["location_evidence"] = {
+                "status": status,
+                "assessment": assessment.model_dump(mode="json"),
+            }
+
     def snapshot(self) -> dict[str, object]:
         """Read actual environment, graph, active beliefs, and full memory ledger."""
         graph = self.agent.graph.get_graph()
@@ -1003,6 +1073,9 @@ class AgentSession:
         world = self.agent.environment.get_world_state()
         if self.runtime is not None:
             physical = self.runtime.read()
+            self._annotate_location_edges(
+                edges, active_facts, self.runtime, physical.status.sim_time_ms
+            )
             world = WorldState(
                 world_version=physical.world_version,
                 scenario_name=physical.scenario_id,
@@ -1518,11 +1591,17 @@ class AgentService:
                 observation_context=context,
             )
             is_route = request.entity_id in route_ids
-            summary = (
-                service.get_route_belief_summary(runtime.run_id, request.entity_id, current)
-                if is_route
-                else service.get_entity_belief_summary(runtime.run_id, request.entity_id, current)
-            )
+            assessment = None
+            if is_route:
+                summary = service.get_route_belief_summary(
+                    runtime.run_id, request.entity_id, current
+                )
+                latest_attempt = summary.latest_lidar_attempt
+            else:
+                summary, assessment = service.get_entity_location_evidence(
+                    runtime.run_id, request.entity_id, current
+                )
+                latest_attempt = summary.latest_sensor_attempt
             samples = session.agent.memory.query_observations(
                 TemporalObservationQuery(
                     run_id=runtime.run_id,
@@ -1540,9 +1619,6 @@ class AgentService:
                     if (match := routes.match_route(sample.observer_pose)[0]) is not None
                     and match.route_id == request.entity_id
                 ]
-            latest_attempt = (
-                summary.latest_lidar_attempt if is_route else summary.latest_sensor_attempt
-            )
             if latest_attempt and all(s.sample_id != latest_attempt.sample_id for s in samples):
                 matched = routes.match_route(latest_attempt.observer_pose)[0] if is_route else None
                 if not is_route or (matched and matched.route_id == request.entity_id):
@@ -1571,6 +1647,11 @@ class AgentService:
                 "entity_id": request.entity_id,
                 "kind": "route" if is_route else "entity",
                 "summary": summary.model_dump(mode="json"),
+                **(
+                    {"location_assessment": assessment.model_dump(mode="json")}
+                    if assessment
+                    else {}
+                ),
                 "samples": [sample.model_dump(mode="json") for sample in samples[-40:]],
                 "facts": [_model_to_dict(fact) for fact in facts[-100:]],
                 "events": list(events.values())[-100:],
