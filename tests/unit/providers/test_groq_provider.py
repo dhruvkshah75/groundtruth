@@ -445,3 +445,61 @@ def test_get_provider_config_typo_mode_defaults_to_live(monkeypatch: pytest.Monk
     config = get_provider_config()
     assert config.mode == "live"
     assert config.has_valid_key is False
+
+
+@pytest.mark.parametrize(
+    ("question", "name", "arguments"),
+    [
+        ("Where is parcel_01 now?", "object_location_query", {"mode": "current"}),
+        (
+            "Where was parcel_01 at 6.7 seconds?",
+            "object_location_query",
+            {"mode": "at_time", "at_sim_time_ms": 6700},
+        ),
+        (
+            "Where was parcel_01 last seen before 8 seconds?",
+            "object_location_query",
+            {"mode": "at_time", "at_sim_time_ms": 8000},
+        ),
+        (
+            "What evidence caused parcel_01's location belief to change?",
+            "object_location_query",
+            {"mode": "changes"},
+        ),
+        ("Why did the robot stop?", "explain_patrol_stop", {}),
+    ],
+)
+def test_warehouse_recording_prompts_validate_in_both_providers(question, name, arguments):
+    from json import dumps
+
+    from src.agent import GroundedAgent
+
+    payload = (
+        {"entity_mentions": ["parcel_01"], **arguments}
+        if name == "object_location_query"
+        else arguments
+    )
+    completion = FakeChatCompletion(
+        [FakeChatChoice(FakeChatCompletionMessage(tool_calls=[FakeToolCall(name, dumps(payload))]))]
+    )
+    client = FakeGroqClient([completion])
+    live = GroundedAgent.create(provider=GroqIntentProvider(client=client, model="test-model"))
+    offline = GroundedAgent.create()
+    try:
+        live_intent = live.interpret(question).intent
+        offline_intent = offline.interpret(question).intent
+        assert live_intent == offline_intent
+        assert live_intent.intent == name
+        assert live_intent.mode == arguments.get("mode")
+        assert live_intent.at_sim_time_ms == arguments.get("at_sim_time_ms")
+        function = next(
+            tool["function"]
+            for tool in client.calls[0]["tools"]
+            if tool["function"]["name"] == name
+        )
+        assert function["parameters"]["additionalProperties"] is False
+        if name == "explain_patrol_stop":
+            assert function["parameters"]["properties"] == {}
+    finally:
+        live.close()
+        offline.close()

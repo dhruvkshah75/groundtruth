@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.contracts import FactQuery
+from src.contracts import FactQuery, ObservationRequest
 from src.contracts.simulation_api import SimulationEvidenceRequest, SimulationRunIdentity
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
@@ -475,3 +475,174 @@ def test_full_acceptance_station_a_to_aisle_to_station_b_sqlite_periodic_sensing
         assert len(session.history) == 0
     finally:
         service.shutdown()
+
+
+@pytest.fixture
+def loaded_warehouse():
+    service = AgentService(ProviderConfig(mode="rule-based", api_key=None), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        session = service.get_session(key)
+        runtime = session.runtime
+        assert runtime is not None
+        identity = SimulationRunIdentity(run_id=runtime.run_id, generation=session._generation)
+        yield service, key, session, runtime, identity
+    finally:
+        service.shutdown()
+
+
+def _step_to(runtime, target_ms):
+    while runtime.sim_time_ms < target_ms:
+        runtime.step()
+    assert runtime.sim_time_ms == target_ms
+
+
+def test_current_answer_evidence_and_graph_share_the_paused_parcel_assessment(loaded_warehouse):
+    service, key, session, runtime, identity = loaded_warehouse
+    request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+    checkpoints = [
+        (5000, "verified", "packing_station", "packing_station"),
+        (5100, "verified", "packing_station", "packing_station"),
+        (6000, "earlier_station", "packing_station", None),
+        (7000, "verified", "inspection_station", "inspection_station"),
+        (24500, "last_known", "inspection_station", None),
+        (25500, "earlier_station", "inspection_station", None),
+    ]
+    for time_ms, edge_status, stored_station, current_station in checkpoints:
+        _step_to(runtime, time_ms)
+        if time_ms == 5100:
+            # A newer targeted scan for another entity must not replace the applicable attempt.
+            runtime.observe(ObservationRequest(capability="camera_detect", target="parcel_03"))
+
+        evidence = service.read_simulation_evidence(key, request)
+        assessment = evidence["location_assessment"]
+        response = session.ask("Where is parcel_01 now?", expected=identity)
+        snapshot = session.snapshot()
+        edge = next(
+            edge
+            for edge in snapshot["graph"]["edges"]
+            if edge["source"] == "parcel_01" and edge["predicate"] == "located_at"
+        )
+        assert edge["target"] == stored_station
+        assert edge["location_evidence"] == {"status": edge_status, "assessment": assessment}
+        assert response["simulation_evidence"]["location_assessment"] == assessment
+        assert (
+            snapshot["simulation_status"]["sim_time_ms"]
+            == assessment["as_of_sim_time_ms"]
+            == time_ms
+        )
+        assert assessment["run_id"] == str(runtime.run_id)
+        assert (
+            evidence["summary"]["current_location"]
+            == assessment["current_location"]
+            == current_station
+        )
+        assert evidence["summary"]["verification_status"] == assessment["verification_status"]
+        assert str(assessment["last_sighting"]["sample_id"]) in response["answer"]
+        if time_ms == 5100:
+            assert evidence["summary"]["latest_sensor_attempt"]["sim_time_ms"] == 5000
+        if edge_status == "last_known":
+            assert assessment["freshness"] == "stale"
+            assert response["status"] == "uncertain"
+            assert "Last confirmed sighting" in response["answer"]
+            last_seen = session.ask("When was parcel_01 last seen?", expected=identity)
+            assert last_seen["simulation_evidence"]["location_assessment"] == assessment
+        else:
+            assert response["status"] == "verified"
+            if current_station is None:
+                assert "Earlier recorded station" in response["answer"]
+                assert stored_station not in response["answer"].split("Earlier recorded station")[0]
+
+
+def test_historical_cutoff_and_change_answer_cite_distinct_camera_evidence(loaded_warehouse):
+    service, key, session, runtime, identity = loaded_warehouse
+    _step_to(runtime, 7500)
+    historical = session.ask("Where was parcel_01 at 6.7 seconds?", expected=identity)
+    assert historical["status"] == "verified"
+    assert "6700 ms" in historical["answer"] and "captured at 6500 ms" in historical["answer"]
+    assert [sample["sim_time_ms"] for sample in historical["sensor_telemetry"]] == [6500]
+    assert "interpolated" in historical["answer"]
+    assert not any(
+        operation["name"] == "temporal_query_latest"
+        for operation in historical["react_trace"]["operations"]
+    )
+
+    change = session.ask(
+        "What evidence caused parcel_01's location belief to change?", expected=identity
+    )
+    evidence = service.read_simulation_evidence(
+        key, SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+    )
+    assert change["status"] == "verified"
+    assert change["audit_events"] == evidence["events"]
+    (revision,) = change["audit_events"]
+    (qualifying_sample,) = change["sensor_telemetry"]
+    successor = next(
+        fact for fact in evidence["facts"] if fact["fact_id"] in revision["output_fact_ids"]
+    )
+    assert qualifying_sample["sample_id"] == successor["evidence"]["sample_id"]
+    assert qualifying_sample["sim_time_ms"] == successor["evidence"]["sim_time_ms"]
+    for expected in (
+        "prior location belief was packing_station",
+        "inspection_station",
+        revision["event_id"],
+        revision["policy_rule"],
+        revision["reason"],
+        qualifying_sample["sample_id"],
+        "do not establish the route, exact time of the move, or cause",
+    ):
+        assert expected in change["answer"]
+
+
+def test_stop_answer_preserves_original_decision_after_resumption(loaded_warehouse):
+    service, key, session, runtime, identity = loaded_warehouse
+    question = "Why did the robot stop?"
+    missing = session.ask(question, expected=identity)
+    assert missing["status"] == "no_data"
+    assert "No patrol stop was recorded" in missing["answer"]
+    assert missing["sensor_telemetry"] == []
+
+    _step_to(runtime, 12000)
+    stopped = session.ask(question, expected=identity)
+    stop = stopped["simulation_evidence"]["patrol_stop"]
+    assert stop["state"] == "blocked"
+    assert stop["sample_id"] in stopped["answer"]
+    assert stop["policy_reason"] in stopped["answer"]
+    assert str(stop["sensor_sim_time_ms"]) + " ms" in stopped["answer"]
+    cited = service.read_simulation_evidence(
+        key, SimulationEvidenceRequest(expected=identity, sample_id=stop["sample_id"])
+    )["sample"]
+    assert cited["request"]["capability"] == "lidar_scan"
+
+    _step_to(runtime, 22000)
+    assert runtime.current_decision_summary.state in ("moving", "turning")
+    assert runtime.current_decision_summary.sample_id != stop["sample_id"]
+    before = session.agent.memory.export_snapshot()
+    resumed = session.ask(question, expected=identity)
+    assert resumed["simulation_evidence"]["patrol_stop"] == stop
+    assert resumed["answer"] == stopped["answer"]
+    assert [sample["sample_id"] for sample in resumed["sensor_telemetry"]] == [stop["sample_id"]]
+    assert resumed["revisions"] == resumed["audit_events"] == []
+    assert session.agent.memory.export_snapshot() == before
+
+
+def test_captured_assessment_retains_original_as_of_time(loaded_warehouse, monkeypatch):
+    service, key, session, runtime, identity = loaded_warehouse
+    request = SimulationEvidenceRequest(expected=identity, entity_id="parcel_01")
+    _step_to(runtime, 5000)
+    captured = service.read_simulation_evidence(key, request)["location_assessment"]
+
+    def explain(**kwargs):
+        _step_to(runtime, 6000)
+        return kwargs["tool_result"]["deterministic_evaluation_summary"]
+
+    monkeypatch.setattr(
+        session.agent.provider, "generate_grounded_explanation", explain, raising=False
+    )
+    answer = session.ask("Where is parcel_01 now?", expected=identity)
+    assert answer["simulation_evidence"]["sim_time_ms"] == 5000
+    assert answer["simulation_evidence"]["location_assessment"] == captured
+    assert captured["current_location"] == "packing_station"
+    current = service.read_simulation_evidence(key, request)["location_assessment"]
+    assert current["as_of_sim_time_ms"] == 6000 and current["current_location"] is None
