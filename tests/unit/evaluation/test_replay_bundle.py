@@ -12,6 +12,7 @@ from src.evaluation.scenarios import (
     _make_base_scenario,
     _make_default_static_map,
     _make_sample,
+    scenario_09_delayed_older_observation,
 )
 
 
@@ -106,3 +107,11 @@ def test_audience_truth_segregation() -> None:
     # Samples in recorded_samples contain no audience_truth reference
     for s in bundle.recorded_samples:
         assert not hasattr(s, "audience_truth")
+
+
+def test_delayed_capture_needs_an_arrival_cutoff() -> None:
+    bundle = scenario_09_delayed_older_observation()
+    validate_bundle(bundle)
+    bundle.expected_evaluations[0].after_sample_sequence = None
+    with pytest.raises(ValueError, match="Delayed samples require after_sample_sequence"):
+        validate_bundle(bundle)

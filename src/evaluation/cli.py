@@ -6,11 +6,12 @@ import argparse
 import json
 import logging
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from src.evaluation.models import ReplayBundle, ScenarioEvaluationLog
+from src.contracts import FactAssertion, FactQuery
+from src.declarative.memory_repository import MemoryRepository
+from src.evaluation.models import ExpectedQueryEvaluation, ReplayBundle, ScenarioEvaluationLog
 from src.evaluation.replay import (
     replay_evidence,
     replay_world,
@@ -18,9 +19,25 @@ from src.evaluation.replay import (
     run_scenario,
     validate_bundle,
 )
-from src.evaluation.scenarios import ALL_SCENARIO_BUILDERS
+from src.evaluation.scenarios import ALL_SCENARIO_BUILDERS, scenario_01_map_clear_vs_cart_blocked
 
 LOGGER = logging.getLogger("groundtruth.evaluation.cli")
+
+
+def map_only_baseline() -> tuple[str, str]:
+    """Compare the stored map claim with the recorded first route observation."""
+    bundle = scenario_01_map_clear_vs_cart_blocked()
+    with MemoryRepository(":memory:") as repo:
+        for fact in bundle.metadata["initial_facts"]:
+            repo.record_fact(FactAssertion.model_validate(fact))
+        facts = repo.query_facts(
+            FactQuery(subject="route_A", predicate="status_is", active_only=True)
+        )
+        if len(facts) != 1:
+            raise ValueError("Map-only baseline requires exactly one route status")
+        map_status = facts[0].object
+    observed_status = bundle.recorded_samples[0].result.measurements["status"]
+    return map_status, observed_status
 
 
 def generate_markdown_report(
@@ -32,14 +49,11 @@ def generate_markdown_report(
     total = len(logs)
     passed = sum(1 for log in logs if log.passed)
     failed = total - passed
-    now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-
     lines = [
         "# GroundTruth Epistemic Evaluation Report (Phase 2)",
         "",
-        f"**Run Date:** {now_str}  ",
-        f"**Execution Mode:** `{mode}`  ",
-        f"**Total Evaluations:** {total} | **Passed:** {passed} | **Failed:** {failed}  ",
+        f"**Execution Mode:** `{mode}`",
+        f"**Total Evaluations:** {total} | **Passed:** {passed} | **Failed:** {failed}",
         "",
         "## Summary Table",
         "",
@@ -75,8 +89,10 @@ def generate_markdown_report(
                 f"- **Expected Outcome:** `{json.dumps(log.expected_outcome)}`",
                 f"- **Actual Outcome:** `{json.dumps(log.actual_outcome)}`",
                 f"- **Policy Applied:** `{log.policy_applied}`",
-                f"- **Sample IDs Ingested:** `{len(log.recorded_sample_ids)} samples`",
-                f"- **Revisions Recorded:** `{len(log.revision_ids)} revisions`",
+                f"- **Input Timeline:** {', '.join(log.input_timeline) or 'None'}",
+                f"- **Sample IDs:** {', '.join(map(str, log.recorded_sample_ids)) or 'None'}",
+                f"- **Fact IDs:** {', '.join(map(str, log.recorded_fact_ids)) or 'None'}",
+                f"- **Revision IDs:** {', '.join(map(str, log.revision_ids)) or 'None'}",
                 f"- **Passed:** {'Yes' if log.passed else 'No'}",
             ]
         )
@@ -101,6 +117,19 @@ def generate_markdown_report(
         ]
     )
 
+    if any(log.scenario_id == "scenario_01_map_clear_vs_cart_blocked" for log in logs):
+        map_status, observed_status = map_only_baseline()
+        lines.extend(
+            [
+                "## Map-only comparison",
+                "",
+                f"The initial map reports route_A **{map_status}**; the recorded first "
+                f"LiDAR sample reports **{observed_status}**. This compares one route at "
+                "one time and is not an aggregate accuracy measurement.",
+                "",
+            ]
+        )
+
     content = "\n".join(lines)
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,7 +145,6 @@ def save_json_summary(
     """Save structured JSON results."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "timestamp_utc": datetime.now(UTC).isoformat(),
         "total_evaluations": len(logs),
         "passed": sum(1 for log in logs if log.passed),
         "failed": sum(1 for log in logs if not log.passed),
@@ -149,10 +177,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to an external ReplayBundle JSON file to validate and replay.",
     )
     parser.add_argument(
+        "--expectations",
+        type=Path,
+        default=None,
+        help="JSON array of expected query evaluations for an exported run.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("artifacts/evaluation"),
-        help="Directory to save JSON and Markdown reports (default: artifacts/evaluation).",
+        required=True,
+        help="Directory to save JSON and Markdown reports.",
     )
     parser.add_argument(
         "--format",
@@ -162,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    if args.expectations is not None and args.bundle is None:
+        parser.error("--expectations requires --bundle")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -170,17 +206,29 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.bundle is not None:
         LOGGER.info("Loading external bundle from %s", args.bundle)
-        bundle_data = json.loads(args.bundle.read_text(encoding="utf-8"))
         try:
-            bundle = ReplayBundle.model_validate(bundle_data)
-        except Exception:
-            bundle = ReplayBundle.from_simulation_export(bundle_data)
-        validate_bundle(bundle)
-
-        if mode in ("evidence_only", "both"):
-            logs.extend(replay_evidence(bundle))
-        if mode in ("world_rerun", "both"):
-            logs.extend(replay_world(bundle))
+            bundle_data = json.loads(args.bundle.read_text(encoding="utf-8"))
+            if isinstance(bundle_data, dict) and "observations" in bundle_data:
+                bundle = ReplayBundle.from_simulation_export(bundle_data)
+            else:
+                bundle = ReplayBundle.model_validate(bundle_data)
+            if args.expectations is not None:
+                expectations = json.loads(args.expectations.read_text(encoding="utf-8"))
+                if not isinstance(expectations, list):
+                    raise ValueError("Expectations must be a JSON array")
+                bundle.expected_evaluations = [
+                    ExpectedQueryEvaluation.model_validate(item) for item in expectations
+                ]
+            validate_bundle(bundle)
+            if not bundle.expected_evaluations:
+                raise ValueError("Bundle has no expected evaluations")
+            if mode in ("evidence_only", "both"):
+                logs.extend(replay_evidence(bundle))
+            if mode in ("world_rerun", "both"):
+                logs.extend(replay_world(bundle))
+        except (ValueError, OSError) as exc:
+            LOGGER.error("Cannot replay bundle: %s", exc)
+            return 1
     elif args.scenario is not None:
         LOGGER.info("Running scenario: %s [mode=%s]", args.scenario, mode)
         logs.extend(run_scenario(args.scenario, mode=mode))

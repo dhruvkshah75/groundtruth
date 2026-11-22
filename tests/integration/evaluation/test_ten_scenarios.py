@@ -30,7 +30,7 @@ def test_each_scenario_passes_world_rerun(scenario_id: str) -> None:
 
 def test_run_all_scenarios_deterministic_and_clean() -> None:
     logs = run_all_scenarios(mode="both")
-    assert len(logs) == 28, f"Expected 28 evaluation logs across 10 scenarios, got {len(logs)}"
+    assert len(logs) == 30, f"Expected 30 evaluation logs across 10 scenarios, got {len(logs)}"
     failures = [log for log in logs if not log.passed]
     assert len(failures) == 0, (
         f"Encountered {len(failures)} failures: {[f.failure_reason for f in failures]}"

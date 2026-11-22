@@ -60,7 +60,7 @@ This work builds on merged Phase 2 foundations:
 ### Dual Execution Modes
 
 1. **`evidence_only`**: Ingests recorded sensor observation envelopes into a fresh Tier 1 SQLite memory ledger without world or simulation engine access. This rigorously proves that beliefs, answers, and revisions are justified strictly by recorded evidence rather than hidden simulator state.
-2. **`world_rerun`**: Restores the simulation scene and ordered physical inputs under deterministic clock and IDs, confirms sensor pipeline state, ingests observation envelopes, and evaluates identical logical queries.
+2. **`world_rerun`**: Advances the real runtime and patrol controller, captures fresh sensor samples, compares them with recorded samples, and evaluates the resulting evidence. The wrong-frame case includes a separately identified injected sample.
 
 ### Strict Audience Truth Segregation
 The `AudienceTruthSection` in `ReplayBundle` contains ground-truth scenario definitions, true entity footprints, and presenter disruption events. By contract, audience truth is never supplied to `evidence_only` replay, intent planners, or answer synthesizers.
@@ -123,17 +123,23 @@ The evaluation runner supports both programmatic and CLI usage:
 uv run python -m src.evaluation.cli --mode both --output-dir artifacts/evaluation
 
 # Run a specific scenario in evidence-only mode
-uv run python -m src.evaluation.cli --scenario scenario_02_visible_parcel_relocation --mode evidence_only
+uv run python -m src.evaluation.cli --scenario scenario_02_visible_parcel_relocation --mode evidence_only --output-dir /tmp/groundtruth-evaluation
 
 # Validate and replay an external bundle file
-uv run python -m src.evaluation.cli --bundle path/to/replay_bundle.json --mode both
+uv run python -m src.evaluation.cli --bundle path/to/replay_bundle.json --mode both --output-dir /tmp/groundtruth-evaluation
+
+# Replay an unchanged API export with a JSON array of ExpectedQueryEvaluation records
+uv run python -m src.evaluation.cli --bundle export.json --expectations expectations.json --output-dir /tmp/groundtruth-evaluation
 ```
 
 ### Outputs Generated:
 - `artifacts/evaluation/evaluation_summary.json`: Complete machine-readable logs and outcomes.
 - `artifacts/evaluation/evaluation_report.md`: Readable Markdown summary table and per-scenario audits.
 
-Exit code is `0` when all evaluations pass; non-zero (`1`) if any assertion or validation fails.
+Exit code is `0` when all evaluations pass; non-zero (`1`) if any assertion or validation fails. The report includes a one-time map-only route comparison, using the initial stored map claim and the first recorded LiDAR sample; it is not an aggregate accuracy metric. A physical replay test compares outcomes at 0.25×, 0.5× and 1×. Expected locations must appear in the answer and agree with any structured location assessment. `expected_evidence_sample_ids` checks ledger persistence; `expected_response_evidence_sample_ids` separately requires the response trace to cite those samples.
+An API export contains recorded observations and presenter events. Supply the expected query
+evaluations with `--expectations`; the CLI validates the export and builds the replay bundle.
+Bundles with delayed captures require an explicit `after_sample_sequence` for every query.
 
 ---
 
@@ -143,13 +149,13 @@ Exit code is `0` when all evaluations pass; non-zero (`1`) if any assertion or v
 ```bash
 uv run --locked pytest tests/unit/evaluation tests/integration/evaluation -v
 ```
-**Results:** `30 passed in 0.71s`
+The full suite below includes the evaluation tests.
 
 ### Complete Repository Verification
 ```bash
 uv run --locked pytest -q
 ```
-**Results:** `696 passed in 23.37s`
+**Results:** `765 passed in 25.49s`. Both replay modes passed all 30 evaluations across the ten scenarios. CI regenerates the reports and compares them with the checked-in copies.
 
 ### Code Quality and Formatting
 ```bash

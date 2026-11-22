@@ -260,7 +260,7 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
             prompt="Is the front route clear to move forward?",
             query_sim_time_ms=0,
             after_sample_sequence=1,
-            expected_status="verified",
+            expected_status="grounded",
             expected_revisions_count=1,
             expected_active_facts=[
                 {"subject": "route_A", "predicate": "status_is", "object": "blocked"}
@@ -305,7 +305,7 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
             prompt="Is the front route clear to move forward?",
             query_sim_time_ms=1000,
             after_sample_sequence=2,
-            expected_status="verified",
+            expected_status="grounded",
             expected_revisions_count=2,
             expected_active_facts=[
                 {"subject": "route_A", "predicate": "status_is", "object": "clear"}
@@ -335,6 +335,7 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
         run_id=run_id,
         epoch_utc=EPOCH,
         metadata={
+            "synthetic_evidence": True,
             "title": "Map-clear vs cart-blocked route, followed by clearance",
             "aliases": {"front route": "route_A", "route_A": "route_A"},
             "initial_facts": [init_fact],
@@ -464,6 +465,7 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
                 }
             ],
             expected_evidence_sample_ids=[s2.sample_id],
+            expected_response_evidence_sample_ids=[s2.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Current belief is updated to inspection_station based on fresh positive sample "
                 "at 2000 ms."
@@ -496,6 +498,7 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
         run_id=run_id,
         epoch_utc=EPOCH,
         metadata={
+            "synthetic_evidence": True,
             "title": "Visible parcel relocation between known stations",
             "aliases": {"parcel_01": "parcel_01"},
         },
@@ -590,6 +593,7 @@ def scenario_03_parcel_moves_outside_view() -> ReplayBundle:
             query_sim_time_ms=3000,
             expected_status="uncertain",
             expected_location="packing_station",
+            expected_response_evidence_sample_ids=[s1.sample_id, s2.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Broad camera scan did not detect parcel_01. Location cannot be verified now; "
                 "last confirmed sighting at packing_station is retained without guessing."
@@ -603,7 +607,11 @@ def scenario_03_parcel_moves_outside_view() -> ReplayBundle:
         scenario_id="scenario_03_parcel_moves_outside_view",
         run_id=run_id,
         epoch_utc=EPOCH,
-        metadata={"title": "Parcel moves outside view", "aliases": {"parcel_01": "parcel_01"}},
+        metadata={
+            "synthetic_evidence": True,
+            "title": "Parcel moves outside view",
+            "aliases": {"parcel_01": "parcel_01"},
+        },
         static_map=_make_default_static_map(),
         audience_truth=AudienceTruthSection(
             scenario=scene,
@@ -723,6 +731,7 @@ def scenario_04_shelf_occlusion_and_reacquisition() -> ReplayBundle:
             query_sim_time_ms=2000,
             expected_status="uncertain",
             expected_location="packing_station",
+            expected_response_evidence_sample_ids=[s1.sample_id, s2.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Targeted camera query reported target_not_visible due to shelf occlusion. "
                 "Current belief is uncertain, but earlier sighting at packing_station is preserved."
@@ -734,6 +743,7 @@ def scenario_04_shelf_occlusion_and_reacquisition() -> ReplayBundle:
             query_sim_time_ms=3000,
             expected_status="verified",
             expected_location="packing_station",
+            expected_response_evidence_sample_ids=[s3.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Reacquisition after occlusion restores verified current status."
             ),
@@ -747,6 +757,7 @@ def scenario_04_shelf_occlusion_and_reacquisition() -> ReplayBundle:
         run_id=run_id,
         epoch_utc=EPOCH,
         metadata={
+            "synthetic_evidence": True,
             "title": "Shelf occlusion and later reacquisition",
             "aliases": {"parcel_01": "parcel_01"},
         },
@@ -840,6 +851,7 @@ def scenario_05_two_similar_parcels() -> ReplayBundle:
         run_id=run_id,
         epoch_utc=EPOCH,
         metadata={
+            "synthetic_evidence": True,
             "title": "Two similar parcels / ambiguous mention",
             "aliases_multi": {"the box": ["box_01", "box_02"]},
         },
@@ -942,6 +954,7 @@ def scenario_06_color_perspectives() -> ReplayBundle:
         run_id=run_id,
         epoch_utc=EPOCH,
         metadata={
+            "synthetic_evidence": True,
             "title": "User expectation vs lighting perception vs maintenance history",
             "aliases": {"red box": "box_01", "box_01": "box_01"},
             "initial_facts": [hist_fact],
@@ -1025,6 +1038,7 @@ def scenario_07_wrong_context_sample() -> ReplayBundle:
         run_id=run_id,
         epoch_utc=EPOCH,
         metadata={
+            "synthetic_evidence": True,
             "title": "Wrong-room/frame sample rejected",
             "aliases": {"parcel_01": "parcel_01"},
             "initial_facts": [init_fact],
@@ -1077,7 +1091,14 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
         capability="camera_detect",
         available=False,
     )
-    scene.events = sorted([*scene.events, outage], key=lambda e: (e.at_ms, e.sequence))
+    recovery = SensorAvailabilityEvent(
+        kind="sensor_availability",
+        at_ms=3000,
+        sequence=0,
+        capability="camera_detect",
+        available=True,
+    )
+    scene.events = sorted([*scene.events, outage, recovery], key=lambda e: (e.at_ms, e.sequence))
 
     det = CameraDetection(
         object_id="parcel_01",
@@ -1108,6 +1129,17 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
         unavailable_reason="sensor_unavailable",
     )
 
+    s3 = _make_sample(
+        sample_id=UUID("80000000-0000-0000-0000-000000000083"),
+        run_id=run_id,
+        seq=3,
+        sim_time_ms=3000,
+        capability="camera_detect",
+        observer_pose=pose,
+        target="parcel_01",
+        measurements=CameraScan(objects=[det]).model_dump(mode="json"),
+    )
+
     evals = [
         ExpectedQueryEvaluation(
             query_id="scen_08_outage",
@@ -1115,9 +1147,21 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
             query_sim_time_ms=2000,
             expected_status="uncertain",
             expected_location="packing_station",
+            expected_response_evidence_sample_ids=[s1.sample_id, s2.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Current camera verification is unavailable due to outage at 2000 ms. "
                 "Agent reports uncertain status while retaining last confirmed sighting at 1000 ms."
+            ),
+        ),
+        ExpectedQueryEvaluation(
+            query_id="scen_08_recovery",
+            prompt="Where is parcel_01 now?",
+            query_sim_time_ms=3000,
+            expected_status="verified",
+            expected_location="packing_station",
+            expected_response_evidence_sample_ids=[s3.sample_id],
+            conflict_or_uncertainty_rationale=(
+                "A fresh camera sighting after recovery restores the verified location."
             ),
         ),
     ]
@@ -1128,7 +1172,11 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
         scenario_id="scenario_08_sensor_outage_and_recovery",
         run_id=run_id,
         epoch_utc=EPOCH,
-        metadata={"title": "Sensor outage and recovery", "aliases": {"parcel_01": "parcel_01"}},
+        metadata={
+            "synthetic_evidence": True,
+            "title": "Sensor outage and recovery",
+            "aliases": {"parcel_01": "parcel_01"},
+        },
         static_map=_make_default_static_map(),
         audience_truth=AudienceTruthSection(
             scenario=scene,
@@ -1137,14 +1185,19 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
                     "sim_time_ms": 2000,
                     "kind": "sensor_failure",
                     "description": "Camera hardware fault",
-                }
+                },
+                {
+                    "sim_time_ms": 3000,
+                    "kind": "sensor_recovery",
+                    "description": "Camera restored",
+                },
             ],
             object_ground_truth={
                 "parcel_01": [{"sim_time_ms": 1000, "station": "packing_station"}]
             },
         ),
         presenter_inputs=[],
-        recorded_samples=[s1, s2],
+        recorded_samples=[s1, s2, s3],
         expected_evaluations=evals,
     )
 
@@ -1246,6 +1299,7 @@ def scenario_09_delayed_older_observation() -> ReplayBundle:
             unexpected_active_facts=[
                 {"subject": "parcel_01", "predicate": "located_at", "object": "packing_station"}
             ],
+            expected_response_evidence_sample_ids=[s_newer.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Delayed older observation from t=500 ms does not overwrite newer active belief "
                 "from t=2000 ms. Active belief remains verified at inspection_station."
@@ -1259,7 +1313,11 @@ def scenario_09_delayed_older_observation() -> ReplayBundle:
         scenario_id="scenario_09_delayed_older_observation",
         run_id=run_id,
         epoch_utc=EPOCH,
-        metadata={"title": "Delayed older observation", "aliases": {"parcel_01": "parcel_01"}},
+        metadata={
+            "synthetic_evidence": True,
+            "title": "Delayed older observation",
+            "aliases": {"parcel_01": "parcel_01"},
+        },
         static_map=_make_default_static_map(),
         audience_truth=AudienceTruthSection(
             scenario=scene,
@@ -1367,6 +1425,11 @@ def scenario_10_hidden_movement_between_scans() -> ReplayBundle:
             query_sim_time_ms=1000,
             expected_status="verified",
             expected_location="warehouse",
+            expected_answer_contains=[
+                "captured at 0 ms",
+                "No intermediate position is interpolated",
+            ],
+            expected_response_evidence_sample_ids=[s1.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Movement occurred wholly between scans. Agent adheres to strict "
                 "anti-interpolation policy: reports latest applicable observation at t=0 ms "
@@ -1382,6 +1445,7 @@ def scenario_10_hidden_movement_between_scans() -> ReplayBundle:
         run_id=run_id,
         epoch_utc=EPOCH,
         metadata={
+            "synthetic_evidence": True,
             "title": "Movement between samples with strict anti-interpolation",
             "aliases": {"parcel_01": "parcel_01"},
         },
