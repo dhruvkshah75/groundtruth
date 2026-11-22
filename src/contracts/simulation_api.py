@@ -50,7 +50,7 @@ class SimulationEvidenceRequest(Contract):
 
 
 class SimulationLoadRequest(Contract):
-    preset: Literal["warehouse_inspection_v1"]
+    preset: Literal["warehouse_inspection_v1", "warehouse_belief_demo_v1"]
     expected: SimulationRunIdentity
     request_id: UUID
 

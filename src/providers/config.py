@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -37,7 +37,7 @@ class ProviderConfig:
     """Runtime configuration for intent and explanation providers."""
 
     mode: Literal["live", "rule-based"]
-    api_key: str | None
+    api_key: str | None = field(repr=False)
     model: str = DEFAULT_GROQ_MODEL
     timeout_seconds: float = 30.0
 

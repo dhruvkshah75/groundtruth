@@ -37,6 +37,27 @@ sidebar contains the preset, playback speed and disruption controls. With the si
 or on a narrow screen, open **Presenter controls** above the map to reach
 the same actions. The **Evidence** link jumps to the panels below the map.
 
+Choose **Warehouse belief demo** to run the scripted parcel and cart sequence.
+**Reload preset** starts the selected preset from the beginning. **Reset run**
+restarts the loaded preset at its current playback rate. Both create a new run
+with its own evidence. The demo starts paused with no presenter disruptions
+required.
+
+| Simulation time | Evidence to inspect |
+| --- | --- |
+| 0.000 s | Parcel 01 is verified at Station A. |
+| 6.500 s | The simulated parcel has moved behind the shelf. Its location is unknown, and Station A remains the last sighting. |
+| 12.500 s | The camera verifies aisle coordinates (390, 240) cm. |
+| 19.500 s | The camera verifies Station B. The timeline retains the earlier station and the revision. |
+| 28.500 s | Patrol is blocked. Open the decision LiDAR sample to inspect the stop. |
+| 33.000 s | Patrol has resumed. The prior stop still links to its original LiDAR sample, and the Station B sighting is fresh. |
+
+Pause at 33.000 s to ask “Where is parcel_01 now?”, “Where was parcel_01
+earlier?”, “What evidence caused parcel_01's location belief to change?”, or
+“Why did the robot stop?” Open **Location evidence** or the patrol sample to
+compare the answer with the recorded evidence. The 33-second sequence takes
+about 66 seconds of playback at 0.5×, before pauses.
+
 When the workspace has at least 900 px available beside the sidebar, drag
 a navigation tab to the left or right drop area. Shift+Left Arrow places it
 on the left, and Shift+Enter places it on the right. Drag the center divider

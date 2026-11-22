@@ -28,7 +28,7 @@
 .sim-clock { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; color: var(--muted); font-size: .75rem; }
 .sim-clock strong { color: var(--text); font: 500 1rem var(--font-mono); font-variant-numeric: tabular-nums; }
 .sim-actions, .sim-rates { display: flex; gap: 6px; flex-wrap: wrap; }
-.sim-button, .sim-disrupt select {
+.sim-button, :is(.sim-disrupt, .sim-preset-field) select {
   min-height: 40px;
   padding: 6px 10px;
   color: var(--text);
@@ -44,8 +44,8 @@
 .sim-button[aria-pressed="true"] { background: var(--selection); border-color: var(--accent); }
 .sim-button.primary { background: var(--accent); color: var(--primary-foreground, white); border-color: var(--accent); }
 .sim-button.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.sim-button:disabled, .sim-disrupt select:disabled { opacity: .55; }
-.sim-disrupt select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.sim-button:disabled, :is(.sim-disrupt, .sim-preset-field) select:disabled { opacity: .55; }
+:is(.sim-disrupt, .sim-preset-field) select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .sim-chip {
   display: inline-flex;
@@ -86,7 +86,7 @@
 @container (min-width: 960px) {
   .sim-workspace-columns.has-questions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-.sim-evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; }
+.sim-inspection-column, .sim-evidence { display: grid; gap: 12px; min-width: 0; }
 .sim-panel { min-width: 0; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
 .sim-panel-heading { min-height: 46px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .sim-panel-heading h2 { display: inline-flex; align-items: center; gap: 7px; margin: 0; font-size: .875rem; font-weight: 600; }
@@ -141,8 +141,7 @@
 
 @container (max-width: 540px) {
   .sim-content { padding-inline: 12px; }
-  .sim-button, .sim-disrupt select { min-height: 44px; }
-  .sim-evidence { grid-template-columns: minmax(0, 1fr); }
+  .sim-button, :is(.sim-disrupt, .sim-preset-field) select { min-height: 44px; }
   .warehouse-object-label { font-size: 25px; }
   .warehouse-axis { font-size: 24px; }
 }
@@ -157,11 +156,11 @@
 .workspace-presenter-target .sim-presenter { flex-direction: column; }
 .sim-presenter .sim-disrupt { width: 100%; margin: 0; }
 .sim-disrupt label { min-width: 0; max-width: 100%; }
-.sim-disrupt select { max-width: 100%; }
-.sim-disrupt select { color-scheme: light; line-height: normal; }
-:root[data-theme="dark"] .sim-disrupt select { color-scheme: dark; }
+:is(.sim-disrupt, .sim-preset-field) select { max-width: 100%; }
+:is(.sim-disrupt, .sim-preset-field) select { color-scheme: light; line-height: normal; }
+:root[data-theme="dark"] :is(.sim-disrupt, .sim-preset-field) select { color-scheme: dark; }
 .workspace-presenter-target .sim-disrupt form { display: grid; }
-.workspace-presenter-target .sim-disrupt select { width: 100%; }
+.workspace-presenter-target :is(.sim-disrupt, .sim-preset-field) select { width: 100%; }
 .sim-presenter-inline { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); }
 .sim-presenter-inline > summary { cursor: pointer; color: var(--text); font-size: .8125rem; }
 
@@ -169,9 +168,9 @@
 .sim-disrupt option { background: var(--surface); color: var(--text); }
 
 @supports (appearance: base-select) {
-  .sim-disrupt select, .sim-disrupt select::picker(select) { appearance: base-select; }
-  .sim-disrupt select { align-items: center; }
-  .sim-disrupt select::picker(select) {
+  :is(.sim-disrupt, .sim-preset-field) select, :is(.sim-disrupt, .sim-preset-field) select::picker(select) { appearance: base-select; }
+  :is(.sim-disrupt, .sim-preset-field) select { align-items: center; }
+  :is(.sim-disrupt, .sim-preset-field) select::picker(select) {
     margin-block: 4px;
     padding: 4px;
     border: 1px solid var(--line-strong);
@@ -179,7 +178,7 @@
     background: var(--surface);
     color: var(--text);
   }
-  .sim-disrupt select::picker-icon { color: var(--muted); }
+  :is(.sim-disrupt, .sim-preset-field) select::picker-icon { color: var(--muted); }
   .sim-disrupt option { min-height: 34px; padding: 6px 8px; border-radius: 6px; }
   .sim-disrupt option:checked { background: var(--selection); color: var(--text); }
   .sim-disrupt option:hover, .sim-disrupt option:focus-visible {
@@ -281,7 +280,6 @@
 .sim-history-button { align-self: start; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: .8125rem; text-decoration: underline; text-underline-offset: 3px; }
 .sim-question-answer { min-width: 0; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 16px; }
 .sim-question-answer .conversation-turn { max-width: 760px; margin: 0 auto 24px; }
-.sim-timeline { grid-column: 1 / -1; }
 .sim-timeline-body { padding: 12px; font-size: .8125rem; }
 .sim-timeline-body h3, .sim-timeline-body p { margin: 0 0 6px; }
 .sim-timeline-body h3 { font-size: .875rem; }
@@ -310,3 +308,8 @@
   .sim-question-entity option { padding: 9px 12px; }
   .sim-question-entity option:checked, .sim-question-entity option:hover { background: var(--selection); }
 }
+
+.sim-preset-field { display: grid; gap: 4px; max-width: 100%; color: var(--muted); font-size: .75rem; }
+.sim-decision-sample code, .sim-decision-sample pre { overflow-wrap: anywhere; }
+.sim-decision-sample pre { max-height: 180px; overflow: auto; white-space: pre-wrap; font-size: .75rem; }
+.sim-decision-sample summary { margin-top: 4px; cursor: pointer; color: var(--accent); }

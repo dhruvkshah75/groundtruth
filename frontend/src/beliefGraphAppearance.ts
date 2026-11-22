@@ -1,4 +1,4 @@
-import type { AuditEvent, Fact } from "./types";
+import type { AuditEvent, Fact, GraphEdge } from "./types";
 
 export function visibleGraphNodes(
   scope: "active" | "history",
@@ -16,6 +16,19 @@ export function visibleGraphNodes(
     });
   }
   return [...nodes].sort();
+}
+
+export const locationVerificationLabels = {
+  verified: "Verified",
+  last_known: "Last known",
+  earlier_station: "Earlier station",
+};
+
+type LocationStatus = NonNullable<GraphEdge["location_evidence"]>["status"];
+
+export function factVerification(status: LocationStatus | undefined, active: boolean) {
+  return status ? { label: locationVerificationLabels[status], className: status }
+    : { label: active ? "Active fact" : "Superseded fact", className: active ? "active" : "superseded" };
 }
 
 export function factColor(active: boolean, selected: boolean, related: boolean, changed: boolean, dark = false): number {

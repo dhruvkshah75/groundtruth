@@ -1,15 +1,15 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { cameraSector, headingRotation, interpolatePoint, screenPoint } from "./simulationGeometry";
 import { POLL_MS } from "./useSimulation";
-import type { SceneEntity, SimulationStateResponse } from "./simulationTypes";
+import type { SceneEntity, SimulationStateResponse, StoredObservationSample } from "./simulationTypes";
 
 export function warehouseLabel(id: string) {
   return id.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
-type Props = { state: SimulationStateResponse; live: boolean; selectedEntity?: string; onSelectEntity?: (entity: string) => void };
+type Props = { state: SimulationStateResponse; live: boolean; camera?: StoredObservationSample; selectedEntity?: string; onSelectEntity?: (entity: string) => void };
 
-export default function WarehouseMap({ state, live, selectedEntity, onSelectEntity }: Props) {
+export default function WarehouseMap({ state, live, camera, selectedEntity, onSelectEntity }: Props) {
   const id = useId();
   const [reducedMotion, setReducedMotion] = useState(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
   const previous = useRef<SimulationStateResponse | null>(null);
@@ -56,6 +56,8 @@ export default function WarehouseMap({ state, live, selectedEntity, onSelectEnti
   const robotPoint = screenPoint(robot, height);
   const cameraFov = snapshot.config.camera_fov_deg ?? 90;
   const cameraRange = snapshot.config.camera_range_cm ?? 350;
+  const capturedPose = camera && !("reason" in camera.result && camera.result.reason === "sensor_unavailable")
+    ? camera.observer_pose : null;
   const entities = [...snapshot.entities].sort((a, b) => Number(a.kind === "parcel") - Number(b.kind === "parcel"));
 
   function position(entity: SceneEntity) {
@@ -68,8 +70,8 @@ export default function WarehouseMap({ state, live, selectedEntity, onSelectEnti
   return <>
     <div className="warehouse-stage">
       <svg className="warehouse-map" viewBox={`-44 -36 ${width + 88} ${height + 84}`}
-        role="img" aria-label="Top-down audience map of the warehouse" aria-describedby={`${id}-desc`}>
-        <desc id={`${id}-desc`}>North is up. The grid is in centimeters. The camera sector shows range and heading. The map objects list below provides coordinates.</desc>
+        role="img" aria-label="Top-down map of the simulated warehouse" aria-describedby={`${id}-desc`}>
+        <desc id={`${id}-desc`}>North is up. The grid is in centimeters. The camera sector shows geometric coverage at the recorded pose. The map objects list below provides coordinates.</desc>
         <defs>
           <pattern id={`${id}-grid`} width="50" height="50" patternUnits="userSpaceOnUse">
             <path d="M 50 0 H 0 V 50" className="warehouse-grid-line" />
@@ -80,8 +82,8 @@ export default function WarehouseMap({ state, live, selectedEntity, onSelectEnti
         <rect width={width} height={height} fill={`url(#${id}-grid)`} />
         <g clipPath={`url(#${id}-bounds)`}>
           <polyline className="warehouse-route" points={patrol.map((point) => screenPoint(point, height).toArray().join(",")).join(" ")} />
-          {snapshot.sensor_availability.camera_detect && <path className="warehouse-sector"
-            d={cameraSector(robot, height, cameraFov, cameraRange)} />}
+          {capturedPose && <path className="warehouse-sector"
+            d={cameraSector(capturedPose, height, cameraFov, cameraRange)} />}
           {entities.map((entity) => {
             const { x, y } = position(entity);
             const { width_cm: w, height_cm: h } = entity.footprint;
@@ -120,15 +122,14 @@ export default function WarehouseMap({ state, live, selectedEntity, onSelectEnti
     </div>
     <div className="warehouse-legend">
       <span><i className="key-robot" />Robot</span>
-      {snapshot.sensor_availability.camera_detect
-        ? <span><i className="key-sector" />Camera range (geometry)</span>
-        : <span>Camera offline in world</span>}
+      {capturedPose && camera
+        ? <span><i className="key-sector" />Camera coverage · {warehouseLabel(capturedPose.direction)} · {cameraFov}° · {cameraRange} cm · {(camera.sim_time_ms / 1_000).toFixed(3)} s</span>
+        : <span>{camera ? "Camera coverage unavailable" : "Awaiting camera capture"}</span>}
       <span><i className="key-route" />Patrol path</span>
       <span><i className="key-station" />Station</span>
-      <span>{cameraFov}° · {cameraRange} cm</span>
     </div>
     <details className="sim-details">
-      <summary>Map objects and coordinates</summary>
+      <summary>Simulated objects and coordinates</summary>
       <ul className="sim-list">
         <li><strong>Robot</strong><span>{snapshot.robot_pose.x_cm.toFixed(0)}, {snapshot.robot_pose.y_cm.toFixed(0)} cm · {snapshot.robot_pose.direction}</span></li>
         {entities.map(({ entity_id, kind, footprint }) => <li key={entity_id}>
