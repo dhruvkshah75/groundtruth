@@ -33,7 +33,12 @@ from src.contracts import (
     SpatialContext,
 )
 from src.contracts.simulation import (
+    LightMeasurement,
+    MoveEvent,
+    Rectangle,
     ScenarioDefinition,
+    SceneEntity,
+    SensorAvailabilityEvent,
 )
 from src.evaluation.models import (
     AudienceTruthSection,
@@ -52,7 +57,7 @@ EPOCH = datetime(2026, 11, 5, 12, 0, 0, tzinfo=UTC)
 
 def _make_base_scenario(run_id: UUID) -> ScenarioDefinition:
     """Standard warehouse scene from the shared fixture."""
-    return warehouse_preset()
+    return warehouse_preset().model_copy(deep=True)
 
 
 def _make_default_static_map() -> StaticMapConfig:
@@ -69,8 +74,26 @@ def _make_default_static_map() -> StaticMapConfig:
                 height_cm=60.0,
             ),
             StationZone.from_center(
+                zone_id="packing_station",
+                location="packing_station",
+                frame_of_reference="warehouse_map",
+                center_x_cm=80.0,
+                center_y_cm=350.0,
+                width_cm=60.0,
+                height_cm=60.0,
+            ),
+            StationZone.from_center(
                 zone_id="inspection_station",
                 location="warehouse",
+                frame_of_reference="warehouse_map",
+                center_x_cm=150.0,
+                center_y_cm=390.0,
+                width_cm=60.0,
+                height_cm=60.0,
+            ),
+            StationZone.from_center(
+                zone_id="inspection_station",
+                location="inspection_station",
                 frame_of_reference="warehouse_map",
                 center_x_cm=150.0,
                 center_y_cm=390.0,
@@ -103,12 +126,15 @@ def _make_sample(
     target: str | None = None,
     world_version: int = 1,
 ) -> ObservationSample:
-    """Create a validated ObservationSample envelope."""
+    """Helper to build a deterministic observation sample."""
     captured_at = EPOCH + timedelta(milliseconds=sim_time_ms)
-    parameters = {"direction": "front"} if capability == "lidar_scan" else {}
-    request = ObservationRequest(capability=capability, target=target, parameters=parameters)
+    request = ObservationRequest(
+        capability=capability,
+        target=target,
+        parameters={"direction": "front"} if capability == "lidar_scan" else {},
+    )
 
-    if unavailable_reason is not None:
+    if unavailable_reason:
         result = ObservationUnavailable(
             capability=capability,
             reason=unavailable_reason,
@@ -117,10 +143,10 @@ def _make_sample(
         )
     else:
         context = SpatialContext(
-            observer=observer_pose.robot_id,
             location=observer_pose.location,
             frame_of_reference=observer_pose.frame_of_reference,
             world_version=world_version,
+            observer=observer_pose.robot_id,
         )
         result = SensorObservation(
             observation_id=sample_id,
@@ -156,12 +182,30 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
     scene = _make_base_scenario(run_id)
     pose = Pose(
         robot_id="robot_1",
-        x_cm=0.0,
-        y_cm=0.0,
+        x_cm=80.0,
+        y_cm=360.0,
         direction="north",
-        location="room_101",
-        frame_of_reference="robot_base",
+        location="warehouse",
+        frame_of_reference="warehouse_map",
     )
+    scene.robot_pose = pose
+
+    # Position existing cart_01 to block route_A at t=0
+    cart = next(e for e in scene.entities if e.entity_id == "cart_01")
+    cart.footprint.x_cm = 80.0
+    cart.footprint.y_cm = 400.0
+
+    # Cart cleared at t=500ms (finishes by t=600ms, clear by t=1000ms scan)
+    cart_move = MoveEvent(
+        kind="move",
+        at_ms=500,
+        sequence=0,
+        entity_id="cart_01",
+        to=Point(x_cm=180.0, y_cm=470.0),
+        duration_ms=100,
+    )
+    scene.events = sorted([*scene.events, cart_move], key=lambda e: (e.at_ms, e.sequence))
+    scene.patrol = [Point(x_cm=80.0, y_cm=360.0), Point(x_cm=80.0, y_cm=450.0)]
 
     # Initial static map fact asserting route_A is clear
     init_fact = FactAssertion(
@@ -171,10 +215,15 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
         source_agent="static_map",
         confidence_score=0.95,
         observed_at=EPOCH,
-        context=SpatialContext(location="room_101", frame_of_reference="robot_base"),
+        context=SpatialContext(
+            location="warehouse",
+            frame_of_reference="warehouse_map",
+            extra_context={"run_id": str(run_id)},
+        ),
+        evidence={"run_id": str(run_id)},
     ).model_dump(mode="json")
 
-    # Sample 1 (t=0): Front LiDAR blocked by cart at 12 cm
+    # Sample 1 (t=0): Front LiDAR blocked by cart at 20 cm
     s1 = _make_sample(
         sample_id=UUID("10000000-0000-0000-0000-000000000011"),
         run_id=run_id,
@@ -183,7 +232,7 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
         capability="lidar_scan",
         observer_pose=pose,
         measurements={
-            "nearest_distance_cm": 12.0,
+            "nearest_distance_cm": 20.0,
             "detected": True,
             "direction": "front",
             "status": "blocked",
@@ -210,17 +259,42 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
             query_id="scen_01_blocked",
             prompt="Is the front route clear to move forward?",
             query_sim_time_ms=0,
-            expected_status="grounded_conflict_resolved",
+            after_sample_sequence=1,
+            expected_status="verified",
+            expected_revisions_count=1,
+            expected_active_facts=[
+                {"subject": "route_A", "predicate": "status_is", "object": "blocked"}
+            ],
+            unexpected_active_facts=[
+                {"subject": "route_A", "predicate": "status_is", "object": "clear"}
+            ],
+            expected_revisions=[
+                {
+                    "predecessor_object": "clear",
+                    "successor_object": "blocked",
+                    "policy_rule": "lidar_observation_route_status",
+                }
+            ],
+            expected_evidence_sample_ids=[s1.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Static map indicates route_A is clear, but live front LiDAR detects obstacle "
-                "at 12.0 cm right now, triggering an atomic belief revision to blocked."
+                "at 20.0 cm right now, triggering an atomic belief revision to blocked."
             ),
         ),
         ExpectedQueryEvaluation(
             query_id="scen_01_audit",
             prompt="Why was route_A superseded?",
             query_sim_time_ms=0,
+            after_sample_sequence=1,
             expected_status="audit_retrieved",
+            expected_revisions_count=1,
+            expected_revisions=[
+                {
+                    "predecessor_object": "clear",
+                    "successor_object": "blocked",
+                    "policy_rule": "lidar_observation_route_status",
+                }
+            ],
             conflict_or_uncertainty_rationale=(
                 "Epistemic audit query retrieves revision rationale, predecessor "
                 "fact, and policy rule."
@@ -230,7 +304,23 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
             query_id="scen_01_cleared",
             prompt="Is the front route clear to move forward?",
             query_sim_time_ms=1000,
-            expected_status="grounded_conflict_resolved",
+            after_sample_sequence=2,
+            expected_status="verified",
+            expected_revisions_count=2,
+            expected_active_facts=[
+                {"subject": "route_A", "predicate": "status_is", "object": "clear"}
+            ],
+            unexpected_active_facts=[
+                {"subject": "route_A", "predicate": "status_is", "object": "blocked"}
+            ],
+            expected_revisions=[
+                {
+                    "predecessor_object": "blocked",
+                    "successor_object": "clear",
+                    "policy_rule": "lidar_observation_route_status",
+                }
+            ],
+            expected_evidence_sample_ids=[s2.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Fresh LiDAR observation confirms obstacle is cleared; "
                 "route status conflict is resolved to clear with successor belief revision."
@@ -248,22 +338,6 @@ def scenario_01_map_clear_vs_cart_blocked() -> ReplayBundle:
             "title": "Map-clear vs cart-blocked route, followed by clearance",
             "aliases": {"front route": "route_A", "route_A": "route_A"},
             "initial_facts": [init_fact],
-            "mock_world": {
-                "robot_location": "room_101",
-                "robot_frame": "robot_base",
-            },
-            "world_obstacles_timeline": {
-                0: [
-                    {
-                        "obstacle_id": "cart_01",
-                        "x_cm": 0.0,
-                        "y_cm": 12.0,
-                        "location": "room_101",
-                        "active": True,
-                    }
-                ],
-                1000: [],
-            },
         },
         static_map=_make_default_static_map(),
         audience_truth=AudienceTruthSection(
@@ -298,33 +372,48 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
     pose1 = Pose(
         robot_id="robot_1",
         x_cm=80.0,
-        y_cm=350.0,
+        y_cm=320.0,
         direction="north",
-        location="packing_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
     pose2 = Pose(
         robot_id="robot_1",
         x_cm=150.0,
-        y_cm=390.0,
+        y_cm=360.0,
         direction="north",
-        location="inspection_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
 
+    p1 = next(e for e in scene.entities if e.entity_id == "parcel_01")
+    p1.footprint.x_cm = 80.0
+    p1.footprint.y_cm = 350.0
+
+    # Relocate parcel_01 to inspection_station at t=1500ms
+    relocate_move = MoveEvent(
+        kind="move",
+        at_ms=1500,
+        sequence=0,
+        entity_id="parcel_01",
+        to=Point(x_cm=150.0, y_cm=390.0),
+        duration_ms=100,
+    )
+    scene.events = sorted([*scene.events, relocate_move], key=lambda e: (e.at_ms, e.sequence))
+
     d1 = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=80.0, y_cm=350.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
     d2 = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=150.0, y_cm=390.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
 
     s1 = _make_sample(
@@ -334,6 +423,7 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
         sim_time_ms=1000,
         capability="camera_detect",
         observer_pose=pose1,
+        target="parcel_01",
         measurements=CameraScan(objects=[d1]).model_dump(mode="json"),
     )
     s2 = _make_sample(
@@ -343,6 +433,7 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
         sim_time_ms=2000,
         capability="camera_detect",
         observer_pose=pose2,
+        target="parcel_01",
         measurements=CameraScan(objects=[d2]).model_dump(mode="json"),
     )
 
@@ -351,8 +442,28 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
             query_id="scen_02_current",
             prompt="Where is parcel_01 now?",
             query_sim_time_ms=2000,
+            after_sample_sequence=2,
             expected_status="verified",
             expected_location="inspection_station",
+            expected_revisions_count=1,
+            expected_active_facts=[
+                {
+                    "subject": "parcel_01",
+                    "predicate": "located_at",
+                    "object": "inspection_station",
+                }
+            ],
+            unexpected_active_facts=[
+                {"subject": "parcel_01", "predicate": "located_at", "object": "packing_station"}
+            ],
+            expected_revisions=[
+                {
+                    "predecessor_object": "packing_station",
+                    "successor_object": "inspection_station",
+                    "policy_rule": "camera_observation_revision",
+                }
+            ],
+            expected_evidence_sample_ids=[s2.sample_id],
             conflict_or_uncertainty_rationale=(
                 "Current belief is updated to inspection_station based on fresh positive sample "
                 "at 2000 ms."
@@ -362,7 +473,15 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
             query_id="scen_02_changes",
             prompt="Has parcel_01 moved?",
             query_sim_time_ms=2000,
+            after_sample_sequence=2,
             expected_status="verified",
+            expected_active_facts=[
+                {
+                    "subject": "parcel_01",
+                    "predicate": "located_at",
+                    "object": "inspection_station",
+                }
+            ],
             conflict_or_uncertainty_rationale=(
                 "Movement reported between packing_station and inspection_station with exact "
                 "timestamps, accompanied by the mandatory transit caveat."
@@ -386,7 +505,7 @@ def scenario_02_visible_parcel_relocation() -> ReplayBundle:
             events=[
                 {
                     "sim_time_ms": 1500,
-                    "kind": "teleport_object",
+                    "kind": "move",
                     "description": "Relocate parcel_01 to inspection",
                 }
             ],
@@ -414,17 +533,34 @@ def scenario_03_parcel_moves_outside_view() -> ReplayBundle:
     pose1 = Pose(
         robot_id="robot_1",
         x_cm=80.0,
-        y_cm=350.0,
+        y_cm=320.0,
         direction="north",
-        location="packing_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
+    scene.robot_pose = pose1
+    scene.patrol = [Point(x_cm=80.0, y_cm=320.0), Point(x_cm=80.0, y_cm=350.0)]
+
+    p1 = next(e for e in scene.entities if e.entity_id == "parcel_01")
+    p1.footprint.x_cm = 80.0
+    p1.footprint.y_cm = 350.0
+
+    remove_move = MoveEvent(
+        kind="move",
+        at_ms=2000,
+        sequence=0,
+        entity_id="parcel_01",
+        to=Point(x_cm=700.0, y_cm=500.0),
+        duration_ms=100,
+    )
+    scene.events = sorted([*scene.events, remove_move], key=lambda e: (e.at_ms, e.sequence))
+
     d1 = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=80.0, y_cm=350.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
 
     s1 = _make_sample(
@@ -502,17 +638,51 @@ def scenario_04_shelf_occlusion_and_reacquisition() -> ReplayBundle:
     pose = Pose(
         robot_id="robot_1",
         x_cm=80.0,
-        y_cm=350.0,
+        y_cm=320.0,
         direction="north",
-        location="packing_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
+    scene.robot_pose = pose
+    scene.patrol = [Point(x_cm=80.0, y_cm=320.0), Point(x_cm=80.0, y_cm=350.0)]
+
+    p1 = next(e for e in scene.entities if e.entity_id == "parcel_01")
+    p1.footprint.x_cm = 80.0
+    p1.footprint.y_cm = 350.0
+
+    # Dimension shelf_01 so it slides cleanly between robot and parcel without boundary collision
+    shelf = next(e for e in scene.entities if e.entity_id == "shelf_01")
+    shelf.footprint.width_cm = 20.0
+    shelf.footprint.height_cm = 4.0
+    shelf.footprint.x_cm = 300.0
+    shelf.footprint.y_cm = 341.0
+
+    shelf_occlude = MoveEvent(
+        kind="move",
+        at_ms=1500,
+        sequence=0,
+        entity_id="shelf_01",
+        to=Point(x_cm=80.0, y_cm=341.0),
+        duration_ms=100,
+    )
+    shelf_clear = MoveEvent(
+        kind="move",
+        at_ms=2500,
+        sequence=0,
+        entity_id="shelf_01",
+        to=Point(x_cm=300.0, y_cm=341.0),
+        duration_ms=100,
+    )
+    scene.events = sorted(
+        [*scene.events, shelf_occlude, shelf_clear], key=lambda e: (e.at_ms, e.sequence)
+    )
+
     det = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=80.0, y_cm=350.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
 
     s1 = _make_sample(
@@ -522,6 +692,7 @@ def scenario_04_shelf_occlusion_and_reacquisition() -> ReplayBundle:
         sim_time_ms=1000,
         capability="camera_detect",
         observer_pose=pose,
+        target="parcel_01",
         measurements=CameraScan(objects=[det]).model_dump(mode="json"),
     )
     s2 = _make_sample(
@@ -531,8 +702,8 @@ def scenario_04_shelf_occlusion_and_reacquisition() -> ReplayBundle:
         sim_time_ms=2000,
         capability="camera_detect",
         observer_pose=pose,
-        unavailable_reason="target_not_visible",
         target="parcel_01",
+        unavailable_reason="target_not_visible",
     )
     s3 = _make_sample(
         sample_id=UUID("40000000-0000-0000-0000-000000000043"),
@@ -541,6 +712,7 @@ def scenario_04_shelf_occlusion_and_reacquisition() -> ReplayBundle:
         sim_time_ms=3000,
         capability="camera_detect",
         observer_pose=pose,
+        target="parcel_01",
         measurements=CameraScan(objects=[det]).model_dump(mode="json"),
     )
 
@@ -693,22 +865,39 @@ def scenario_06_color_perspectives() -> ReplayBundle:
     """User (Red) vs Egocentric (Brown under yellow light) vs Historical (Blue from bot_02)."""
     run_id = UUID("60000000-0000-0000-0000-000000000006")
     scene = _make_base_scenario(run_id)
+    scene.routes = []
+    scene.events = []
+    scene.initial_light = LightMeasurement(intensity=0.8, color_cast="yellow")
 
     pose = Pose(
         robot_id="robot_1",
-        x_cm=0.0,
-        y_cm=0.0,
+        x_cm=100.0,
+        y_cm=100.0,
         direction="north",
         location="room_101",
         frame_of_reference="robot_base",
     )
+    scene.robot_pose = pose
+    scene.patrol = [Point(x_cm=100.0, y_cm=100.0), Point(x_cm=100.0, y_cm=130.0)]
+    scene.entities = [
+        SceneEntity(
+            entity_id="box_01",
+            kind="box",
+            location="room_101",
+            footprint=Rectangle(x_cm=100.0, y_cm=130.0, width_cm=10.0, height_cm=10.0),
+            intrinsic_color="red",
+            visible=True,
+            solid=True,
+            opaque=False,
+        )
+    ]
 
     d1 = CameraDetection(
         object_id="box_01",
         apparent_color="brown",
-        position=Point(x_cm=10.0, y_cm=10.0),
+        position=Point(x_cm=100.0, y_cm=130.0),
         frame_of_reference="robot_base",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=10.0, height_cm=10.0),
     )
 
     s1 = _make_sample(
@@ -756,19 +945,6 @@ def scenario_06_color_perspectives() -> ReplayBundle:
             "title": "User expectation vs lighting perception vs maintenance history",
             "aliases": {"red box": "box_01", "box_01": "box_01"},
             "initial_facts": [hist_fact],
-            "mock_world": {
-                "light_color_cast": "yellow",
-                "objects": [
-                    {
-                        "object_id": "box_01",
-                        "label": "box",
-                        "intrinsic_color": "red",
-                        "location": "room_101",
-                        "x_cm": 10.0,
-                        "y_cm": 10.0,
-                    }
-                ],
-            },
         },
         static_map=_make_default_static_map(),
         audience_truth=AudienceTruthSection(
@@ -882,17 +1058,33 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
     pose = Pose(
         robot_id="robot_1",
         x_cm=80.0,
-        y_cm=350.0,
+        y_cm=320.0,
         direction="north",
-        location="packing_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
+    scene.robot_pose = pose
+    scene.patrol = [Point(x_cm=80.0, y_cm=320.0), Point(x_cm=80.0, y_cm=350.0)]
+
+    p1 = next(e for e in scene.entities if e.entity_id == "parcel_01")
+    p1.footprint.x_cm = 80.0
+    p1.footprint.y_cm = 350.0
+
+    outage = SensorAvailabilityEvent(
+        kind="sensor_availability",
+        at_ms=2000,
+        sequence=0,
+        capability="camera_detect",
+        available=False,
+    )
+    scene.events = sorted([*scene.events, outage], key=lambda e: (e.at_ms, e.sequence))
+
     det = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=80.0, y_cm=350.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
 
     s1 = _make_sample(
@@ -902,6 +1094,7 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
         sim_time_ms=1000,
         capability="camera_detect",
         observer_pose=pose,
+        target="parcel_01",
         measurements=CameraScan(objects=[det]).model_dump(mode="json"),
     )
     s2 = _make_sample(
@@ -911,6 +1104,7 @@ def scenario_08_sensor_outage_and_recovery() -> ReplayBundle:
         sim_time_ms=2000,
         capability="camera_detect",
         observer_pose=pose,
+        target="parcel_01",
         unavailable_reason="sensor_unavailable",
     )
 
@@ -966,33 +1160,49 @@ def scenario_09_delayed_older_observation() -> ReplayBundle:
     pose1 = Pose(
         robot_id="robot_1",
         x_cm=80.0,
-        y_cm=350.0,
+        y_cm=320.0,
         direction="north",
-        location="packing_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
     pose2 = Pose(
         robot_id="robot_1",
         x_cm=150.0,
-        y_cm=390.0,
+        y_cm=360.0,
         direction="north",
-        location="inspection_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
+    scene.robot_pose = pose1
+    scene.patrol = [Point(x_cm=80.0, y_cm=320.0), Point(x_cm=80.0, y_cm=350.0)]
+
+    p1 = next(e for e in scene.entities if e.entity_id == "parcel_01")
+    p1.footprint.x_cm = 80.0
+    p1.footprint.y_cm = 350.0
+
+    relocate_move = MoveEvent(
+        kind="move",
+        at_ms=1000,
+        sequence=0,
+        entity_id="parcel_01",
+        to=Point(x_cm=150.0, y_cm=390.0),
+        duration_ms=100,
+    )
+    scene.events = sorted([*scene.events, relocate_move], key=lambda e: (e.at_ms, e.sequence))
 
     d_older = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=80.0, y_cm=350.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
     d_newer = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=150.0, y_cm=390.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
 
     # Ingestion order: Newer sample (t=2000 ms) ingested first
@@ -1003,6 +1213,7 @@ def scenario_09_delayed_older_observation() -> ReplayBundle:
         sim_time_ms=2000,
         capability="camera_detect",
         observer_pose=pose2,
+        target="parcel_01",
         measurements=CameraScan(objects=[d_newer]).model_dump(mode="json"),
     )
     # Delayed older sample (t=500 ms) arrives second
@@ -1013,6 +1224,7 @@ def scenario_09_delayed_older_observation() -> ReplayBundle:
         sim_time_ms=500,
         capability="camera_detect",
         observer_pose=pose1,
+        target="parcel_01",
         measurements=CameraScan(objects=[d_older]).model_dump(mode="json"),
     )
 
@@ -1021,8 +1233,19 @@ def scenario_09_delayed_older_observation() -> ReplayBundle:
             query_id="scen_09_delayed",
             prompt="Where is parcel_01 now?",
             query_sim_time_ms=2000,
+            after_sample_sequence=2,
             expected_status="verified",
             expected_location="inspection_station",
+            expected_active_facts=[
+                {
+                    "subject": "parcel_01",
+                    "predicate": "located_at",
+                    "object": "inspection_station",
+                }
+            ],
+            unexpected_active_facts=[
+                {"subject": "parcel_01", "predicate": "located_at", "object": "packing_station"}
+            ],
             conflict_or_uncertainty_rationale=(
                 "Delayed older observation from t=500 ms does not overwrite newer active belief "
                 "from t=2000 ms. Active belief remains verified at inspection_station."
@@ -1071,33 +1294,49 @@ def scenario_10_hidden_movement_between_scans() -> ReplayBundle:
     pose1 = Pose(
         robot_id="robot_1",
         x_cm=80.0,
-        y_cm=350.0,
+        y_cm=320.0,
         direction="north",
-        location="packing_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
     pose2 = Pose(
         robot_id="robot_1",
         x_cm=150.0,
-        y_cm=390.0,
+        y_cm=360.0,
         direction="north",
-        location="inspection_station",
+        location="warehouse",
         frame_of_reference="warehouse_map",
     )
+    scene.robot_pose = pose1
+    scene.patrol = [Point(x_cm=80.0, y_cm=320.0), Point(x_cm=80.0, y_cm=350.0)]
+
+    p1 = next(e for e in scene.entities if e.entity_id == "parcel_01")
+    p1.footprint.x_cm = 80.0
+    p1.footprint.y_cm = 350.0
+
+    unobserved_move = MoveEvent(
+        kind="move",
+        at_ms=400,
+        sequence=0,
+        entity_id="parcel_01",
+        to=Point(x_cm=150.0, y_cm=390.0),
+        duration_ms=100,
+    )
+    scene.events = sorted([*scene.events, unobserved_move], key=lambda e: (e.at_ms, e.sequence))
 
     d1 = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=80.0, y_cm=350.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
     d2 = CameraDetection(
         object_id="parcel_01",
-        apparent_color="cardboard_brown",
+        apparent_color="red",
         position=Point(x_cm=150.0, y_cm=390.0),
         frame_of_reference="warehouse_map",
-        bounding_box=BoundingBox(width_cm=30.0, height_cm=30.0),
+        bounding_box=BoundingBox(width_cm=12.0, height_cm=12.0),
     )
 
     s1 = _make_sample(
@@ -1107,6 +1346,7 @@ def scenario_10_hidden_movement_between_scans() -> ReplayBundle:
         sim_time_ms=0,
         capability="camera_detect",
         observer_pose=pose1,
+        target="parcel_01",
         measurements=CameraScan(objects=[d1]).model_dump(mode="json"),
     )
     s2 = _make_sample(
@@ -1116,6 +1356,7 @@ def scenario_10_hidden_movement_between_scans() -> ReplayBundle:
         sim_time_ms=1000,
         capability="camera_detect",
         observer_pose=pose2,
+        target="parcel_01",
         measurements=CameraScan(objects=[d2]).model_dump(mode="json"),
     )
 
@@ -1125,7 +1366,7 @@ def scenario_10_hidden_movement_between_scans() -> ReplayBundle:
             prompt="Where was parcel_01 at 500 ms?",
             query_sim_time_ms=1000,
             expected_status="verified",
-            expected_location="packing_station",
+            expected_location="warehouse",
             conflict_or_uncertainty_rationale=(
                 "Movement occurred wholly between scans. Agent adheres to strict "
                 "anti-interpolation policy: reports latest applicable observation at t=0 ms "

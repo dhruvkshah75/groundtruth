@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-11-21T12:56:51.806359+00:00",
+  "timestamp_utc": "2026-11-22T14:13:44.117359+00:00",
   "total_evaluations": 28,
   "passed": 28,
   "failed": 0,
@@ -7,29 +7,40 @@
     {
       "scenario_id": "scenario_01_map_clear_vs_cart_blocked",
       "scenario_title": "Map-clear vs cart-blocked route, followed by clearance",
-      "conflict_description": "Static map indicates route_A is clear, but live front LiDAR detects obstacle at 12.0 cm right now, triggering an atomic belief revision to blocked.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "conflict_description": "Static map indicates route_A is clear, but live front LiDAR detects obstacle at 20.0 cm right now, triggering an atomic belief revision to blocked.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=0ms: lidar_scan",
-        "sim_time=1000ms: lidar_scan"
+        "seq=1 sim_time=0ms: lidar_scan",
+        "seq=2 sim_time=1000ms: lidar_scan"
       ],
       "prompt": "Is the front route clear to move forward?",
       "expected_outcome": {
-        "status": "grounded_conflict_resolved",
+        "status": "verified",
         "location": null,
-        "revisions_count": null
+        "revisions_count": 1,
+        "active_facts": [
+          {
+            "subject": "route_A",
+            "predicate": "status_is",
+            "object": "blocked"
+          }
+        ]
       },
       "actual_outcome": {
-        "status": "grounded_conflict_resolved",
-        "answer": "No, my static mapping says it is clear, but my live LiDAR readings indicate a physical obstruction at 12.0cm right now. I have downgraded my map confidence and updated my belief graph.",
-        "revisions_count": 0
+        "status": "verified",
+        "answer": "Route is blocked as recorded. The live LiDAR confirms the stored claim.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "10000000-0000-0000-0000-000000000011",
         "10000000-0000-0000-0000-000000000012"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "1bb88d1a-3104-4f81-951a-c1559f553c77"
+      ],
+      "revision_ids": [
+        "e9697637-6bf7-4bb6-8b76-7064831db226"
+      ],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
       "mode": "evidence_only",
@@ -39,28 +50,33 @@
       "scenario_id": "scenario_01_map_clear_vs_cart_blocked",
       "scenario_title": "Map-clear vs cart-blocked route, followed by clearance",
       "conflict_description": "Epistemic audit query retrieves revision rationale, predecessor fact, and policy rule.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=0ms: lidar_scan",
-        "sim_time=1000ms: lidar_scan"
+        "seq=1 sim_time=0ms: lidar_scan",
+        "seq=2 sim_time=1000ms: lidar_scan"
       ],
       "prompt": "Why was route_A superseded?",
       "expected_outcome": {
         "status": "audit_retrieved",
         "location": null,
-        "revisions_count": null
+        "revisions_count": 1,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "audit_retrieved",
-        "answer": "Audit history: route_A status_is changed from clear (source: static_map) to blocked (source: lidar_sensor). Reason: Live LiDAR reading detected physical obstacle at 12.0cm Policy: lidar_overrides_map.",
-        "revisions_count": 0
+        "answer": "Audit history: route_A status_is changed from clear (source: static_map) to blocked (source: lidar_scan_01). Reason: Front LiDAR at sim_time 0ms observed route_A is blocked (nearest obstacle: 20.0 cm) Policy: lidar_observation_route_status.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "10000000-0000-0000-0000-000000000011",
         "10000000-0000-0000-0000-000000000012"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "1bb88d1a-3104-4f81-951a-c1559f553c77"
+      ],
+      "revision_ids": [
+        "e9697637-6bf7-4bb6-8b76-7064831db226"
+      ],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
       "mode": "evidence_only",
@@ -70,28 +86,41 @@
       "scenario_id": "scenario_01_map_clear_vs_cart_blocked",
       "scenario_title": "Map-clear vs cart-blocked route, followed by clearance",
       "conflict_description": "Fresh LiDAR observation confirms obstacle is cleared; route status conflict is resolved to clear with successor belief revision.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=0ms: lidar_scan",
-        "sim_time=1000ms: lidar_scan"
+        "seq=1 sim_time=0ms: lidar_scan",
+        "seq=2 sim_time=1000ms: lidar_scan"
       ],
       "prompt": "Is the front route clear to move forward?",
       "expected_outcome": {
-        "status": "grounded_conflict_resolved",
+        "status": "verified",
         "location": null,
-        "revisions_count": null
+        "revisions_count": 2,
+        "active_facts": [
+          {
+            "subject": "route_A",
+            "predicate": "status_is",
+            "object": "clear"
+          }
+        ]
       },
       "actual_outcome": {
-        "status": "grounded_conflict_resolved",
-        "answer": "My static mapping says the route is blocked, but my live LiDAR readings indicate it is clear right now. I recorded the new sensor-backed belief and updated the active belief graph.",
-        "revisions_count": 0
+        "status": "verified",
+        "answer": "Yes, the route is clear. The stored route claim and live LiDAR agree.",
+        "revisions_count": 2
       },
       "recorded_sample_ids": [
         "10000000-0000-0000-0000-000000000011",
         "10000000-0000-0000-0000-000000000012"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "1bb88d1a-3104-4f81-951a-c1559f553c77",
+        "67ff6df8-6b1b-4a78-ad5d-379ed8f6a6cb"
+      ],
+      "revision_ids": [
+        "e9697637-6bf7-4bb6-8b76-7064831db226",
+        "726b8a02-3f0f-46c3-a22a-e7c1de6f706c"
+      ],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
       "mode": "evidence_only",
@@ -100,27 +129,40 @@
     {
       "scenario_id": "scenario_01_map_clear_vs_cart_blocked",
       "scenario_title": "Map-clear vs cart-blocked route, followed by clearance",
-      "conflict_description": "Static map indicates route_A is clear, but live front LiDAR detects obstacle at 12.0 cm right now, triggering an atomic belief revision to blocked.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "conflict_description": "Static map indicates route_A is clear, but live front LiDAR detects obstacle at 20.0 cm right now, triggering an atomic belief revision to blocked.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=0ms: lidar_scan",
-        "sim_time=1000ms: lidar_scan"
+        "seq=1 sim_time=0ms: lidar_scan",
+        "seq=2 sim_time=1000ms: lidar_scan"
       ],
       "prompt": "Is the front route clear to move forward?",
       "expected_outcome": {
-        "status": "grounded_conflict_resolved",
-        "location": null
+        "status": "verified",
+        "location": null,
+        "revisions_count": 1,
+        "active_facts": [
+          {
+            "subject": "route_A",
+            "predicate": "status_is",
+            "object": "blocked"
+          }
+        ]
       },
       "actual_outcome": {
-        "status": "grounded_conflict_resolved",
-        "answer": "No, my static mapping says it is clear, but my live LiDAR readings indicate a physical obstruction at 12.0cm right now. I have downgraded my map confidence and updated my belief graph."
+        "status": "verified",
+        "answer": "Route is blocked as recorded. The live LiDAR confirms the stored claim.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "10000000-0000-0000-0000-000000000011",
         "10000000-0000-0000-0000-000000000012"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "f2366ab1-6211-4199-867b-4f0bcc04dcd7"
+      ],
+      "revision_ids": [
+        "9e6eb926-11bb-4bd3-a0c8-ccd37fb78299"
+      ],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
       "mode": "world_rerun",
@@ -130,26 +172,33 @@
       "scenario_id": "scenario_01_map_clear_vs_cart_blocked",
       "scenario_title": "Map-clear vs cart-blocked route, followed by clearance",
       "conflict_description": "Epistemic audit query retrieves revision rationale, predecessor fact, and policy rule.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=0ms: lidar_scan",
-        "sim_time=1000ms: lidar_scan"
+        "seq=1 sim_time=0ms: lidar_scan",
+        "seq=2 sim_time=1000ms: lidar_scan"
       ],
       "prompt": "Why was route_A superseded?",
       "expected_outcome": {
         "status": "audit_retrieved",
-        "location": null
+        "location": null,
+        "revisions_count": 1,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "audit_retrieved",
-        "answer": "Audit history: route_A status_is changed from clear (source: static_map) to blocked (source: lidar_sensor). Reason: Live LiDAR reading detected physical obstacle at 12.0cm Policy: lidar_overrides_map."
+        "answer": "Audit history: route_A status_is changed from clear (source: static_map) to blocked (source: lidar_scan). Reason: Front LiDAR at sim_time 0ms observed route_A is blocked (nearest obstacle: 20.0 cm) Policy: lidar_observation_route_status.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "10000000-0000-0000-0000-000000000011",
         "10000000-0000-0000-0000-000000000012"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "f2366ab1-6211-4199-867b-4f0bcc04dcd7"
+      ],
+      "revision_ids": [
+        "9e6eb926-11bb-4bd3-a0c8-ccd37fb78299"
+      ],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
       "mode": "world_rerun",
@@ -159,26 +208,41 @@
       "scenario_id": "scenario_01_map_clear_vs_cart_blocked",
       "scenario_title": "Map-clear vs cart-blocked route, followed by clearance",
       "conflict_description": "Fresh LiDAR observation confirms obstacle is cleared; route status conflict is resolved to clear with successor belief revision.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=0ms: lidar_scan",
-        "sim_time=1000ms: lidar_scan"
+        "seq=1 sim_time=0ms: lidar_scan",
+        "seq=2 sim_time=1000ms: lidar_scan"
       ],
       "prompt": "Is the front route clear to move forward?",
       "expected_outcome": {
-        "status": "grounded_conflict_resolved",
-        "location": null
+        "status": "verified",
+        "location": null,
+        "revisions_count": 2,
+        "active_facts": [
+          {
+            "subject": "route_A",
+            "predicate": "status_is",
+            "object": "clear"
+          }
+        ]
       },
       "actual_outcome": {
-        "status": "grounded_conflict_resolved",
-        "answer": "My static mapping says the route is blocked, but my live LiDAR readings indicate it is clear right now. I recorded the new sensor-backed belief and updated the active belief graph."
+        "status": "verified",
+        "answer": "Yes, the route is clear. The stored route claim and live LiDAR agree.",
+        "revisions_count": 2
       },
       "recorded_sample_ids": [
         "10000000-0000-0000-0000-000000000011",
         "10000000-0000-0000-0000-000000000012"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "f2366ab1-6211-4199-867b-4f0bcc04dcd7",
+        "ec2d3bbf-1d07-4466-8423-797ffe5dcbb4"
+      ],
+      "revision_ids": [
+        "9e6eb926-11bb-4bd3-a0c8-ccd37fb78299",
+        "a4a694b2-b0ce-40e4-a161-dd7e9b7fe8f3"
+      ],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
       "mode": "world_rerun",
@@ -188,28 +252,40 @@
       "scenario_id": "scenario_02_visible_parcel_relocation",
       "scenario_title": "Visible parcel relocation between known stations",
       "conflict_description": "Current belief is updated to inspection_station based on fresh positive sample at 2000 ms.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "verified",
         "location": "inspection_station",
-        "revisions_count": null
+        "revisions_count": 1,
+        "active_facts": [
+          {
+            "subject": "parcel_01",
+            "predicate": "located_at",
+            "object": "inspection_station"
+          }
+        ]
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in inspection_station by robot_1 at simulation time 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022).",
-        "revisions_count": 0
+        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in warehouse by robot_1 at simulation time 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022).",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "20000000-0000-0000-0000-000000000021",
         "20000000-0000-0000-0000-000000000022"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "56995bee-b0cd-4bed-a40a-b2797eb62f0a",
+        "f2b19307-0ca9-44a0-84a6-9f780e820ba3"
+      ],
+      "revision_ids": [
+        "bbdadaa3-55f1-4405-90ae-211a3992758f"
+      ],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
       "mode": "evidence_only",
@@ -219,28 +295,40 @@
       "scenario_id": "scenario_02_visible_parcel_relocation",
       "scenario_title": "Visible parcel relocation between known stations",
       "conflict_description": "Movement reported between packing_station and inspection_station with exact timestamps, accompanied by the mandatory transit caveat.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect"
       ],
       "prompt": "Has parcel_01 moved?",
       "expected_outcome": {
         "status": "verified",
         "location": null,
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": [
+          {
+            "subject": "parcel_01",
+            "predicate": "located_at",
+            "object": "inspection_station"
+          }
+        ]
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "Observed transition for parcel_01: sighted at packing_station at 1000 ms (sample ID: 20000000-0000-0000-0000-000000000021), subsequently sighted at inspection_station at 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022). Note: Two sightings at distinct locations demonstrate that a transition occurred, but do not prove continuous path, exact transit duration, or physical relocation cause.",
-        "revisions_count": 0
+        "answer": "Observed transition for parcel_01: sighted at warehouse at 1000 ms (sample ID: 20000000-0000-0000-0000-000000000021), subsequently sighted at warehouse at 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022). Revision record: Observed parcel_01 at (150.0, 390.0) in inspection_station, revising previous location packing_station (Policy: camera_observation_revision).. Note: Two sightings at distinct locations demonstrate that a transition occurred, but do not prove continuous path, exact transit duration, or physical relocation cause.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "20000000-0000-0000-0000-000000000021",
         "20000000-0000-0000-0000-000000000022"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "56995bee-b0cd-4bed-a40a-b2797eb62f0a",
+        "f2b19307-0ca9-44a0-84a6-9f780e820ba3"
+      ],
+      "revision_ids": [
+        "bbdadaa3-55f1-4405-90ae-211a3992758f"
+      ],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
       "mode": "evidence_only",
@@ -250,26 +338,40 @@
       "scenario_id": "scenario_02_visible_parcel_relocation",
       "scenario_title": "Visible parcel relocation between known stations",
       "conflict_description": "Current belief is updated to inspection_station based on fresh positive sample at 2000 ms.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "verified",
-        "location": "inspection_station"
+        "location": "inspection_station",
+        "revisions_count": 1,
+        "active_facts": [
+          {
+            "subject": "parcel_01",
+            "predicate": "located_at",
+            "object": "inspection_station"
+          }
+        ]
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in inspection_station by robot_1 at simulation time 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022)."
+        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in warehouse by robot_1 at simulation time 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022).",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "20000000-0000-0000-0000-000000000021",
         "20000000-0000-0000-0000-000000000022"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "98849ba3-e6e4-4d4b-9c1e-b8c38d01dda5",
+        "5381bd2b-815e-4414-b7d3-c8d65c78b2bf"
+      ],
+      "revision_ids": [
+        "0ca72386-7ddd-4297-9551-80b77aff8d82"
+      ],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
       "mode": "world_rerun",
@@ -279,26 +381,40 @@
       "scenario_id": "scenario_02_visible_parcel_relocation",
       "scenario_title": "Visible parcel relocation between known stations",
       "conflict_description": "Movement reported between packing_station and inspection_station with exact timestamps, accompanied by the mandatory transit caveat.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect"
       ],
       "prompt": "Has parcel_01 moved?",
       "expected_outcome": {
         "status": "verified",
-        "location": null
+        "location": null,
+        "revisions_count": null,
+        "active_facts": [
+          {
+            "subject": "parcel_01",
+            "predicate": "located_at",
+            "object": "inspection_station"
+          }
+        ]
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "Observed transition for parcel_01: sighted at packing_station at 1000 ms (sample ID: 20000000-0000-0000-0000-000000000021), subsequently sighted at inspection_station at 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022). Note: Two sightings at distinct locations demonstrate that a transition occurred, but do not prove continuous path, exact transit duration, or physical relocation cause."
+        "answer": "Observed transition for parcel_01: sighted at warehouse at 1000 ms (sample ID: 20000000-0000-0000-0000-000000000021), subsequently sighted at warehouse at 2000 ms (sample ID: 20000000-0000-0000-0000-000000000022). Revision record: Observed parcel_01 at (150.0, 390.0) in inspection_station, revising previous location packing_station (Policy: camera_observation_revision).. Note: Two sightings at distinct locations demonstrate that a transition occurred, but do not prove continuous path, exact transit duration, or physical relocation cause.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "20000000-0000-0000-0000-000000000021",
         "20000000-0000-0000-0000-000000000022"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "98849ba3-e6e4-4d4b-9c1e-b8c38d01dda5",
+        "5381bd2b-815e-4414-b7d3-c8d65c78b2bf"
+      ],
+      "revision_ids": [
+        "0ca72386-7ddd-4297-9551-80b77aff8d82"
+      ],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
       "mode": "world_rerun",
@@ -308,27 +424,30 @@
       "scenario_id": "scenario_03_parcel_moves_outside_view",
       "scenario_title": "Parcel moves outside view",
       "conflict_description": "Broad camera scan did not detect parcel_01. Location cannot be verified now; last confirmed sighting at packing_station is retained without guessing.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=3000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=3000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "uncertain",
         "location": "packing_station",
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "uncertain",
-        "answer": "Current location of parcel_01 cannot be freshly verified because a subsequent camera scan at simulation time 3000 ms did not detect it in packing_station. Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: 30000000-0000-0000-0000-000000000031).",
+        "answer": "Current location of parcel_01 cannot be freshly verified because a subsequent camera scan at simulation time 3000 ms did not detect it in warehouse. Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: 30000000-0000-0000-0000-000000000031).",
         "revisions_count": 0
       },
       "recorded_sample_ids": [
         "30000000-0000-0000-0000-000000000031",
         "30000000-0000-0000-0000-000000000032"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "35f2c936-357f-4c49-9796-f3b6446242e8"
+      ],
       "revision_ids": [],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
@@ -339,25 +458,30 @@
       "scenario_id": "scenario_03_parcel_moves_outside_view",
       "scenario_title": "Parcel moves outside view",
       "conflict_description": "Broad camera scan did not detect parcel_01. Location cannot be verified now; last confirmed sighting at packing_station is retained without guessing.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=3000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=3000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "uncertain",
-        "location": "packing_station"
+        "location": "packing_station",
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "uncertain",
-        "answer": "Current location of parcel_01 cannot be freshly verified because a subsequent camera scan at simulation time 3000 ms did not detect it in packing_station. Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: 30000000-0000-0000-0000-000000000031)."
+        "answer": "Current location of parcel_01 cannot be freshly verified because a subsequent camera scan at simulation time 3000 ms did not detect it in warehouse. Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: 30000000-0000-0000-0000-000000000031).",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "30000000-0000-0000-0000-000000000031",
         "30000000-0000-0000-0000-000000000032"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "2b57be16-8219-4671-93b4-3c8176ef19e2"
+      ],
       "revision_ids": [],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
@@ -368,21 +492,22 @@
       "scenario_id": "scenario_04_shelf_occlusion_and_reacquisition",
       "scenario_title": "Shelf occlusion and later reacquisition",
       "conflict_description": "Targeted camera query reported target_not_visible due to shelf occlusion. Current belief is uncertain, but earlier sighting at packing_station is preserved.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect",
-        "sim_time=3000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect",
+        "seq=3 sim_time=3000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "uncertain",
         "location": "packing_station",
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "uncertain",
-        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (target_not_visible). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: 40000000-0000-0000-0000-000000000041).",
+        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (target_not_visible). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: 40000000-0000-0000-0000-000000000041).",
         "revisions_count": 0
       },
       "recorded_sample_ids": [
@@ -390,7 +515,9 @@
         "40000000-0000-0000-0000-000000000042",
         "40000000-0000-0000-0000-000000000043"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "893dc6a4-4041-4f58-a68d-0c242311497a"
+      ],
       "revision_ids": [],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
@@ -401,21 +528,22 @@
       "scenario_id": "scenario_04_shelf_occlusion_and_reacquisition",
       "scenario_title": "Shelf occlusion and later reacquisition",
       "conflict_description": "Reacquisition after occlusion restores verified current status.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect",
-        "sim_time=3000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect",
+        "seq=3 sim_time=3000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "verified",
         "location": "packing_station",
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "parcel_01 was observed at x=80 cm, y=350 cm in packing_station by robot_1 at simulation time 3000 ms (sample ID: 40000000-0000-0000-0000-000000000043).",
+        "answer": "parcel_01 was observed at x=80 cm, y=350 cm in warehouse by robot_1 at simulation time 3000 ms (sample ID: 40000000-0000-0000-0000-000000000043).",
         "revisions_count": 0
       },
       "recorded_sample_ids": [
@@ -423,7 +551,9 @@
         "40000000-0000-0000-0000-000000000042",
         "40000000-0000-0000-0000-000000000043"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "893dc6a4-4041-4f58-a68d-0c242311497a"
+      ],
       "revision_ids": [],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
@@ -434,27 +564,32 @@
       "scenario_id": "scenario_04_shelf_occlusion_and_reacquisition",
       "scenario_title": "Shelf occlusion and later reacquisition",
       "conflict_description": "Targeted camera query reported target_not_visible due to shelf occlusion. Current belief is uncertain, but earlier sighting at packing_station is preserved.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect",
-        "sim_time=3000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect",
+        "seq=3 sim_time=3000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "uncertain",
-        "location": "packing_station"
+        "location": "packing_station",
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "uncertain",
-        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (target_not_visible). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: 40000000-0000-0000-0000-000000000041)."
+        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (target_not_visible). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: 40000000-0000-0000-0000-000000000041).",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "40000000-0000-0000-0000-000000000041",
         "40000000-0000-0000-0000-000000000042",
         "40000000-0000-0000-0000-000000000043"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "ea2791a7-fec0-4bbf-b540-fcdbd2334317"
+      ],
       "revision_ids": [],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
@@ -465,27 +600,32 @@
       "scenario_id": "scenario_04_shelf_occlusion_and_reacquisition",
       "scenario_title": "Shelf occlusion and later reacquisition",
       "conflict_description": "Reacquisition after occlusion restores verified current status.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect",
-        "sim_time=3000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect",
+        "seq=3 sim_time=3000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "verified",
-        "location": "packing_station"
+        "location": "packing_station",
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "parcel_01 was observed at x=80 cm, y=350 cm in packing_station by robot_1 at simulation time 3000 ms (sample ID: 40000000-0000-0000-0000-000000000043)."
+        "answer": "parcel_01 was observed at x=80 cm, y=350 cm in warehouse by robot_1 at simulation time 3000 ms (sample ID: 40000000-0000-0000-0000-000000000043).",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "40000000-0000-0000-0000-000000000041",
         "40000000-0000-0000-0000-000000000042",
         "40000000-0000-0000-0000-000000000043"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "ea2791a7-fec0-4bbf-b540-fcdbd2334317"
+      ],
       "revision_ids": [],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
@@ -496,15 +636,16 @@
       "scenario_id": "scenario_05_two_similar_parcels",
       "scenario_title": "Two similar parcels / ambiguous mention",
       "conflict_description": "Query ambiguously references 'the box' when multiple distinct objects (box_01, box_02) match. The agent halts and refuses to merge identities.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect"
       ],
       "prompt": "What is the color of the box?",
       "expected_outcome": {
         "status": "ambiguous",
         "location": null,
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "ambiguous",
@@ -515,8 +656,8 @@
         "50000000-0000-0000-0000-000000000051"
       ],
       "recorded_fact_ids": [
-        "9d9da0b3-6967-42ca-8864-5efa5e826f8b",
-        "ec2b2865-286f-4bc1-a18b-cdd63f7b36d0"
+        "bd401ca8-1909-4f30-82ff-6f861c83ad70",
+        "92ec71c9-a897-4734-bacd-2b0b0b3639e7"
       ],
       "revision_ids": [],
       "policy_applied": "temporal_evidence_evaluation",
@@ -528,26 +669,26 @@
       "scenario_id": "scenario_05_two_similar_parcels",
       "scenario_title": "Two similar parcels / ambiguous mention",
       "conflict_description": "Query ambiguously references 'the box' when multiple distinct objects (box_01, box_02) match. The agent halts and refuses to merge identities.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect"
       ],
       "prompt": "What is the color of the box?",
       "expected_outcome": {
         "status": "ambiguous",
-        "location": null
+        "location": null,
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "ambiguous",
-        "answer": "Ambiguous entity mention in query. Candidates found: [box_01, box_02]. Please clarify which entity you mean."
+        "answer": "Ambiguous entity mention in query. Candidates found: [box_01, box_02]. Please clarify which entity you mean.",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "50000000-0000-0000-0000-000000000051"
       ],
-      "recorded_fact_ids": [
-        "5f7b141a-79bd-4a00-a5fa-fcef23618792",
-        "0861c110-f705-4094-bae2-36c29f5b7a27"
-      ],
+      "recorded_fact_ids": [],
       "revision_ids": [],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
@@ -558,19 +699,20 @@
       "scenario_id": "scenario_06_color_perspectives",
       "scenario_title": "User expectation vs lighting perception vs maintenance history",
       "conflict_description": "Distinguishes user expectation (red), live egocentric perception under yellow lighting (brown), and maintenance history (blue) without conflating them.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=0ms: camera_detect"
+        "seq=1 sim_time=0ms: camera_detect"
       ],
       "prompt": "Can you see the red box? What color do different perspectives think it is?",
       "expected_outcome": {
         "status": "perspectives_tracked",
         "location": null,
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "perspectives_tracked",
-        "answer": "The available evidence gives three distinct perspectives:\n\n- **Your expectation:** Red (user expects a red target, as stated in the question).\n- **Current camera view:** Brown (currently sensed by the camera under yellow lighting).\n- **Historical record:** Blue (latest logged color claim from 'bot_02', recorded 2026-11-21T12:56:51.778631+00:00).\n\nThe historical record is a past claim; it does not by itself establish the object's current color.",
+        "answer": "The available evidence gives three distinct perspectives:\n\n- **Your expectation:** Red (user expects a red target, as stated in the question).\n- **Current camera view:** Brown (currently sensed by the camera).\n- **Historical record:** Blue (latest logged color claim from 'bot_02', recorded 2026-11-22T14:13:44.000971+00:00).\n\nThe historical record is a past claim; it does not by itself establish the object's current color.",
         "revisions_count": 0
       },
       "recorded_sample_ids": [
@@ -587,18 +729,21 @@
       "scenario_id": "scenario_06_color_perspectives",
       "scenario_title": "User expectation vs lighting perception vs maintenance history",
       "conflict_description": "Distinguishes user expectation (red), live egocentric perception under yellow lighting (brown), and maintenance history (blue) without conflating them.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=0ms: camera_detect"
+        "seq=1 sim_time=0ms: camera_detect"
       ],
       "prompt": "Can you see the red box? What color do different perspectives think it is?",
       "expected_outcome": {
         "status": "perspectives_tracked",
-        "location": null
+        "location": null,
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "perspectives_tracked",
-        "answer": "The available evidence gives three distinct perspectives:\n\n- **Your expectation:** Red (user expects a red target, as stated in the question).\n- **Current camera view:** Brown (currently sensed by the camera under yellow lighting).\n- **Historical record:** Blue (latest logged color claim from 'bot_02', recorded 2026-11-21T12:56:51.781336+00:00).\n\nThe historical record is a past claim; it does not by itself establish the object's current color."
+        "answer": "The available evidence gives three distinct perspectives:\n\n- **Your expectation:** Red (user expects a red target, as stated in the question).\n- **Current camera view:** Brown (currently sensed by the camera under yellow lighting).\n- **Historical record:** Blue (latest logged color claim from 'bot_02', recorded 2026-11-22T14:13:44.009116+00:00).\n\nThe historical record is a past claim; it does not by itself establish the object's current color.",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "60000000-0000-0000-0000-000000000061"
@@ -614,15 +759,16 @@
       "scenario_id": "scenario_07_wrong_context_sample",
       "scenario_title": "Wrong-room/frame sample rejected",
       "conflict_description": "Observation captured in mismatched room_999 cannot update warehouse beliefs. Stored warehouse belief at packing_station is preserved without corruption.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect"
       ],
       "prompt": "What was recorded about parcel_01?",
       "expected_outcome": {
         "status": "verified",
         "location": "packing_station",
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "verified",
@@ -643,18 +789,21 @@
       "scenario_id": "scenario_07_wrong_context_sample",
       "scenario_title": "Wrong-room/frame sample rejected",
       "conflict_description": "Observation captured in mismatched room_999 cannot update warehouse beliefs. Stored warehouse belief at packing_station is preserved without corruption.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect"
       ],
       "prompt": "What was recorded about parcel_01?",
       "expected_outcome": {
         "status": "verified",
-        "location": "packing_station"
+        "location": "packing_station",
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "Retrieved stored facts from memory: parcel_01 located_at packing_station (source: warehouse_manifest)."
+        "answer": "Retrieved stored facts from memory: parcel_01 located_at packing_station (source: warehouse_manifest).",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "70000000-0000-0000-0000-000000000071"
@@ -670,27 +819,30 @@
       "scenario_id": "scenario_08_sensor_outage_and_recovery",
       "scenario_title": "Sensor outage and recovery",
       "conflict_description": "Current camera verification is unavailable due to outage at 2000 ms. Agent reports uncertain status while retaining last confirmed sighting at 1000 ms.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "uncertain",
         "location": "packing_station",
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "uncertain",
-        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (sensor_unavailable). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: 80000000-0000-0000-0000-000000000081).",
+        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (sensor_unavailable). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: 80000000-0000-0000-0000-000000000081).",
         "revisions_count": 0
       },
       "recorded_sample_ids": [
         "80000000-0000-0000-0000-000000000081",
         "80000000-0000-0000-0000-000000000082"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "34b23c94-eb69-48ef-993e-a7210506f693"
+      ],
       "revision_ids": [],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
@@ -701,25 +853,30 @@
       "scenario_id": "scenario_08_sensor_outage_and_recovery",
       "scenario_title": "Sensor outage and recovery",
       "conflict_description": "Current camera verification is unavailable due to outage at 2000 ms. Agent reports uncertain status while retaining last confirmed sighting at 1000 ms.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=1000ms: camera_detect",
-        "sim_time=2000ms: camera_detect"
+        "seq=1 sim_time=1000ms: camera_detect",
+        "seq=2 sim_time=2000ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "uncertain",
-        "location": "packing_station"
+        "location": "packing_station",
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "uncertain",
-        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (sensor_unavailable). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: 80000000-0000-0000-0000-000000000081)."
+        "answer": "Current location of parcel_01 cannot be freshly verified because the camera reported an outage at simulation time 2000 ms (sensor_unavailable). Last confirmed sighting was at simulation time 1000 ms at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: 80000000-0000-0000-0000-000000000081).",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "80000000-0000-0000-0000-000000000081",
         "80000000-0000-0000-0000-000000000082"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "a7c4b525-b969-4cd4-9e7b-36c8106191c3"
+      ],
       "revision_ids": [],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
@@ -730,27 +887,36 @@
       "scenario_id": "scenario_09_delayed_older_observation",
       "scenario_title": "Delayed older observation",
       "conflict_description": "Delayed older observation from t=500 ms does not overwrite newer active belief from t=2000 ms. Active belief remains verified at inspection_station.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=2000ms: camera_detect",
-        "sim_time=500ms: camera_detect"
+        "seq=1 sim_time=2000ms: camera_detect",
+        "seq=2 sim_time=500ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "verified",
         "location": "inspection_station",
-        "revisions_count": null
+        "revisions_count": null,
+        "active_facts": [
+          {
+            "subject": "parcel_01",
+            "predicate": "located_at",
+            "object": "inspection_station"
+          }
+        ]
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in inspection_station by robot_1 at simulation time 2000 ms (sample ID: 90000000-0000-0000-0000-000000000091).",
+        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in warehouse by robot_1 at simulation time 2000 ms (sample ID: 90000000-0000-0000-0000-000000000091).",
         "revisions_count": 0
       },
       "recorded_sample_ids": [
         "90000000-0000-0000-0000-000000000091",
         "90000000-0000-0000-0000-000000000092"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "a4127366-3d14-4dd8-97a8-48e84b4cc1ed"
+      ],
       "revision_ids": [],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
@@ -761,25 +927,36 @@
       "scenario_id": "scenario_09_delayed_older_observation",
       "scenario_title": "Delayed older observation",
       "conflict_description": "Delayed older observation from t=500 ms does not overwrite newer active belief from t=2000 ms. Active belief remains verified at inspection_station.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=2000ms: camera_detect",
-        "sim_time=500ms: camera_detect"
+        "seq=1 sim_time=2000ms: camera_detect",
+        "seq=2 sim_time=500ms: camera_detect"
       ],
       "prompt": "Where is parcel_01 now?",
       "expected_outcome": {
         "status": "verified",
-        "location": "inspection_station"
+        "location": "inspection_station",
+        "revisions_count": null,
+        "active_facts": [
+          {
+            "subject": "parcel_01",
+            "predicate": "located_at",
+            "object": "inspection_station"
+          }
+        ]
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in inspection_station by robot_1 at simulation time 2000 ms (sample ID: 90000000-0000-0000-0000-000000000091)."
+        "answer": "parcel_01 was observed at x=150 cm, y=390 cm in warehouse by robot_1 at simulation time 2000 ms (sample ID: 90000000-0000-0000-0000-000000000091).",
+        "revisions_count": 0
       },
       "recorded_sample_ids": [
         "90000000-0000-0000-0000-000000000091",
         "90000000-0000-0000-0000-000000000092"
       ],
-      "recorded_fact_ids": [],
+      "recorded_fact_ids": [
+        "bb6f3b24-2597-48d0-b2cf-fe500872a54f"
+      ],
       "revision_ids": [],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
@@ -790,28 +967,34 @@
       "scenario_id": "scenario_10_hidden_movement_between_scans",
       "scenario_title": "Movement between samples with strict anti-interpolation",
       "conflict_description": "Movement occurred wholly between scans. Agent adheres to strict anti-interpolation policy: reports latest applicable observation at t=0 ms and explicitly refuses to interpolate an intermediate physical trajectory.",
-      "setup": "Fresh SQLite memory initialized; recorded observation envelopes ingested without world access.",
+      "setup": "Evidence-only isolated replay over serialized bundle samples.",
       "input_timeline": [
-        "sim_time=0ms: camera_detect",
-        "sim_time=1000ms: camera_detect"
+        "seq=1 sim_time=0ms: camera_detect",
+        "seq=2 sim_time=1000ms: camera_detect"
       ],
       "prompt": "Where was parcel_01 at 500 ms?",
       "expected_outcome": {
         "status": "verified",
-        "location": "packing_station",
-        "revisions_count": null
+        "location": "warehouse",
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "At simulation time 500 ms, the latest applicable observation of parcel_01 was captured at 0 ms (age: 500 ms) at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: a0000000-0000-0000-0000-0000000000a1). Note: No intermediate position is interpolated at 500 ms.",
-        "revisions_count": 0
+        "answer": "At simulation time 500 ms, the latest applicable observation of parcel_01 was captured at 0 ms (age: 500 ms) at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: a0000000-0000-0000-0000-0000000000a1). Note: No intermediate position is interpolated at 500 ms.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "a0000000-0000-0000-0000-0000000000a1",
         "a0000000-0000-0000-0000-0000000000a2"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "aee45727-9e0b-4306-beff-af7b122eca7c",
+        "2cf1bb4b-9e47-42af-8294-7d65402de764"
+      ],
+      "revision_ids": [
+        "b3557648-d282-4fe1-b422-5db1e7877bd5"
+      ],
       "policy_applied": "temporal_evidence_evaluation",
       "passed": true,
       "mode": "evidence_only",
@@ -821,26 +1004,34 @@
       "scenario_id": "scenario_10_hidden_movement_between_scans",
       "scenario_title": "Movement between samples with strict anti-interpolation",
       "conflict_description": "Movement occurred wholly between scans. Agent adheres to strict anti-interpolation policy: reports latest applicable observation at t=0 ms and explicitly refuses to interpolate an intermediate physical trajectory.",
-      "setup": "SimulationEngine initialized; sensors, odometry and ingestion executed.",
+      "setup": "SimulationEngine advanced with fixed ticks; real WarehouseSensors sampled and ingested.",
       "input_timeline": [
-        "sim_time=0ms: camera_detect",
-        "sim_time=1000ms: camera_detect"
+        "seq=1 sim_time=0ms: camera_detect",
+        "seq=2 sim_time=1000ms: camera_detect"
       ],
       "prompt": "Where was parcel_01 at 500 ms?",
       "expected_outcome": {
         "status": "verified",
-        "location": "packing_station"
+        "location": "warehouse",
+        "revisions_count": null,
+        "active_facts": []
       },
       "actual_outcome": {
         "status": "verified",
-        "answer": "At simulation time 500 ms, the latest applicable observation of parcel_01 was captured at 0 ms (age: 500 ms) at x=80 cm, y=350 cm in packing_station by robot_1 (sample ID: a0000000-0000-0000-0000-0000000000a1). Note: No intermediate position is interpolated at 500 ms."
+        "answer": "At simulation time 500 ms, the latest applicable observation of parcel_01 was captured at 0 ms (age: 500 ms) at x=80 cm, y=350 cm in warehouse by robot_1 (sample ID: a0000000-0000-0000-0000-0000000000a1). Note: No intermediate position is interpolated at 500 ms.",
+        "revisions_count": 1
       },
       "recorded_sample_ids": [
         "a0000000-0000-0000-0000-0000000000a1",
         "a0000000-0000-0000-0000-0000000000a2"
       ],
-      "recorded_fact_ids": [],
-      "revision_ids": [],
+      "recorded_fact_ids": [
+        "0c1ed204-45e0-492d-a88a-37b4f065f5d5",
+        "3a2b536a-1f15-4d83-ad95-c1a7240f58f3"
+      ],
+      "revision_ids": [
+        "6c1a7087-6a3c-47b0-9e5e-f6321f0c87f9"
+      ],
       "policy_applied": "simulation_world_rerun",
       "passed": true,
       "mode": "world_rerun",

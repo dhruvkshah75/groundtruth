@@ -44,9 +44,14 @@ class ExpectedQueryEvaluation(BaseModel):
     query_id: str
     prompt: str
     query_sim_time_ms: int
+    after_sample_sequence: int | None = None
     expected_status: str  # e.g. "verified", "last_seen", "uncertain", "blocked", "clear"
     expected_location: str | None = None
     expected_revisions_count: int | None = None
+    expected_active_facts: list[dict[str, Any]] = Field(default_factory=list)
+    unexpected_active_facts: list[dict[str, Any]] = Field(default_factory=list)
+    expected_revisions: list[dict[str, Any]] = Field(default_factory=list)
+    expected_evidence_sample_ids: list[UUID] = Field(default_factory=list)
     conflict_or_uncertainty_rationale: str
 
 
@@ -69,6 +74,54 @@ class ReplayBundle(BaseModel):
     expected_evaluations: list[ExpectedQueryEvaluation] = Field(default_factory=list)
     runtime_checkpoint: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_simulation_export(
+        cls,
+        bundle: Any,
+        *,
+        scenario_id: str = "exported_run",
+        static_map: StaticMapConfig | None = None,
+        audience_truth: AudienceTruthSection | None = None,
+        expected_evaluations: list[ExpectedQueryEvaluation] | None = None,
+    ) -> ReplayBundle:
+        """Construct a ReplayBundle from a SimulationExportBundle or raw dict."""
+        data = bundle.model_dump(mode="json") if hasattr(bundle, "model_dump") else dict(bundle)
+
+        if static_map is None:
+            static_map = StaticMapConfig(zones=[], routes=[])
+
+        if audience_truth is None:
+            # If scenario is present in export or checkpoint
+            scenario_data = (
+                data.get("scenario") or (data.get("runtime_checkpoint") or {}).get("scenario") or {}
+            )
+            if scenario_data:
+                scene = ScenarioDefinition.model_validate(scenario_data)
+            else:
+                from src.web.simulation_presets import warehouse_preset
+
+                scene = warehouse_preset().model_copy(deep=True)
+            audience_truth = AudienceTruthSection(scenario=scene)
+
+        return cls(
+            bundle_version=1,
+            schema_version=1,
+            scenario_id=data.get("scenario_id", scenario_id),
+            run_id=UUID(str(data["run_id"])),
+            epoch_utc=data["epoch_utc"],
+            config=SimulationConfig.model_validate(data["config"]) if data.get("config") else None,
+            patrol=[Point.model_validate(p) for p in data.get("patrol", [])],
+            presenter_inputs=data.get("presenter_inputs", []),
+            static_map=static_map,
+            audience_truth=audience_truth,
+            recorded_samples=[
+                ObservationSample.model_validate(s) for s in data.get("recorded_samples", [])
+            ],
+            expected_evaluations=expected_evaluations or [],
+            runtime_checkpoint=data.get("runtime_checkpoint"),
+            metadata=data.get("metadata", {}),
+        )
 
 
 class ScenarioEvaluationLog(BaseModel):

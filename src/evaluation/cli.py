@@ -171,7 +171,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.bundle is not None:
         LOGGER.info("Loading external bundle from %s", args.bundle)
         bundle_data = json.loads(args.bundle.read_text(encoding="utf-8"))
-        bundle = ReplayBundle.model_validate(bundle_data)
+        try:
+            bundle = ReplayBundle.model_validate(bundle_data)
+        except Exception:
+            bundle = ReplayBundle.from_simulation_export(bundle_data)
         validate_bundle(bundle)
 
         if mode in ("evidence_only", "both"):
