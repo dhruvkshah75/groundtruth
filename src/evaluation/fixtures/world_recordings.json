@@ -1,0 +1,3752 @@
+{
+  "scenario_01_map_clear_vs_cart_blocked": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 80.0,
+        "y_cm": 360.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 400.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 80.0,
+          "y_cm": 360.0
+        },
+        {
+          "x_cm": 80.0,
+          "y_cm": 450.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "move",
+          "at_ms": 500,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 100
+        },
+        {
+          "kind": "move",
+          "at_ms": 5000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 2000
+        },
+        {
+          "kind": "move",
+          "at_ms": 10000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 100.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 14000,
+          "sequence": 0,
+          "color_cast": "yellow",
+          "intensity": 0.8
+        },
+        {
+          "kind": "move",
+          "at_ms": 18000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 250.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 19000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 350.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 20000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 330.0,
+            "y_cm": 340.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 21000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 23000,
+          "sequence": 0,
+          "color_cast": "neutral",
+          "intensity": 1.0
+        },
+        {
+          "kind": "move",
+          "at_ms": 25000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 500.0,
+            "y_cm": 450.0
+          },
+          "duration_ms": 2000
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "10000000-0000-0000-0000-000000000011",
+        "run_id": "10000000-0000-0000-0000-000000000001",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 0,
+        "captured_at": "2026-11-05T12:00:00Z",
+        "sensor_id": "lidar_scan",
+        "observer_pose": {
+          "x_cm": 80.0,
+          "y_cm": 360.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 0,
+        "request": {
+          "capability": "lidar_scan",
+          "target": null,
+          "parameters": {
+            "direction": "front"
+          }
+        },
+        "result": {
+          "observation_id": "6efbf826-2525-4095-a423-aa8c458d766e",
+          "sensor": "lidar_scan",
+          "capability": "lidar_scan",
+          "observed_at": "2026-11-05T12:00:00Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "detected": true,
+            "nearest_distance_cm": 20.0,
+            "direction": "front",
+            "status": "blocked"
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 0,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "10000000-0000-0000-0000-000000000012",
+        "run_id": "10000000-0000-0000-0000-000000000001",
+        "sample_sequence": 2,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "lidar_scan",
+        "observer_pose": {
+          "x_cm": 80.0,
+          "y_cm": 360.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 1,
+        "request": {
+          "capability": "lidar_scan",
+          "target": null,
+          "parameters": {
+            "direction": "front"
+          }
+        },
+        "result": {
+          "observation_id": "dd9993b2-583c-4a0f-a73c-f45f8a440600",
+          "sensor": "lidar_scan",
+          "capability": "lidar_scan",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "detected": false,
+            "nearest_distance_cm": null,
+            "direction": "front",
+            "status": "clear"
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 1,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_02_visible_parcel_relocation": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "move",
+          "at_ms": 1500,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 100
+        },
+        {
+          "kind": "move",
+          "at_ms": 5000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 2000
+        },
+        {
+          "kind": "move",
+          "at_ms": 10000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 100.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 14000,
+          "sequence": 0,
+          "color_cast": "yellow",
+          "intensity": 0.8
+        },
+        {
+          "kind": "move",
+          "at_ms": 18000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 250.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 19000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 350.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 20000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 330.0,
+            "y_cm": 340.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 21000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 23000,
+          "sequence": 0,
+          "color_cast": "neutral",
+          "intensity": 1.0
+        },
+        {
+          "kind": "move",
+          "at_ms": 25000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 500.0,
+            "y_cm": 450.0
+          },
+          "duration_ms": 2000
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "20000000-0000-0000-0000-000000000021",
+        "run_id": "20000000-0000-0000-0000-000000000002",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 130.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 10,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "b141d540-c5cf-4202-9abb-c0a2aa1ba74f",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 10,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "20000000-0000-0000-0000-000000000022",
+        "run_id": "20000000-0000-0000-0000-000000000002",
+        "sample_sequence": 2,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 2000,
+        "captured_at": "2026-11-05T12:00:02Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 160.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 20,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "b86b0e2b-850f-4cbd-8dcb-bc7437b7625c",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:02Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 150.0,
+                  "y_cm": 390.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 20,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_03_parcel_moves_outside_view": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "move",
+          "at_ms": 2000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 700.0,
+            "y_cm": 500.0
+          },
+          "duration_ms": 100
+        },
+        {
+          "kind": "move",
+          "at_ms": 5000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 2000
+        },
+        {
+          "kind": "move",
+          "at_ms": 10000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 100.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 14000,
+          "sequence": 0,
+          "color_cast": "yellow",
+          "intensity": 0.8
+        },
+        {
+          "kind": "move",
+          "at_ms": 18000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 250.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 19000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 350.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 20000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 330.0,
+            "y_cm": 340.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 21000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 23000,
+          "sequence": 0,
+          "color_cast": "neutral",
+          "intensity": 1.0
+        },
+        {
+          "kind": "move",
+          "at_ms": 25000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 500.0,
+            "y_cm": 450.0
+          },
+          "duration_ms": 2000
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "30000000-0000-0000-0000-000000000031",
+        "run_id": "30000000-0000-0000-0000-000000000003",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 130.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 10,
+        "request": {
+          "capability": "camera_detect",
+          "target": null,
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "71ab9456-9244-4f92-af1c-440e8f08ddeb",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "cart_01",
+                "apparent_color": "yellow",
+                "position": {
+                  "x_cm": 180.0,
+                  "y_cm": 470.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 40.0,
+                  "height_cm": 40.0
+                }
+              },
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              },
+              {
+                "object_id": "parcel_02",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 220.0,
+                  "y_cm": 260.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 10,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "30000000-0000-0000-0000-000000000032",
+        "run_id": "30000000-0000-0000-0000-000000000003",
+        "sample_sequence": 2,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 3000,
+        "captured_at": "2026-11-05T12:00:03Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 190.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 30,
+        "request": {
+          "capability": "camera_detect",
+          "target": null,
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "694dafe8-1d96-4b30-8480-b43171ccec2f",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:03Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "cart_01",
+                "apparent_color": "yellow",
+                "position": {
+                  "x_cm": 180.0,
+                  "y_cm": 470.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 40.0,
+                  "height_cm": 40.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 30,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_08_sensor_outage_and_recovery": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "sensor_availability",
+          "at_ms": 2000,
+          "sequence": 0,
+          "capability": "camera_detect",
+          "available": false
+        },
+        {
+          "kind": "sensor_availability",
+          "at_ms": 3000,
+          "sequence": 0,
+          "capability": "camera_detect",
+          "available": true
+        },
+        {
+          "kind": "move",
+          "at_ms": 5000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 2000
+        },
+        {
+          "kind": "move",
+          "at_ms": 10000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 100.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 14000,
+          "sequence": 0,
+          "color_cast": "yellow",
+          "intensity": 0.8
+        },
+        {
+          "kind": "move",
+          "at_ms": 18000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 250.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 19000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 350.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 20000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 330.0,
+            "y_cm": 340.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 21000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 23000,
+          "sequence": 0,
+          "color_cast": "neutral",
+          "intensity": 1.0
+        },
+        {
+          "kind": "move",
+          "at_ms": 25000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 500.0,
+            "y_cm": 450.0
+          },
+          "duration_ms": 2000
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "80000000-0000-0000-0000-000000000081",
+        "run_id": "80000000-0000-0000-0000-000000000008",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 130.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 10,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "3f5ebbc1-173b-4385-8b19-2daa0cc39245",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 10,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "80000000-0000-0000-0000-000000000082",
+        "run_id": "80000000-0000-0000-0000-000000000008",
+        "sample_sequence": 2,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 2000,
+        "captured_at": "2026-11-05T12:00:02Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 160.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 20,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "capability": "camera_detect",
+          "reason": "sensor_unavailable",
+          "message": "Observation unavailable.",
+          "reported_at": "2026-11-05T12:00:02Z"
+        }
+      },
+      {
+        "sample_id": "80000000-0000-0000-0000-000000000083",
+        "run_id": "80000000-0000-0000-0000-000000000008",
+        "sample_sequence": 3,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 3000,
+        "captured_at": "2026-11-05T12:00:03Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 190.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 30,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "baa8d1ba-28fd-408e-9222-ce1b87c9b3f9",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:03Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 30,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_09_delayed_older_observation": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "move",
+          "at_ms": 1000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 100
+        },
+        {
+          "kind": "move",
+          "at_ms": 5000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 2000
+        },
+        {
+          "kind": "move",
+          "at_ms": 10000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 100.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 14000,
+          "sequence": 0,
+          "color_cast": "yellow",
+          "intensity": 0.8
+        },
+        {
+          "kind": "move",
+          "at_ms": 18000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 250.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 19000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 350.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 20000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 330.0,
+            "y_cm": 340.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 21000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 23000,
+          "sequence": 0,
+          "color_cast": "neutral",
+          "intensity": 1.0
+        },
+        {
+          "kind": "move",
+          "at_ms": 25000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 500.0,
+            "y_cm": 450.0
+          },
+          "duration_ms": 2000
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "90000000-0000-0000-0000-000000000091",
+        "run_id": "90000000-0000-0000-0000-000000000009",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 2000,
+        "captured_at": "2026-11-05T12:00:02Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 160.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 20,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "6e917e27-06b6-43c7-b8b7-593d2ffbcb5e",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:02Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 150.0,
+                  "y_cm": 390.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 20,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "90000000-0000-0000-0000-000000000092",
+        "run_id": "90000000-0000-0000-0000-000000000009",
+        "sample_sequence": 2,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 500,
+        "captured_at": "2026-11-05T12:00:00.500000Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 115.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 5,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "75277304-3706-4ec2-8b46-8e03a4ad417c",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:00.500000Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 5,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_10_hidden_movement_between_scans": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "move",
+          "at_ms": 400,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 100
+        },
+        {
+          "kind": "move",
+          "at_ms": 5000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 2000
+        },
+        {
+          "kind": "move",
+          "at_ms": 10000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 100.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 14000,
+          "sequence": 0,
+          "color_cast": "yellow",
+          "intensity": 0.8
+        },
+        {
+          "kind": "move",
+          "at_ms": 18000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 250.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 19000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 350.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 20000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 330.0,
+            "y_cm": 340.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 21000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 23000,
+          "sequence": 0,
+          "color_cast": "neutral",
+          "intensity": 1.0
+        },
+        {
+          "kind": "move",
+          "at_ms": 25000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 500.0,
+            "y_cm": 450.0
+          },
+          "duration_ms": 2000
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "a0000000-0000-0000-0000-0000000000a1",
+        "run_id": "a0000000-0000-0000-0000-00000000000a",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 0,
+        "captured_at": "2026-11-05T12:00:00Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 100.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 0,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "18f8750b-61df-4c85-9a27-3e834b137d66",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:00Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 0,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "a0000000-0000-0000-0000-0000000000a2",
+        "run_id": "a0000000-0000-0000-0000-00000000000a",
+        "sample_sequence": 2,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 130.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 10,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "d07066a1-6c07-4c92-bdbd-96099800011b",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 150.0,
+                  "y_cm": 390.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 10,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_04_shelf_occlusion_and_reacquisition": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 100.0,
+            "y_cm": 300.0,
+            "width_cm": 20.0,
+            "height_cm": 10.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "move",
+          "at_ms": 1500,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 110.0,
+            "y_cm": 350.0
+          },
+          "duration_ms": 100
+        },
+        {
+          "kind": "move",
+          "at_ms": 2500,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 80.0,
+            "y_cm": 350.0
+          },
+          "duration_ms": 100
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "40000000-0000-0000-0000-000000000041",
+        "run_id": "40000000-0000-0000-0000-000000000004",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 130.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 10,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "bf4a0189-1aef-412f-91f5-164beae88ccd",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 10,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "40000000-0000-0000-0000-000000000042",
+        "run_id": "40000000-0000-0000-0000-000000000004",
+        "sample_sequence": 2,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 2000,
+        "captured_at": "2026-11-05T12:00:02Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 160.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 20,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "capability": "camera_detect",
+          "reason": "target_not_visible",
+          "message": "Observation unavailable.",
+          "reported_at": "2026-11-05T12:00:02Z"
+        }
+      },
+      {
+        "sample_id": "40000000-0000-0000-0000-000000000043",
+        "run_id": "40000000-0000-0000-0000-000000000004",
+        "sample_sequence": 3,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 3000,
+        "captured_at": "2026-11-05T12:00:03Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 190.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 30,
+        "request": {
+          "capability": "camera_detect",
+          "target": "parcel_01",
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "6d752719-18fb-42be-b353-8ed44982fb06",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:03Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 30,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_05_two_similar_parcels": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "box_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "box_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": []
+    },
+    "samples": [
+      {
+        "sample_id": "50000000-0000-0000-0000-000000000051",
+        "run_id": "50000000-0000-0000-0000-000000000005",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 130.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 10,
+        "request": {
+          "capability": "camera_detect",
+          "target": null,
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "4eaab681-4c65-4d55-b44b-b59c48380892",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "box_01",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 80.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              },
+              {
+                "object_id": "box_02",
+                "apparent_color": "red",
+                "position": {
+                  "x_cm": 150.0,
+                  "y_cm": 350.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 12.0,
+                  "height_cm": 12.0
+                }
+              },
+              {
+                "object_id": "cart_01",
+                "apparent_color": "yellow",
+                "position": {
+                  "x_cm": 180.0,
+                  "y_cm": 470.0
+                },
+                "frame_of_reference": "warehouse_map",
+                "bounding_box": {
+                  "width_cm": 40.0,
+                  "height_cm": 40.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 10,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_06_color_perspectives": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 0.8,
+        "color_cast": "yellow"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "room_101",
+        "frame_of_reference": "robot_base"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "box_01",
+          "kind": "box",
+          "location": "room_101",
+          "footprint": {
+            "x_cm": 100.0,
+            "y_cm": 130.0,
+            "width_cm": 10.0,
+            "height_cm": 10.0
+          },
+          "intrinsic_color": "red",
+          "solid": true,
+          "opaque": false,
+          "visible": true
+        }
+      ],
+      "routes": [],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 130.0
+        }
+      ],
+      "events": []
+    },
+    "samples": [
+      {
+        "sample_id": "60000000-0000-0000-0000-000000000061",
+        "run_id": "60000000-0000-0000-0000-000000000006",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 0,
+        "captured_at": "2026-11-05T12:00:00Z",
+        "sensor_id": "camera_detect",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 100.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "room_101",
+          "frame_of_reference": "robot_base"
+        },
+        "world_version": 0,
+        "request": {
+          "capability": "camera_detect",
+          "target": null,
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "094725e2-8290-483f-b50f-dd6370372f72",
+          "sensor": "camera_detect",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:00Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "box_01",
+                "apparent_color": "brown",
+                "position": {
+                  "x_cm": 100.0,
+                  "y_cm": 130.0
+                },
+                "frame_of_reference": "robot_base",
+                "bounding_box": {
+                  "width_cm": 10.0,
+                  "height_cm": 10.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "room_101",
+            "frame_of_reference": "robot_base",
+            "world_version": 0,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "yellow"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scenario_07_wrong_context_sample": {
+    "scenario": {
+      "scenario_id": "warehouse_inspection_v1",
+      "config": {
+        "step_ms": 100,
+        "sensor_interval_ms": 500,
+        "duration_ms": 30000,
+        "playback_rate": 0.5,
+        "camera_fov_deg": 90.0,
+        "camera_range_cm": 350.0,
+        "lidar_range_cm": 200.0,
+        "robot_speed_cm_s": 30.0,
+        "stopping_distance_cm": 50.0,
+        "freshness_ms": 1000
+      },
+      "bounds": {
+        "width_cm": 800.0,
+        "height_cm": 600.0
+      },
+      "initial_light": {
+        "intensity": 1.0,
+        "color_cast": "neutral"
+      },
+      "sensor_availability": {
+        "camera_detect": true,
+        "lidar_scan": true
+      },
+      "robot_pose": {
+        "x_cm": 100.0,
+        "y_cm": 100.0,
+        "robot_id": "robot_1",
+        "direction": "north",
+        "location": "warehouse",
+        "frame_of_reference": "warehouse_map"
+      },
+      "robot_radius_cm": 15.0,
+      "entities": [
+        {
+          "entity_id": "parcel_01",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_02",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 220.0,
+            "y_cm": 260.0,
+            "width_cm": 12.0,
+            "height_cm": 12.0
+          },
+          "intrinsic_color": "red",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "parcel_03",
+          "kind": "parcel",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 600.0,
+            "y_cm": 300.0,
+            "width_cm": 16.0,
+            "height_cm": 16.0
+          },
+          "intrinsic_color": "green",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "packing_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 80.0,
+            "y_cm": 350.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "inspection_station",
+          "kind": "station",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 150.0,
+            "y_cm": 390.0,
+            "width_cm": 60.0,
+            "height_cm": 60.0
+          },
+          "intrinsic_color": "white",
+          "solid": false,
+          "opaque": false,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_01",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 300.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "shelf_02",
+          "kind": "shelf",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 500.0,
+            "y_cm": 300.0,
+            "width_cm": 30.0,
+            "height_cm": 160.0
+          },
+          "intrinsic_color": "gray",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        },
+        {
+          "entity_id": "cart_01",
+          "kind": "cart",
+          "location": "warehouse",
+          "footprint": {
+            "x_cm": 180.0,
+            "y_cm": 470.0,
+            "width_cm": 40.0,
+            "height_cm": 40.0
+          },
+          "intrinsic_color": "yellow",
+          "solid": true,
+          "opaque": true,
+          "visible": true
+        }
+      ],
+      "routes": [
+        {
+          "route_id": "route_A",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 100.0
+          },
+          "end": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        },
+        {
+          "route_id": "route_B",
+          "start": {
+            "x_cm": 100.0,
+            "y_cm": 450.0
+          },
+          "end": {
+            "x_cm": 650.0,
+            "y_cm": 450.0
+          },
+          "location": "warehouse"
+        }
+      ],
+      "patrol": [
+        {
+          "x_cm": 100.0,
+          "y_cm": 100.0
+        },
+        {
+          "x_cm": 100.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 450.0
+        },
+        {
+          "x_cm": 650.0,
+          "y_cm": 100.0
+        }
+      ],
+      "events": [
+        {
+          "kind": "move",
+          "at_ms": 5000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 150.0,
+            "y_cm": 390.0
+          },
+          "duration_ms": 2000
+        },
+        {
+          "kind": "move",
+          "at_ms": 10000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 100.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 14000,
+          "sequence": 0,
+          "color_cast": "yellow",
+          "intensity": 0.8
+        },
+        {
+          "kind": "move",
+          "at_ms": 18000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 250.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 19000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 350.0,
+            "y_cm": 420.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 20000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 330.0,
+            "y_cm": 340.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "move",
+          "at_ms": 21000,
+          "sequence": 0,
+          "entity_id": "cart_01",
+          "to": {
+            "x_cm": 180.0,
+            "y_cm": 470.0
+          },
+          "duration_ms": 1000
+        },
+        {
+          "kind": "lighting",
+          "at_ms": 23000,
+          "sequence": 0,
+          "color_cast": "neutral",
+          "intensity": 1.0
+        },
+        {
+          "kind": "move",
+          "at_ms": 25000,
+          "sequence": 0,
+          "entity_id": "parcel_01",
+          "to": {
+            "x_cm": 500.0,
+            "y_cm": 450.0
+          },
+          "duration_ms": 2000
+        }
+      ]
+    },
+    "samples": [
+      {
+        "sample_id": "bcf38b2f-7375-50d0-80d9-c2a6b88e0cf4",
+        "run_id": "70000000-0000-0000-0000-000000000007",
+        "sample_sequence": 0,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 0,
+        "captured_at": "2026-11-05T12:00:00Z",
+        "sensor_id": "robot_pose",
+        "observer_pose": {
+          "x_cm": 100.0,
+          "y_cm": 100.0,
+          "robot_id": "robot_1",
+          "direction": "north",
+          "location": "warehouse",
+          "frame_of_reference": "warehouse_map"
+        },
+        "world_version": 0,
+        "request": {
+          "capability": "robot_pose",
+          "target": null,
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "7d133726-dd44-4d15-a7d0-77f0efcc7b3d",
+          "sensor": "robot_pose",
+          "capability": "robot_pose",
+          "observed_at": "2026-11-05T12:00:00Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "x_cm": 100.0,
+            "y_cm": 100.0,
+            "robot_id": "robot_1",
+            "direction": "north"
+          },
+          "context": {
+            "location": "warehouse",
+            "frame_of_reference": "warehouse_map",
+            "world_version": 0,
+            "observer": "robot_1",
+            "extra_context": {
+              "lighting": "neutral"
+            }
+          }
+        }
+      },
+      {
+        "sample_id": "70000000-0000-0000-0000-000000000071",
+        "run_id": "70000000-0000-0000-0000-000000000007",
+        "sample_sequence": 1,
+        "epoch_utc": "2026-11-05T12:00:00Z",
+        "sim_time_ms": 1000,
+        "captured_at": "2026-11-05T12:00:01Z",
+        "sensor_id": "camera_detect_01",
+        "observer_pose": {
+          "x_cm": 999.0,
+          "y_cm": 999.0,
+          "robot_id": "robot_9",
+          "direction": "south",
+          "location": "room_999",
+          "frame_of_reference": "external_frame"
+        },
+        "world_version": 1,
+        "request": {
+          "capability": "camera_detect",
+          "target": null,
+          "parameters": {}
+        },
+        "result": {
+          "observation_id": "70000000-0000-0000-0000-000000000071",
+          "sensor": "camera_detect_01",
+          "capability": "camera_detect",
+          "observed_at": "2026-11-05T12:00:01Z",
+          "confidence_score": 1.0,
+          "measurements": {
+            "objects": [
+              {
+                "object_id": "parcel_01",
+                "apparent_color": "cardboard_brown",
+                "position": {
+                  "x_cm": 999.0,
+                  "y_cm": 999.0
+                },
+                "frame_of_reference": "external_frame",
+                "bounding_box": {
+                  "width_cm": 30.0,
+                  "height_cm": 30.0
+                }
+              }
+            ]
+          },
+          "context": {
+            "location": "room_999",
+            "frame_of_reference": "external_frame",
+            "world_version": 1,
+            "observer": "robot_9",
+            "extra_context": {}
+          }
+        }
+      }
+    ],
+    "injected_sample_ids": [
+      "70000000-0000-0000-0000-000000000071"
+    ]
+  }
+}

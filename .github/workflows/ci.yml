@@ -31,6 +31,12 @@ jobs:
       - name: Run backend tests
         run: uv run --locked pytest -q
 
+      - name: Verify replay evaluation reports
+        run: |
+          output_dir=$(mktemp -d)
+          uv run --locked python -m src.evaluation.cli --mode both --output-dir "$output_dir"
+          diff -ru artifacts/evaluation "$output_dir"
+
       - name: Check Python formatting
         run: uv run --locked ruff format --check .
 

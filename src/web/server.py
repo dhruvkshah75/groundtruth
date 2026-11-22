@@ -313,7 +313,11 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = SessionStore(Path("data/chat-sessions.sqlite"))
-    server = create_server(args.host, args.port, service=AgentService(store=store))
+    svc = AgentService(store=store)
+    from src.evaluation.exporter import DefaultSimulationExporter
+
+    svc._exporter = DefaultSimulationExporter(session_lookup=svc.get_session)
+    server = create_server(args.host, args.port, service=svc)
     print(f"GroundTruth app server listening at http://{args.host}:{args.port}")
     try:
         server.serve_forever()
