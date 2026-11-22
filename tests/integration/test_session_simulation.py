@@ -837,6 +837,16 @@ def test_patrol_decision_checkpoint_roundtrip_older_compatibility_and_reset(cloc
             memory=session.agent.memory,
         )
 
+    corrupted_time = deepcopy(chk)
+    corrupted_time["latest_stop_decision"]["sensor_sim_time_ms"] = None
+    with pytest.raises(ValueError, match="lacks sensor_sim_time_ms"):
+        SimulationRuntime.restore(
+            corrupted_time,
+            ingest=session.runtime._ingest,
+            now=lambda: clock[0],
+            memory=session.agent.memory,
+        )
+
     # 8. Reset clears both decisions
     service.control_simulation(key, SimulationControl(action="reset"))
     state_reset = session.live_simulation_state()

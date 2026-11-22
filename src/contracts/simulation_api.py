@@ -168,6 +168,10 @@ class PatrolDecisionSummary(Contract):
             raise ValueError("sim_time_ms and decision_sim_time_ms must match")
         if self.sample_id != self.sensor_sample_id:
             raise ValueError("sample_id and sensor_sample_id must match")
+        if (self.sample_id is None) != (self.sensor_sim_time_ms is None):
+            raise ValueError(
+                "sample_id and sensor_sim_time_ms must be provided together or both omitted"
+            )
         if self.sensor_sim_time_ms is not None and self.sensor_sim_time_ms > self.sim_time_ms:
             raise ValueError("sensor_sim_time_ms cannot exceed decision sim_time_ms")
         return self

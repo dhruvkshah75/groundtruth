@@ -306,7 +306,16 @@ class SimulationRuntime:
 
         def _validate_decision_citation(dec: PatrolDecisionRecord) -> None:
             if dec.sensor_sample_id is None:
+                if dec.sensor_sim_time_ms is not None:
+                    raise ValueError(
+                        f"Decision has sensor_sim_time_ms {dec.sensor_sim_time_ms} "
+                        "without sample_id"
+                    )
                 return
+            if dec.sensor_sim_time_ms is None:
+                raise ValueError(
+                    f"Decision cites sample {dec.sensor_sample_id} but lacks sensor_sim_time_ms"
+                )
             sample = memory.get_observation_sample(dec.sensor_sample_id)
             if sample is None:
                 raise ValueError(
@@ -326,7 +335,7 @@ class SimulationRuntime:
                     f"Decision cites future sample {dec.sensor_sample_id} "
                     f"with capture time {sample.sim_time_ms} > decision time {dec.sim_time_ms}"
                 )
-            if dec.sensor_sim_time_ms is not None and sample.sim_time_ms != dec.sensor_sim_time_ms:
+            if dec.sensor_sim_time_ms != sample.sim_time_ms:
                 raise ValueError(
                     f"Decision sensor timestamp {dec.sensor_sim_time_ms} "
                     f"does not match sample timestamp {sample.sim_time_ms}"
@@ -494,8 +503,12 @@ class SimulationRuntime:
                     or "Movement rejected by simulation engine.",
                 )
                 self._record_patrol_decision(stall_record)
+            else:
+                self._in_stop_episode = False
         else:
             self.controller.confirm_idle_tick(self._pose)
+            if self.controller.state == "complete":
+                self._in_stop_episode = False
         if after.status.sim_time_ms % after.config.sensor_interval_ms == 0:
             self._lidar = self._sample("lidar_scan")
             self._sample("camera_detect")
@@ -557,8 +570,6 @@ class SimulationRuntime:
                 and record.patrol_state in ("blocked", "stalled")
             ):
                 self._latest_stop_decision_record = record
-        else:
-            self._in_stop_episode = False
 
     @property
     def current_decision_record(self) -> PatrolDecisionRecord | None:
