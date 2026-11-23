@@ -9,10 +9,12 @@ producing identical logical facts and revisions as simulated sensor evidence.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from src.contracts.models import FactQuery, ObservationRequest
 from src.contracts.simulation import (
+    ObservationSample,
     TemporalObservationQuery,
 )
 from src.declarative.active_graph import GraphSyncedRepository
@@ -21,6 +23,41 @@ from src.procedural.temporal_belief_ingestion import TemporalBeliefIngestionServ
 from src.sensorimotor.robotics_adapter import RecordedRoboticsSensorAdapter
 
 FIXTURE_PATH = Path("tests/fixtures/phase_two/robotics_recording.json")
+
+
+def test_recorded_and_simulated_sightings_produce_the_same_station_revision() -> None:
+    adapter = RecordedRoboticsSensorAdapter.from_file(FIXTURE_PATH)
+    recorded = [
+        sample for sample in adapter.play_all()[:3] if sample.request.capability == "camera_detect"
+    ]
+    fixtures = json.loads(FIXTURE_PATH.with_name("contracts.json").read_text())["valid"]
+    simulated = [ObservationSample.model_validate(sample) for sample in fixtures["samples"][:2]]
+
+    def station_history(samples):
+        with MemoryRepository(":memory:") as repo:
+            service = TemporalBeliefIngestionService(repo, repo)
+            history = []
+            for sample in samples:
+                result = service.ingest_sample(sample)
+                assert result.status == "applied"
+                (fact,) = result.facts_created
+                assert repo.get_observation_sample(sample.sample_id) is not None
+                history.append((fact.subject, fact.predicate, fact.object, sample.sim_time_ms))
+            (active,) = repo.query_facts(FactQuery(subject="parcel_01", active_only=True))
+            chain = repo.get_audit_chain(active.fact_id)
+            return history, [event.policy_rule for event in chain.events]
+
+    assert (
+        station_history(recorded)
+        == station_history(simulated)
+        == (
+            [
+                ("parcel_01", "located_at", "packing_station", 0),
+                ("parcel_01", "located_at", "inspection_station", 7000),
+            ],
+            ["camera_observation_revision"],
+        )
+    )
 
 
 def test_robotics_telemetry_ingestion_and_belief_revisions() -> None:

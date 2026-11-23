@@ -1,8 +1,22 @@
 # P2-13 Recorded Robotics Sensor Adapter
 
+[WD-08 issue #37](https://github.com/dhruvkshah75/groundtruth/issues/37) ·
+[Implementation PR #54](https://github.com/dhruvkshah75/groundtruth/pull/54)
+
 `RecordedRoboticsSensorAdapter` in `src/sensorimotor/robotics_adapter.py` defines the official integration boundary between external robotics platforms (such as ROS 2 bag files, mobile robot telemetry logs, and edge camera/LiDAR loggers) and the GroundTruth epistemic verification system.
 
 It translates external telemetry messages into typed, validated [P2-01 `ObservationSample`](Shared_Simulation_Contracts.md) envelopes without requiring live robotics hardware connectivity or access to the headless simulator engine.
+
+The checked-in [recording](../../tests/fixtures/phase_two/robotics_recording.json)
+contains synthetic external-format telemetry. It exercises the shared contracts
+from [#21](https://github.com/dhruvkshah75/groundtruth/issues/21), the observation
+shape used by warehouse sensors in [#23](https://github.com/dhruvkshah75/groundtruth/issues/23),
+the SQLite ledger from [#24](https://github.com/dhruvkshah75/groundtruth/issues/24),
+and the belief ingestion policy from [#27](https://github.com/dhruvkshah75/groundtruth/issues/27).
+The adapter is independent of the warehouse scheduler and release presentation.
+Those interfaces landed in `27afc24` (contracts), `6280348` (sensors),
+`2581404` (ledger), and `9add3df` (ingestion). The station comparison uses
+the same ingestion policy as the simulator and needs no database migration.
 
 ---
 
@@ -134,12 +148,27 @@ To ensure external recordings can be reliably re-ingested or evaluated across mu
   ```
 - Storing or ingesting the same recording multiple times into `MemoryRepository` produces identical IDs and facts, ensuring complete idempotence.
 
+Keep the original recording for traceability. Within that recording, the sample
+sequence identifies the upstream row and the UUID mapping links it to persisted
+evidence. Targeted camera requests derive distinct IDs from the original IDs.
+The ledger records storage time separately from the source capture timestamp.
+
+Playback follows strictly increasing acquisition sequence. A later row can
+carry an earlier capture time, which is preserved as historical evidence.
+`observe()` reads the current row, `play_next()` consumes it and `reset()`
+rewinds. `play_all()` translates the full recording without moving the cursor.
+Exhausted step reads raise `IndexError`. Malformed payloads or unknown frames
+fail explicitly and a failed step leaves the cursor at that record. A file's
+`epoch_utc` must include a timezone offset unless the caller supplies explicit
+clock calibration.
+
 ---
 
 ## 6. End-to-End Ingestion Example
 
+Run from the repository root with `uv run --locked python`.
+
 ```python
-from pathlib import Path
 from src.declarative.memory_repository import MemoryRepository
 from src.declarative.active_graph import GraphSyncedRepository
 from src.procedural.temporal_belief_ingestion import TemporalBeliefIngestionService
@@ -176,9 +205,19 @@ and `ruff check .` and `ruff format --check .` passed using the existing project
 environment. The adapter unit and ingestion tests cover playback, malformed
 payloads, frame validation and replay of targeted camera views.
 
+The WD-08 closeout ran the example above and verified all nine records through
+the real ledger and ingestion service. All 26 adapter tests passed with
+`uv run --locked pytest -q tests/{unit,integration}/sensorimotor/test_robotics_adapter*.py`.
+They also compare the station facts and revision rule from the synthetic
+recording with equivalent simulated sightings processed by the same service.
+
 ## 7. External Robotics Team Handoff Checklist
 
 Before handing off telemetry datasets to GroundTruth:
+- [ ] **Source samples and rates:** Send representative logs for each supported
+  sensor along with its sampling rate and any clock offset or drift calibration.
+- [ ] **Transport:** Specify export format, stream ordering, retry behavior,
+  packet loss indications, and how sensor failures are reported.
 - [ ] **Recording ID:** Ensure every dataset export assigns a stable `recording_id`.
 - [ ] **Message IDs:** Ensure `message_id` is unique and monotonically ordered by `sequence`.
 - [ ] **Timestamp Validity:** Ensure timestamps are timezone-aware UTC or non-negative relative milliseconds aligned to the agreed `epoch_utc`.
