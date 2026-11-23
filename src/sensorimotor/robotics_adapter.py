@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_DNS, UUID, uuid5
@@ -62,6 +62,8 @@ class RecordedRoboticsSensorAdapter(SensorSource):
         auto_advance: bool = True,
     ) -> None:
         self._records = list(records)
+        if any(a.sequence >= b.sequence for a, b in zip(self._records, self._records[1:])):
+            raise CorruptedRecordError("Recording sequences must increase in playback order")
         self._clock_cal = clock_calibration
         self._tf_cal = transform_calibration or TransformCalibration()
         self._cursor = 0
@@ -127,10 +129,7 @@ class RecordedRoboticsSensorAdapter(SensorSource):
             records_raw = data.get("records", [])
             epoch_str = data.get("epoch_utc")
             if clock_calibration is None and epoch_str:
-                epoch_dt = datetime.fromisoformat(epoch_str)
-                if epoch_dt.tzinfo is None:
-                    epoch_dt = epoch_dt.replace(tzinfo=UTC)
-                clock_calibration = ClockCalibration(epoch_utc=epoch_dt)
+                clock_calibration = ClockCalibration(epoch_utc=datetime.fromisoformat(epoch_str))
         elif isinstance(data, list):
             records_raw = data
         else:
@@ -494,8 +493,9 @@ class RecordedRoboticsSensorAdapter(SensorSource):
         if not self.has_next():
             raise IndexError("Recorded robotics stream exhausted")
         record = self._records[self._cursor]
+        sample = self.translate_record(record)
         self._cursor += 1
-        return self.translate_record(record)
+        return sample
 
     def play_all(self) -> list[ObservationSample]:
         """Translate and return all records in order."""

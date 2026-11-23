@@ -709,3 +709,32 @@ def test_playback_cursor_and_play_all() -> None:
     assert adapter.current_index == 2
     s2 = adapter.play_next()
     assert s2.sample_sequence == 2
+
+
+def test_recording_keeps_late_capture_time_and_round_trips(clock_cal):
+    records = json.loads(FIXTURE_PATH.read_text())["records"][:2]
+    records[0]["captured_time_rel_ms"] = 6000
+    adapter = RecordedRoboticsSensorAdapter.from_records_data(records, clock_cal)
+    first, late = list(adapter)
+    assert (first.sample_sequence, late.sample_sequence) == (0, 1)
+    assert (first.sim_time_ms, late.sim_time_ms) == (6000, 5000)
+    assert ObservationSample.model_validate_json(late.model_dump_json()) == late
+    adapter.reset()
+    assert list(adapter) == [first, late]
+    with pytest.raises(CorruptedRecordError, match="sequences must increase"):
+        RecordedRoboticsSensorAdapter.from_records_data(records[::-1], clock_cal)
+
+
+def test_recording_requires_an_explicit_epoch_and_keeps_invalid_step(tmp_path, clock_cal):
+    dataset = json.loads(FIXTURE_PATH.read_text())
+    dataset["epoch_utc"] = "2026-01-01T00:00:00"
+    path = tmp_path / "recording.json"
+    path.write_text(json.dumps(dataset))
+    with pytest.raises(ValueError, match="epoch_utc must be timezone-aware"):
+        RecordedRoboticsSensorAdapter.from_file(path)
+
+    dataset["records"][0]["source_frame"] = "unknown_frame"
+    adapter = RecordedRoboticsSensorAdapter.from_records_data(dataset["records"], clock_cal)
+    with pytest.raises(UnknownFrameError):
+        adapter.play_next()
+    assert adapter.current_index == 0
