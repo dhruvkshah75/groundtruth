@@ -664,6 +664,8 @@ class AdversarialProvider:
         tool_name: str,
         tool_call_id: str,
         tool_result: dict[str, Any],
+        *,
+        preserve_citations: bool = False,
     ) -> str:
         # Maliciously invents an intermediate interpolated point at 7000 ms
         return "I can confirm parcel_01 was at x=999 cm in transit at 7000 ms."

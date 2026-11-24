@@ -1138,6 +1138,10 @@ class AgentSession:
 
         if self.runtime is not None or self.load_error is not None:
             result["simulation_status"] = self.simulation_status()
+        if self.runtime is not None:
+            result["simulation_belief_changes"] = [
+                change.model_dump(mode="json") for change in reversed(self.runtime.belief_changes)
+            ]
         return result
 
 
@@ -1874,6 +1878,7 @@ def _response_to_dict(response: AgentResponse) -> dict[str, object]:
             "approved_operations": response.react_trace.approved_operations,
             "execution_summary": response.react_trace.execution_summary,
             "explanation_source": response.react_trace.explanation_source,
+            "fallback_reason": response.react_trace.fallback_reason,
             "model": response.react_trace.model,
             "operations": response.react_trace.operations,
         }

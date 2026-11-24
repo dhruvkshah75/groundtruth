@@ -21,6 +21,7 @@ const clock = page.locator(".sim-clock strong");
 const robot = page.locator("[data-robot]");
 const stateUrl = "**/api/simulation/state";
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const uuidPattern = /[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i;
 const api = (path, options) => context.request.fetch(`${base}/api/simulation/${path}`, {
   headers: { "X-Session-ID": session }, ...options,
 });
@@ -131,7 +132,7 @@ try {
   assert.equal(await questions.getByText("sample-001").count(), 0);
   assert.equal(await questions.locator(".answer-text table tbody tr").first().innerText().then((text) => text.includes("robot 1")), true);
   assert.ok((await questions.locator(".answer-text").innerText()).length > 0);
-  assert.match(await questions.locator(".sim-answer-meta").innerText(), /Captured at 0\.000 s · Run/);
+  assert.equal(await questions.locator(".sim-answer-meta").innerText(), "Captured at 0.000 s");
   assert.equal(await questions.locator(".answer-text").innerText().then((text) => text.includes("**")), false);
   const questionInput = questions.getByLabel("Your question");
   const oneLineHeight = (await questionInput.boundingBox()).height;
@@ -572,6 +573,11 @@ try {
   await graph.locator(".belief-detail-title .belief-state.earlier_station").getByText("Earlier station", { exact: true }).waitFor();
   await finalEvidence.getByRole("button", { name: "Focus updated belief" }).last().click();
   await graph.getByText("Active fact", { exact: true }).waitFor();
+  await graph.getByRole("button", { name: "Recent changes" }).click();
+  const recent = page.getByRole("dialog", { name: "Recent changes" });
+  await recent.getByText("parcel 01 located at inspection station", { exact: true }).waitFor();
+  await recent.getByText("route A status is clear", { exact: true }).first().waitFor();
+  await recent.getByRole("button", { name: "Close recent changes" }).click();
   const timelineCount = await finalEvidence.locator(".sim-timeline-list > li").count();
   await graph.getByRole("button", { name: "Fact list", exact: true }).click();
   const routeFact = page.getByRole("dialog", { name: "Stored belief facts" }).getByRole("button")
@@ -600,6 +606,7 @@ try {
   const traceName = page.locator(".react-trace-tool-name").last();
   await traceName.waitFor();
   assert.equal(await traceName.innerText(), "object location query");
+  assert.doesNotMatch(await page.locator(".conversation-turn .assistant-message").last().innerText(), uuidPattern);
   assert.equal(await traceName.evaluate((element) => getComputedStyle(element).fontFamily),
     await traceName.evaluate((element) => getComputedStyle(element.parentElement).fontFamily));
 
@@ -646,7 +653,7 @@ try {
   const capturedMs = slow.answer.simulation_evidence.sim_time_ms;
   await eventually(async () => Number((await clock.innerText()).split(" ")[0]) * 1000 > capturedMs + 200);
   slow.deliver.resolve();
-  await questions.getByText(`Captured at ${(capturedMs / 1000).toFixed(3)} s · Run ${fresh.run_id}`).waitFor();
+  await questions.getByText(`Captured at ${(capturedMs / 1000).toFixed(3)} s`, { exact: true }).waitFor();
   assert.equal(await questions.locator(".answer-text").getByText(/735/).count(), 0);
   const old = await holdAsk("When was parcel_01 last seen?");
   assert.equal(old.answer.simulation_evidence.run_id, fresh.run_id);
@@ -764,7 +771,9 @@ try {
       assert.equal(answer.simulation_evidence.sim_time_ms, 33_000);
       assert.deepEqual(answer.sensor_telemetry.map((sample) => sample.sample_id), [sampleId]);
       assert.ok(answer.answer.includes(sampleId));
-      await questions.locator(".answer-text").first().getByText(sampleId, { exact: false }).waitFor();
+      const turn = questions.locator(".conversation-turn").first();
+      await turn.getByText(prompt.replaceAll("_", " "), { exact: true }).waitFor();
+      assert.doesNotMatch(await turn.locator(".assistant-message").innerText(), uuidPattern);
     }
     return [
       atA.current_sighting.sample_id,

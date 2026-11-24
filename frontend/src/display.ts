@@ -1,6 +1,21 @@
+const uuid = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
+const sampleId = "(?:(?:camera|lidar)\\s+)?sample\\s+id:\\s*" + uuid;
+const sampleCitation = new RegExp("\\s*\\(\\s*" + sampleId + "\\s*\\)", "gi");
+const sampleField = new RegExp("(?:\\(\\s*" + sampleId + ",\\s*|,\\s*" + sampleId + ")", "gi");
+const inlineSampleId = new RegExp("(sample)(?:\\s+id:)?\\s+" + uuid + "(?:,\\s*)?", "gi");
+const internalUuid = new RegExp("[ \\t]?" + uuid, "gi");
+
+export function omitInternalIds(value: string): string {
+  return value
+    .replace(sampleCitation, "")
+    .replace(sampleField, (field) => field.startsWith("(") ? "(" : "")
+    .replace(inlineSampleId, (_, label: string) => label + " ")
+    .replace(internalUuid, "");
+}
+
 /** Format identifiers for display without changing the underlying value. */
 export function displayText(value: string): string {
-  return value.replaceAll("_", " ")
+  return omitInternalIds(value.replaceAll("_", " "))
     .replace(/nearest obstacle: None cm/g, "no obstacle in sensor range")
     .replace(/\b(\d+(?:\.\d+)?)\s*ms\b/g, (_, ms: string) => `${(Number(ms) / 1000).toFixed(3)} s`);
 }
@@ -19,7 +34,7 @@ export function isTimestampField(key: string): boolean {
 }
 
 export function isInternalIdField(key: string): boolean {
-  return /^(?:observation_id|fact_id|event_id|root_fact_id|tool_call_id|evidence_ids|input_fact_ids|output_fact_ids|superseded_by)$/i.test(key);
+  return /^(?:observation_id|sample_id|run_id|fact_id|event_id|root_fact_id|tool_call_id|evidence_ids|input_fact_ids|output_fact_ids|superseded_by)$/i.test(key);
 }
 
 export function fieldLabel(key: string): string {

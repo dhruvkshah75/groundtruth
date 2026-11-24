@@ -313,7 +313,7 @@ function AccessibleFactList({
   );
 }
 
-function RecentChanges({ events, open, onClose }: { events: AuditEvent[]; open: boolean; onClose: () => void }) {
+function RecentChanges({ state, open, onClose }: { state: AppState | null; open: boolean; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -321,10 +321,28 @@ function RecentChanges({ events, open, onClose }: { events: AuditEvent[]; open: 
     if (open && !dialog.open) dialog.showModal();
     if (!open && dialog.open) dialog.close();
   }, [open]);
-  const recent = [...events].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const changes = state?.simulation_belief_changes ?? [];
+  const facts = new Map(state?.ledger.map((fact) => [fact.fact_id, fact]));
+  const revisions = new Set(changes.map((change) => change.revision_event_id));
+  const recent = changes.flatMap((change) => {
+    const fact = facts.get(change.fact_id);
+    if (!fact) return [];
+    return [{
+      id: change.fact_id,
+      summary: displayText(fact.subject + " " + fact.predicate + " " + fact.object),
+      detail: (change.revision_event_id ? "Updated belief" : "New belief") + " · " + (change.sim_time_ms / 1000).toFixed(3) + " s",
+    }];
+  }).concat((state?.audit_events ?? [])
+    .filter((event) => !revisions.has(event.event_id))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((event) => ({
+      id: event.event_id,
+      summary: displayText(event.reason),
+      detail: displayText(event.policy_rule) + " · " + formatTime(event.created_at),
+    })));
   return <dialog ref={dialogRef} className="belief-dialog belief-recent-dialog" aria-labelledby="recent-changes-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <header><div><h2 id="recent-changes-title">Recent changes</h2><p>Recorded belief revisions and audit events.</p></div><button type="button" onClick={onClose} aria-label="Close recent changes"><X size={18} /></button></header>
-    <div className="belief-recent-body">{recent.length ? <ol className="belief-change-list">{recent.map((event) => <li key={event.event_id}><i aria-hidden="true" /><div><p>{displayText(event.reason)}</p><small>{displayText(event.policy_rule)} · {formatTime(event.created_at)}</small></div></li>)}</ol> : <p className="belief-dialog-empty">No belief revisions have been recorded.</p>}</div>
+    <header><div><h2 id="recent-changes-title">Recent changes</h2><p>New beliefs, revisions, and audit events.</p></div><button type="button" onClick={onClose} aria-label="Close recent changes"><X size={18} /></button></header>
+    <div className="belief-recent-body">{recent.length ? <ol className="belief-change-list">{recent.map(({ id, summary, detail }) => <li key={id}><i aria-hidden="true" /><div><p>{summary}</p><small>{detail}</small></div></li>)}</ol> : <p className="belief-dialog-empty">No belief changes have been recorded.</p>}</div>
   </dialog>;
 }
 
@@ -626,7 +644,7 @@ export default function BeliefGraphPage({ embedded = false, sessionId, workspace
       />
 
       {!embedded && detailsOpen && <button className="belief-mobile-backdrop" type="button" aria-label="Close open panel" onClick={() => setDetailsOpen(false)} />}
-      <RecentChanges events={state?.audit_events ?? []} open={recentOpen} onClose={() => setRecentOpen(false)} />
+      <RecentChanges state={state} open={recentOpen} onClose={() => setRecentOpen(false)} />
       <AccessibleFactList facts={facts} selectedFactId={selectedFactId} open={factListOpen} onSelect={selectFact} onClose={() => setFactListOpen(false)} />
     </div>
   );

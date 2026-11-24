@@ -1,5 +1,7 @@
 """Warehouse observations register only identities the camera has detected."""
 
+import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -9,9 +11,69 @@ from src.contracts.simulation_api import SimulationEvidenceRequest, SimulationRu
 from src.declarative.memory_repository import MemoryRepository
 from src.procedural.intent_provider import IntentProviderUnavailableError
 from src.providers import ProviderConfig
+from src.providers.groq_provider import RealGroqClient
 from src.sensorimotor.world_models import SimulatedObject
 from src.web.service import AgentService, StaleRequestError
 from src.web.simulation_presets import warehouse_preset
+
+
+@pytest.mark.parametrize(
+    ("model_reply", "fallback_reason"),
+    [
+        (None, None),
+        (
+            "The parcel was seen at the packing station.",
+            "The model changed the required evidence wording.",
+        ),
+        ("", "The model returned no answer text."),
+        (RuntimeError("upstream timeout"), "The model request for the final answer failed."),
+    ],
+)
+def test_live_parcel_answer_retains_exact_camera_citation(
+    monkeypatch, model_reply, fallback_reason
+):
+    question = "Where is parcel 01 now?"
+    calls = []
+
+    def complete(_client, *, messages, **kwargs):
+        calls.append(messages)
+        assert messages[1]["content"] == question
+        if kwargs.get("tools"):
+            tool = SimpleNamespace(
+                id="call_parcel",
+                function=SimpleNamespace(
+                    name="object_location_query",
+                    arguments='{"entity_mentions": ["parcel 01"], "mode": "current"}',
+                ),
+            )
+            return {"choices": [{"message": {"tool_calls": [tool]}}]}
+        if isinstance(model_reply, RuntimeError):
+            raise model_reply
+        evidence = json.loads(messages[-1]["content"])
+        if model_reply is not None:
+            text = model_reply
+        elif "verbatim" in messages[0]["content"]:
+            text = evidence["deterministic_evaluation_summary"]
+        else:
+            text = "The parcel was seen at the packing station."
+        return {"choices": [{"message": {"content": text}}]}
+
+    monkeypatch.setattr(RealGroqClient, "create_chat_completion", complete)
+    service = AgentService(ProviderConfig(mode="live", api_key="test-key"), background=False)
+    key = str(uuid4())
+    try:
+        service.load_simulation(key, warehouse_preset())
+        response = service.get_session(key).ask(question)
+        assert len(calls) == 2
+        trace = response["react_trace"]
+        assert trace["model"] == "llama-3.3-70b-versatile"
+        assert trace["explanation_source"] == (
+            "deterministic_fallback" if fallback_reason else "llm"
+        )
+        assert trace["fallback_reason"] == fallback_reason
+        assert "camera sample ID:" in response["answer"]
+    finally:
+        service.shutdown()
 
 
 def test_history_question_retries_with_compact_evidence_when_provider_request_is_too_large(
@@ -90,6 +152,17 @@ def test_run_scoped_evidence_reports_sightings_and_revision_without_hidden_posit
         assert hidden["summary"]["last_observed_position"] is None
         for _ in range(75):
             session.runtime.step()
+        snapshot = session.snapshot()
+        assert snapshot["history"] == []
+        inspection_fact = next(
+            fact
+            for fact in snapshot["active_facts"]
+            if fact["subject"] == "parcel_01" and fact["object"] == "inspection_station"
+        )
+        assert any(
+            change["fact_id"] == inspection_fact["fact_id"] and change["revision_event_id"]
+            for change in snapshot["simulation_belief_changes"]
+        )
         evidence = service.read_simulation_evidence(key, request)
         assert evidence["summary"]["supported_location"] == "inspection_station"
         assert evidence["events"]

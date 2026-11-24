@@ -70,6 +70,7 @@ class ReActTrace:
     explanation_source: str = "llm"  # "llm", "deterministic_fallback", or "rule_based"
     model: str | None = None
     operations: list[dict[str, Any]] = field(default_factory=list)
+    fallback_reason: str | None = None
 
 
 @dataclass
@@ -469,6 +470,7 @@ def _explain(
                     tool_name=tool_name,
                     tool_call_id=tool_call_id,
                     tool_result=tool_result,
+                    preserve_citations=preserve_citations,
                 )
             except IntentProviderUnavailableError as exc:
                 cause: BaseException | None = exc
@@ -489,6 +491,7 @@ def _explain(
                     tool_name=tool_name,
                     tool_call_id=tool_call_id,
                     tool_result=tool_result,
+                    preserve_citations=preserve_citations,
                 )
             exact = (
                 (grounded_text or "").strip() == eval_outcome.explanation
@@ -510,15 +513,19 @@ def _explain(
                     raise IntentProviderUnavailableError(
                         "Unable to produce a verified history explanation. Please try again."
                     )
-                LOGGER.warning(
-                    "LLM grounded explanation failed consistency guard or was empty; "
-                    "safely using deterministic evaluation outcome"
-                )
+                if not (grounded_text or "").strip():
+                    trace.fallback_reason = "The model returned no answer text."
+                elif preserve_citations:
+                    trace.fallback_reason = "The model changed the required evidence wording."
+                else:
+                    trace.fallback_reason = "The model's answer did not pass evidence review."
+                LOGGER.warning("Using the evidence answer. %s", trace.fallback_reason)
                 final_answer = eval_outcome.explanation
                 explanation_source = "deterministic_fallback"
         except IntentProviderUnavailableError:
             if not preserve_citations:
                 raise
+            trace.fallback_reason = "The model request for the final answer failed."
             explanation_source = "deterministic_fallback"
         except Exception as exc:
             if history_query:
@@ -526,6 +533,7 @@ def _explain(
                     "Unable to produce a history explanation. Please try again."
                 ) from exc
             LOGGER.warning("LLM explanation call failed. Using deterministic fallback.")
+            trace.fallback_reason = "An error interrupted answer synthesis."
             final_answer = eval_outcome.explanation
             explanation_source = "deterministic_fallback"
 

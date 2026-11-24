@@ -1,6 +1,7 @@
 import type {
   BoundingBox,
   PatrolDecisionSummary,
+  SimulationBeliefChange,
   SimulationStateResponse,
   StoredObservationSample,
 } from "./simulationTypes";
@@ -137,6 +138,7 @@ export type ReActTrace = {
   approved_operations: string[];
   execution_summary?: Record<string, unknown> | null;
   explanation_source: "llm" | "deterministic_fallback" | "rule_based";
+  fallback_reason?: string | null;
   model?: string | null;
   operations?: OperationTrace[];
 };
@@ -186,6 +188,7 @@ export type WorldState = {
 export type AppState = {
   answer?: AgentResponse;
   environment_source?: "warehouse_truth" | "mock";
+  simulation_belief_changes?: SimulationBeliefChange[];
   simulation_status?: Pick<SimulationStateResponse, "state" | "error"> & Partial<{
     run_id: string;
     generation: number;

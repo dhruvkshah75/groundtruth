@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { api, getSessionId, setSessionId } from "./api";
 import { useMotionPresence } from "./useMotionPresence";
-import { displayText, environmentTableData, fieldLabel, formatTimestamp, isInternalIdField, isTimestampField } from "./display";
+import { displayText, environmentTableData, fieldLabel, formatTimestamp, isInternalIdField, isTimestampField, omitInternalIds } from "./display";
 import type { AgentResponse, ApiHealth, AppState, Fact } from "./types";
 
 const BeliefGraphPage = lazy(() => import("./BeliefGraphPage"));
@@ -627,6 +627,12 @@ function ChatActionDialog({ dialog, onClose, onDelete, onLoadScenario }: { dialo
   </dialog>;
 }
 
+const answerSourceLabels = {
+  llm: "LLM answer",
+  deterministic_fallback: "Evidence answer",
+  rule_based: "Rule-based",
+};
+
 function ConversationTurn({ response }: { response: AgentResponse }) {
   const [showTrace, setShowTrace] = useState(false);
   const trace = response.react_trace;
@@ -639,9 +645,9 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
           <div className="agent-icon"><BrainCircuit size={16} /></div>
           <div><strong>Agent</strong><span>Grounded reasoning assistant</span></div>
           <div className="status-badges-group">
-            {trace && trace.explanation_source !== "llm" && (
+            {trace && (
               <span className={`trace-source-badge source-${trace.explanation_source}`}>
-                {trace.explanation_source === "rule_based" ? "Rule-based" : "Deterministic Fallback"}
+                {answerSourceLabels[trace.explanation_source]}
               </span>
             )}
             <span className={`status-badge status-${response.status}`}>{response.status.replaceAll("_", " ")}</span>
@@ -650,8 +656,8 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
 
         <div className="answer-text"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm, omitSampleIdColumns, formatMarkdownIdentifiers]} components={{
           table: ({ children }) => <div className="answer-table-scroll" role="region" aria-label="Answer table, scroll horizontally for more columns" tabIndex={0}><table>{children}</table></div>,
-        }}>{response.answer}</ReactMarkdown></div>
-        {response.simulation_evidence && <p className="sim-answer-meta">Captured at {(response.simulation_evidence.sim_time_ms / 1000).toFixed(3)} s · Run {response.simulation_evidence.run_id}</p>}
+        }}>{omitInternalIds(response.answer)}</ReactMarkdown></div>
+        {response.simulation_evidence && <p className="sim-answer-meta">Captured at {(response.simulation_evidence.sim_time_ms / 1000).toFixed(3)} s</p>}
         {response.perspectives && (
           <div className="perspective-cards">
             {Object.entries(response.perspectives).map(([key, value]) => (
@@ -690,9 +696,16 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
             {showTrace && (
               <div className="react-trace-details">
                 <div className="react-step-row">
-                  <span className="step-label"><span>1.</span><span>Proposed Tool</span></span>
+                  <span className="step-label"><span>1.</span><span>Question Routing</span></span>
                   <div className="step-content">
-                    <><strong>{displayText(trace.tool_name)}</strong><StructuredValue value={trace.arguments} /></>
+                    <strong>{displayText(trace.tool_name)}</strong>
+                    {trace.model && trace.explanation_source !== "rule_based" && (
+                      <p className="empty-detail">Question sent to {trace.model}.</p>
+                    )}
+                    {trace.explanation_source === "rule_based" && (
+                      <p className="empty-detail">Handled locally with rules.</p>
+                    )}
+                    <StructuredValue value={trace.arguments} />
                   </div>
                 </div>
                 <div className="react-step-row">
@@ -737,7 +750,8 @@ function ConversationTurn({ response }: { response: AgentResponse }) {
                 <div className="react-step-row">
                   <span className="step-label"><span>4.</span><span>Response Synthesis</span></span>
                   <div className="step-content">
-                    <span className="model-tag">Source: {displayText(trace.explanation_source)}</span>
+                    <span className="model-tag">{answerSourceLabels[trace.explanation_source]}</span>
+                    {trace.fallback_reason && <p className="empty-detail">{trace.fallback_reason}</p>}
                   </div>
                 </div>
               </div>
