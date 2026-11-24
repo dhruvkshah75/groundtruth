@@ -1,0 +1,375 @@
+% CS F407 Artificial Intelligence: final project report template.
+% Submission limit: 4 pages total.
+% Do not change the font size, margins or spacing.
+\documentclass[11pt,a4paper,twocolumn]{article}
+
+\usepackage[margin=2cm,columnsep=0.8cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+\titleformat{\section}{\normalsize\bfseries}{\thesection}{0.6em}{}
+\titlespacing*{\section}{0pt}{1.2ex plus 0.3ex}{0.6ex}
+\setlist{nosep,leftmargin=*}
+\setlength{\parskip}{0.3ex}
+
+\newcommand{\coursename}{CS F407 Artificial Intelligence, AY 2026--27 Semester I}
+\newcommand{\teamno}{Neural Nexus}
+\newcommand{\githuburl}{https://github.com/dhruvkshah75/groundtruth}
+
+\begin{document}
+
+\twocolumn[{%
+\begin{center}
+  {\large\bfseries GroundTruth: A Three-Layer Epistemic Architecture for Grounded Agents}\\[1ex]
+  \teamno\\
+  Dhruv Kenny Shah (2024A7PS0499G), Aaditya Lahori (2024A7PS0609G)\\
+  Aayush Kushwaha (2024A7PS0524G), Rajat Surana (2024A1PS0291G)\\[0.5ex]
+  {\small \coursename, BITS Pilani, K.K. Birla Goa Campus}\\[1.5ex]
+  \begin{minipage}{0.85\textwidth}
+    \small
+    \centerline{\bfseries Abstract}\vspace{0.5ex}
+    A robot answering from a static map can miss an obstacle. It can also
+    confuse what a user expects with what its camera sees or what a
+    maintenance log records. GroundTruth combines a provenance ledger and
+    belief graph, a bounded language-model controller, and a simulated
+    robot with viewpoint-limited sensors. The agent records why its beliefs
+    change, keeps distinct perspectives visible, and reports uncertainty
+    when it cannot verify the current state. We tested ten scripted
+    scenarios in two offline modes: one replayed logged observations and
+    the other reran the simulator and its sensors. All 30 query checks
+    passed. The results show that deterministic evidence rules can make
+    decisions about route status, object appearance, and
+    location history traceable to the observations that support them.
+  \end{minipage}
+\end{center}
+\vspace{1.5ex}
+}]
+
+\section{Introduction}
+The course project, \emph{I, Agent}, asks how an agent should decide
+what to believe when maps, sensors, and user expectations
+disagree~\cite{assignment}. A map can be accurate when drawn and still
+miss a cart that just blocked the route. A camera can describe how a
+box looks under yellow light while a maintenance record describes
+its painted color. The agent must know which questions each source
+can answer.
+
+GroundTruth takes a natural-language question in a selected scenario
+or warehouse run. It returns an answer, an evidence status, and a
+trace of supporting records. Users can ask about route status, when a
+parcel was last seen, what changed its location belief, or why the
+patrol stopped. We built a three-tier agent, a browser workspace for
+inspecting the robot's evidence alongside the simulation, and a replay
+suite that tests whether recorded observations reproduce the decisions.
+
+\section{Background and related work}
+The assignment draws on the Three-Tier Architecture (3T), which
+separates deliberation, sequencing, and reactive skills in robot
+control~\cite{bonasso1997}. GroundTruth adapts those boundaries to
+declarative memory, procedural orchestration, and sensing.
+
+The project plan also calls for ReAct, which interleaves model
+reasoning with actions that retrieve external information~\cite{yao2023}.
+GroundTruth uses the model to propose a typed intent and gives it the
+evidence returned by the resulting tool plan. The project architecture
+notes explain why structured queries and explicit rules govern belief
+updates.
+
+\section{Method}
+\textbf{Tier boundaries.} Shared Pydantic contracts define the fact,
+observation, intent, and result records. The procedural tier calls
+memory and sensing through typed interfaces, evaluates evidence, and
+requests justified revisions. The browser displays both the simulated
+scene and the robot's evidence. A parcel behind a shelf can remain
+visible to the viewer even when the robot cannot locate it.
+
+\textbf{Declarative tier.} SQLite stores each claim's subject,
+relationship, and value with source, confidence, observation time, and
+spatial context. To revise a belief, the repository inserts a successor
+claim, links its predecessor to it, and writes an audit event with the
+evidence and rule in one transaction. Historical queries can still
+retrieve the original claim and its source.
+
+The rebuildable NetworkX multigraph uses fact IDs as edge keys to
+preserve distinct active claims between the same nodes. The observation
+ledger stores raw samples and indexes detections. A sample's run ID,
+capture time, sequence, pose, and frame help distinguish what the robot
+sensed and when from when the record reached storage.
+
+\textbf{Procedural tier and runtime LLM.} Live mode uses Meta Llama 3.3
+70B through Groq's function-calling API, configured as
+\texttt{llama-3.3-70b-versatile}. The intent prompt asks the pretrained
+model for one approved function call, with named sources separated
+from entity mentions. For temporal queries it also selects a time
+mode. Python validates the arguments, permits bounded repair,
+resolves aliases, and checks sensor capabilities. An ambiguous match
+prompts a clarification.
+
+For a route question, the typed plan retrieves the stored claim and
+front LiDAR evidence. The evaluator checks context and freshness before
+updating the belief. For a color question it uses the detected object
+ID to find the historical record and keeps user expectation, camera
+appearance, and maintenance history separate. Python controls which
+beliefs are written.
+
+The explanation turn receives the verified results. Its prompt asks
+for the conclusion, source attribution, and any uncertainty. Where
+paraphrasing is allowed, a separate model call can check the proposed
+wording against the evidence. Citation-sensitive queries require exact
+wording. A rejected or unavailable explanation can yield a deterministic
+answer or an error. Offline mode uses rules for intent and wording.
+
+\textbf{Sensorimotor tier.} The mock environment computes LiDAR, camera,
+light, and pose readings. The warehouse adds discrete time steps,
+scheduled movement, and repeated sensing. Camera detections depend on
+range, field of view, and occlusion. Front LiDAR measures the nearest
+solid surface on its ray. Acquisition captures pose and readings
+together. Playback speed changes presentation pacing while timestamps
+follow simulation time.
+
+The patrol subtracts distance traveled since the last LiDAR scan from
+the measured clearance. It stops for a close obstacle and waits when a
+scan is stale or unavailable. Its stop record retains the source sample
+after the patrol resumes. A separate adapter validates recorded
+telemetry and translates supported frames and timestamps for playback.
+
+\textbf{Temporal evidence and questions.} A camera sighting inside one
+station zone can establish a station belief. A new sighting at another
+station can supersede it, while a repeated sighting in the same zone
+refreshes verification. An aisle sighting can verify coordinates even
+when the station belief lacks fresh support. A miss or camera outage
+leaves earlier sightings available as history. A delayed older capture
+cannot replace a newer applicable belief.
+
+The controller answers current location, last seen, location at a
+specified time, sighting history, and changes. For a cutoff $T$, it
+reports the latest applicable capture at or before $T$ and gives the
+actual observation time. Requests beyond the current run time return
+uncertainty. Two sightings can establish a change while leaving its
+path, exact timing, and cause undetermined.
+
+\textbf{AI-assisted development.} Claude Code (Claude Opus 5.5)
+and OpenAI GPT-6.2 Sol helped us write and revise the project code.
+We reviewed the changes and checked behavior against project tests
+and scenario outputs.
+
+\section{Experimental setup}
+\textbf{Problem instances.} Ten scripted scenarios specify initial
+facts, sensor samples, and expected outcomes. They cover route
+obstruction and clearance, visible relocation, movement out of view,
+occlusion and reacquisition, ambiguous identity, color perspectives,
+wrong-room or wrong-frame evidence, sensor outage and recovery, delayed
+arrivals, and movement between captures. Some scenarios contribute
+more than one query check.
+
+\textbf{Replay modes.} Evidence-only replay ingests recorded
+observations into a fresh ledger and answers using records available
+up to each query checkpoint. A simulator rerun advances the world,
+patrol, and sensors and checks regenerated evidence against the
+recording. The wrong-context case includes a deliberately injected
+sample. The full scene and presenter events stay outside the agent's
+evidence inputs.
+
+\textbf{Baseline and metrics.} The map-only comparison uses the
+initial stored route status at the first cart obstruction. A replay
+check passes when the status and all applicable assertions match.
+Assertions can inspect answer content, location, active facts,
+revision linkage, sample storage, or citation in the response trace.
+
+\textbf{Execution environment.} We ran both offline modes on an Intel
+Core i7-12650H with Python~3.12, SQLite, NetworkX, and Pydantic. They
+require no GPU or Groq key. The React and TypeScript workspace has a
+separate checkpoint test and demo runbook.
+
+\section{Results}
+All 30 query checks passed (Table~\ref{tab:results}). The checked-in
+logs show expected and actual outcomes, applied policy, and supporting
+evidence IDs.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Mode & Scenarios & Checks passed \\
+\midrule
+Evidence-only replay & 10 & 15/15 \\
+Simulator rerun & 10 & 15/15 \\
+\bottomrule
+\end{tabular}
+\caption{Offline replay checks. Higher pass counts are better.}
+\label{tab:results}
+\end{table}
+
+\textbf{Groundedness and perspective.} In the replay route case,
+the baseline map said clear. Front LiDAR detected the cart at
+20~cm, and the agent stored a blocked claim. The audit showed
+which observation superseded the old claim and why. A later clear
+scan produced a new update. The separate assignment preset places
+an obstacle at 12~cm. In the color case, both replay modes kept
+red as the user's expectation, brown as the camera appearance, and
+blue as the color recorded by maintenance bot \texttt{bot\_02}.
+The simulator rerun also attributed the brown appearance to yellow
+lighting. An ambiguous question about two boxes produced a request
+for clarification.
+
+\textbf{Location and time.} A visible relocation supported a
+revision from the packing station to the inspection station.
+The answer about the change cited the later camera sample and the
+revision and left the route taken undetermined. When the parcel
+moved out of view or a shelf occluded it, the agent retained the
+last confirmed sighting and reported the current location as
+uncertain. Reacquisition and camera recovery supplied new evidence.
+The wrong-room and wrong-frame case left the warehouse's
+stored location claim intact.
+
+In the delayed-arrival case, a sample captured at 500~ms arrived
+after the 2000~ms sighting. The inspection-station belief stayed
+active and the answer cited the newer observation. In a different
+case, a query about 500~ms fell between two captures. The agent
+cited the 0~ms sighting and left the intermediate position
+undetermined. The two cases check different ways time can matter:
+the ordering of received records and the coverage of measurements.
+
+\textbf{End-to-end demo.} At 6.5~s the parcel is behind a shelf.
+The viewer can see it on the map while the last verified sighting
+remains at Station A, captured at 6.0~s. By 12.5~s the camera
+verifies aisle coordinates, and at 19.5~s the Station B detection
+supports a station belief revision. The patrol stop at 28.0~s
+links back to its LiDAR sample even after clearance and resumed
+motion at the final 33.0~s checkpoint.
+The route was first marked blocked at 25.5~s. The patrol continued
+while the measured clearance still allowed motion, then withheld
+movement when the obstacle reached the 50~cm threshold. This explains
+why the route update and the stop have different evidence timestamps.
+
+\section{Discussion and limitations}
+The route baseline illustrates the benefit of checking a dynamic
+claim against a current measurement at one checkpoint. The map
+still provides useful geometry and initial context. The replay
+counts measure agreement with prewritten expectations under scripted
+conditions. Evidence-only replay checks the decisions without the
+simulator, while the rerun also checks whether the runtime and
+sensors reproduce the observations. A benchmark spanning more
+layouts and unscripted motion would test how broadly the results hold.
+
+The mock camera uses known object IDs and simplified geometry.
+The color case applies a fixed lighting rule and a seeded
+maintenance record. It tests whether the agent attributes the three
+claims correctly under a known conflict. An actual camera can miss or
+misidentify objects for additional reasons. A verified sample can
+also become stale as soon as an object moves, and a missed
+detection tells the agent little about where the object went.
+
+The same issue applies to clearance. A LiDAR scan establishes the
+space observed in the tested direction at capture time. When the robot
+turns, the previous scan cannot verify forward clearance on the new
+heading. The simulator can exercise that rule with known geometry.
+Testing it with recorded or live measurements would also require
+checking that sensor frames, capture times, and robot poses are aligned.
+
+The reported evaluation runs offline. A live model can misclassify
+unfamiliar wording, and the model-based check of a paraphrase can
+miss an unsupported claim. The typed plans and evidence rules still
+constrain which operations run and which beliefs can be written.
+Next steps include held-out questions phrased by different users,
+real recordings with noise and delayed samples, and testing the
+calibrated telemetry pipeline before using it on a physical robot.
+For the live model, those tests could score intent selection and
+answer fidelity separately. An incorrectly selected intent can
+retrieve the wrong kind of evidence, even when the resulting answer
+faithfully describes what was retrieved.
+
+\section{Conclusion}
+GroundTruth routes questions through a bounded language interface
+and ties its answers and belief revisions to identifiable evidence.
+Across ten scripted scenarios, both replay modes reproduced the
+expected conflict resolution, perspective tracking, and uncertainty
+behavior. The warehouse demo makes those decisions inspectable by
+linking temporal answers, location revisions, and patrol stops to the
+records available to the robot.
+
+\section*{Individual member contributions}
+{\small
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+Name & Contribution \\
+\midrule
+Dhruv Shah & Designed shared contracts and intent planning, including
+entity and capability checks. Built the warehouse engine and sensors
+and integrated the session runtime, HTTP API, and React workspace.
+Connected the belief timeline to the demo, verified its checkpoints,
+and finalized the replay results. \\
+Aaditya Lahori & Built the NetworkX active-belief projection, its lazy
+cache, and consistency checks against SQLite. Implemented temporal
+ingestion that turns comparable camera and LiDAR observations into
+auditable belief revisions. Added safeguards for late captures,
+run isolation, and retries. \\
+Aayush Kushwaha & Implemented the SQLite fact and audit ledger,
+atomic revisions, and graph cache invalidation. Built the core
+epistemic evaluator and Groq function-calling integration. Implemented
+the sensor-backed patrol controller, ten-scenario export and replay
+suite, and the recorded telemetry adapter. \\
+Rajat Surana & Built the original mock environment and the typed
+plan executor and composition service. Implemented the raw
+observation ledger and its run-scoped queries, added temporal location
+and change questions, and refined off-station parcel verification and
+the LiDAR evidence attached to patrol stops. \\
+\bottomrule
+\end{tabularx}}
+
+\smallskip
+\noindent Contributions reflect component work and integration recorded in
+the \href{https://github.com/dhruvkshah75/groundtruth/commits/50127947154341efce02b63e7e859074764ea1fe/}{merged commit history}.
+All members have read this report and agree with the statement above.
+
+\section*{Generative AI disclosure}
+We used Anthropic Claude Code (Claude Opus 5.5) and OpenAI GPT-6.2 Sol
+to help write the project code. We checked the AI-assisted work and
+take responsibility for the submitted code and report.
+
+\section*{Code availability}
+\noindent Code and data:\\
+\url{\githuburl}\\
+The public repository contains the agent, scripted scenarios, tests,
+and evaluation artifacts. To reproduce Table~\ref{tab:results}, use
+commit \texttt{5012794}, run \verb|uv sync --locked| from the repository
+root, then run the command below. The README's documentation index
+links to the \href{https://github.com/dhruvkshah75/groundtruth/blob/50127947154341efce02b63e7e859074764ea1fe/docs/phase-two/Replay_and_Evaluation.md}{replay guide}.
+
+\begin{verbatim}
+uv run --locked python -m \
+  src.evaluation.cli --mode both \
+  --output-dir /tmp/groundtruth-eval
+\end{verbatim}
+
+The command writes the per-query Markdown report and JSON summary.
+The published copies are under \path{artifacts/evaluation/}. The
+demo runbook provides the offline browser setup and exact checkpoints
+for inspecting the warehouse timeline.
+
+\begin{thebibliography}{9}
+\small
+\bibitem{assignment}
+CS F407 Artificial Intelligence.
+\newblock \emph{I, Agent (A Three-Layer Epistemic Architecture for Grounded Agents)}.
+\newblock Project problem statement, BITS Pilani, K.K. Birla Goa Campus, 2026.
+\bibitem{bonasso1997}
+R.~P. Bonasso, R.~J. Firby, E.~Gat, D.~Kortenkamp, D.~P. Miller, and M.~G. Slack.
+\newblock \href{https://doi.org/10.1080/095281397147103}{Experiences with an architecture for intelligent, reactive agents}.
+\newblock \emph{Journal of Experimental \& Theoretical Artificial Intelligence}, 9(2--3):237--256, 1997.
+\bibitem{yao2023}
+S.~Yao, J.~Zhao, D.~Yu, N.~Du, I.~Shafran, K.~Narasimhan, and Y.~Cao.
+\newblock \href{https://arxiv.org/abs/2210.03629}{ReAct: Synergizing reasoning and acting in language models}.
+\newblock \emph{ICLR}, 2023.
+\end{thebibliography}
+
+\end{document}
