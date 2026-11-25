@@ -104,9 +104,9 @@ ledger stores raw samples and indexes detections. A sample's run ID,
 capture time, sequence, pose, and frame help distinguish what the robot
 sensed and when from when the record reached storage.
 
-\textbf{Procedural tier and runtime LLM.} Live mode uses Meta Llama 3.3
-70B through Groq's function-calling API, configured as
-\texttt{llama-3.3-70b-versatile}. The intent prompt asks the pretrained
+\textbf{Procedural tier and runtime LLM.} Live mode uses OpenAI's GPT-OSS
+120B model (120 billion total parameters) through Groq's function-calling
+API, configured as \texttt{openai/gpt-oss-120b}. The intent prompt asks the pretrained
 model for one approved function call, with named sources separated
 from entity mentions. For temporal queries it also selects a time
 mode. Python validates the arguments, permits bounded repair,
