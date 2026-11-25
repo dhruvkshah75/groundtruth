@@ -358,7 +358,7 @@ def test_create_provider_live_mode_with_key() -> None:
 
     assert isinstance(provider, GroqIntentProvider)
     assert resolved.mode == "live"
-    assert provider.model_name == "llama-3.3-70b-versatile"
+    assert provider.model_name == "openai/gpt-oss-120b"
 
 
 def test_create_provider_live_mode_without_key_returns_unconfigured() -> None:

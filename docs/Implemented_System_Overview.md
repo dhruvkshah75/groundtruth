@@ -2,7 +2,7 @@
 
 This document describes the code that is currently on `main`. It is a plain-language guide for teammates who need to run, explain, or present the project without reading every source file.
 
-> **Current status:** Project Milestone 2 (LLM ReAct Tool Integration) is complete. The Python agent connects to a real LLM function-calling loop via `GroqIntentProvider` (`llama-3.3-70b-versatile`), with explicit offline mode support via `RuleBasedIntentProvider`. The React frontend renders the full ReAct cycle trace, provider readiness, and supporting epistemic state.
+> **Current status:** Project Milestone 2 (LLM ReAct Tool Integration) is complete. The Python agent connects to a real LLM function-calling loop via `GroqIntentProvider` (default model `openai/gpt-oss-120b`), with explicit offline mode support via `RuleBasedIntentProvider`. The React frontend renders the full ReAct cycle trace, provider readiness, and supporting epistemic state.
 
 ## 1. What GroundTruth is for
 

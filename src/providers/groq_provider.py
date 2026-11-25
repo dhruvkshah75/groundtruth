@@ -7,6 +7,7 @@ import logging
 from typing import Any, Protocol, runtime_checkable
 
 from src.procedural.intent_provider import IntentProviderUnavailableError
+from src.providers.config import DEFAULT_GROQ_MODEL
 from src.providers.tools import (
     ALLOWED_INTENTS,
     GROUNDED_EXPLANATION_REVIEW_PROMPT,
@@ -77,7 +78,7 @@ class GroqIntentProvider:
     def __init__(
         self,
         client: GroqClientInterface,
-        model: str = "llama-3.3-70b-versatile",
+        model: str = DEFAULT_GROQ_MODEL,
     ) -> None:
         self._client = client
         self._model = model

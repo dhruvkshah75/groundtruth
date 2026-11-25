@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.procedural.intent_provider import IntentProvider, IntentProviderUnavailableError
-from src.providers.config import ProviderConfig, get_provider_config
+from src.providers.config import DEFAULT_GROQ_MODEL, ProviderConfig, get_provider_config
 from src.providers.groq_provider import GroqClientInterface, GroqIntentProvider, RealGroqClient
 from src.providers.tools import ALLOWED_INTENTS, INTENT_TOOLS
 
@@ -16,9 +16,11 @@ from src.providers.tools import ALLOWED_INTENTS, INTENT_TOOLS
 class UnconfiguredGroqProvider:
     """Placeholder provider used when live mode is selected without a valid API key."""
 
-    def __init__(self, error_message: str = "GROQ_API_KEY is not configured.") -> None:
+    def __init__(
+        self, error_message: str = "GROQ_API_KEY is not configured.", model: str = DEFAULT_GROQ_MODEL
+    ) -> None:
         self._error_message = error_message
-        self.model_name = "llama-3.3-70b-versatile (unconfigured)"
+        self.model_name = f"{model} (unconfigured)"
         self.last_tool_name = "unconfigured"
         self.last_tool_call_id = "none"
         self.last_tool_args: dict[str, Any] = {}
@@ -54,6 +56,7 @@ def create_provider(
             return provider, resolved_config
         else:
             provider = UnconfiguredGroqProvider(
+                model=resolved_config.model,
                 error_message=(
                     "GROQ_API_KEY is not configured. Add GROQ_API_KEY to your .env file "
                     "or set GROUNDTRUTH_PROVIDER_MODE=offline to use offline rule-based mode."

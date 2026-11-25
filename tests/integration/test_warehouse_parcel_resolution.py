@@ -66,7 +66,7 @@ def test_live_parcel_answer_retains_exact_camera_citation(
         response = service.get_session(key).ask(question)
         assert len(calls) == 2
         trace = response["react_trace"]
-        assert trace["model"] == "llama-3.3-70b-versatile"
+        assert trace["model"] == "openai/gpt-oss-120b"
         assert trace["explanation_source"] == (
             "deterministic_fallback" if fallback_reason else "llm"
         )

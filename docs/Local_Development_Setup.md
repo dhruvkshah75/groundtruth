@@ -102,8 +102,8 @@ Create a `.env` file in the repository root (ignored by Git) or set environment 
 # Required for live LLM ReAct mode
 GROQ_API_KEY="gsk_..."
 
-# Optional model selection (default: llama-3.3-70b-versatile)
-GROQ_MODEL="llama-3.3-70b-versatile"
+# Optional model selection (default: openai/gpt-oss-120b)
+GROQ_MODEL="openai/gpt-oss-120b"
 
 # Optional explicit mode override: "live" or "offline" (default: "live")
 GROUNDTRUTH_PROVIDER_MODE="live"
