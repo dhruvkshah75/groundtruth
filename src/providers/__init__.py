@@ -17,7 +17,9 @@ class UnconfiguredGroqProvider:
     """Placeholder provider used when live mode is selected without a valid API key."""
 
     def __init__(
-        self, error_message: str = "GROQ_API_KEY is not configured.", model: str = DEFAULT_GROQ_MODEL
+        self,
+        error_message: str = "GROQ_API_KEY is not configured.",
+        model: str = DEFAULT_GROQ_MODEL,
     ) -> None:
         self._error_message = error_message
         self.model_name = f"{model} (unconfigured)"
@@ -60,7 +62,7 @@ def create_provider(
                 error_message=(
                     "GROQ_API_KEY is not configured. Add GROQ_API_KEY to your .env file "
                     "or set GROUNDTRUTH_PROVIDER_MODE=offline to use offline rule-based mode."
-                )
+                ),
             )
             return provider, resolved_config
 
